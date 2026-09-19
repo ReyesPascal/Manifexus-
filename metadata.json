@@ -1,0 +1,7 @@
+{
+  "name": "Manifexus",
+  "description": "Self-hosted central command nexus and dashboard tracking containers, services, ports, and Docker Compose stacks.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+

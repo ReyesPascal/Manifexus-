@@ -1,0 +1,25 @@
+services:
+  manifexus:
+    image: ghcr.io/reyespascal/manifexus-:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: manifexus
+    restart: unless-stopped
+    ports:
+      - "3344:3334"
+    environment:
+      - NODE_ENV=production
+      - PORT=3334
+      - DOCKER_SOCKET_PATH=/var/run/docker.sock
+    volumes:
+      # Mount the Docker daemon socket (read-only for automatic container discovery)
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Mount persistent storage for custom groups, app overrides, and dashboard config
+      - ./data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3334/api/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
