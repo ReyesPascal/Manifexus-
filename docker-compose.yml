@@ -15,7 +15,7 @@ services:
       # Mount persistent storage for custom groups, app overrides, and dashboard config
       - ./data:/data
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3334/api/health || exit 1"]
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3334/api/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"]
       interval: 30s
       timeout: 5s
       retries: 3
