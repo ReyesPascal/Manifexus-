@@ -30,7 +30,7 @@ export const HelpDrawer: React.FC<HelpDrawerProps> = ({ isOpen, onClose }) => {
 
   const composeSnippet = `services:
   manifexus:
-    image: ghcr.io/reyespascal/manifexus-:latest
+    image: ghcr.io/reyespascal/manifexus:latest
     container_name: manifexus
     restart: unless-stopped
     ports:
@@ -53,7 +53,7 @@ export const HelpDrawer: React.FC<HelpDrawerProps> = ({ isOpen, onClose }) => {
   -e PORT=3334 \\
   -v /var/run/docker.sock:/var/run/docker.sock:ro \\
   -v $(pwd)/data:/data \\
-  ghcr.io/reyespascal/manifexus-:latest`;
+  ghcr.io/reyespascal/manifexus:latest`;
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">

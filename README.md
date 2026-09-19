@@ -43,7 +43,7 @@ Create `docker-compose.yml`:
 ```yaml
 services:
   manifexus:
-    image: ghcr.io/reyespascal/manifexus-:latest
+    image: ghcr.io/reyespascal/manifexus:latest
     container_name: manifexus
     restart: unless-stopped
     ports:
@@ -78,7 +78,7 @@ docker run -d \
   -e PORT=3334 \
   -v /var/run/docker.sock:/var/run/docker.sock:ro \
   -v $(pwd)/data:/data \
-  ghcr.io/reyespascal/manifexus-:latest
+  ghcr.io/reyespascal/manifexus:latest
 ```
 
 ---
@@ -96,7 +96,7 @@ git remote add origin https://github.com/ReyesPascal/Manifexus-.git
 git push -u origin main
 ```
 
-When pushed, the included GitHub Actions workflow (`.github/workflows/docker-publish.yml`) will automatically build and publish the multi-arch container image to GitHub Container Registry (`ghcr.io/reyespascal/manifexus-:latest`).
+When pushed, the included GitHub Actions workflow (`.github/workflows/docker-publish.yml`) will automatically build and publish the multi-arch container image to GitHub Container Registry (`ghcr.io/reyespascal/manifexus:latest`).
 
 ---
 

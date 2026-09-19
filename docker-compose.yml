@@ -1,9 +1,6 @@
 services:
   manifexus:
-    image: ghcr.io/reyespascal/manifexus-:latest
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ghcr.io/reyespascal/manifexus:latest
     container_name: manifexus
     restart: unless-stopped
     ports:
