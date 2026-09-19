@@ -4,8 +4,8 @@ FROM node:20-alpine AS builder
 WORKDIR /app
 
 # Install dependencies first for efficient caching
-COPY package.json ./
-RUN npm install
+COPY package*.json ./
+RUN npm install --legacy-peer-deps
 
 # Copy application source code
 COPY . .
