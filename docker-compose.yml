@@ -4,7 +4,7 @@ services:
     container_name: manifexus
     restart: unless-stopped
     ports:
-      - "3344:3334"
+      - "3334:3334"
     environment:
       - NODE_ENV=production
       - PORT=3334

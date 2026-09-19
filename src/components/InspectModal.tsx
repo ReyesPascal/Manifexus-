@@ -15,6 +15,7 @@ import {
   Layers,
   Terminal,
   ExternalLink,
+  Globe,
 } from 'lucide-react';
 import { DeepContainerMetadata, UserGroup, AppOverride } from '../types';
 
@@ -388,25 +389,73 @@ export const InspectModal: React.FC<InspectModalProps> = ({
                   </div>
                 ) : (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    {container.ports.map((p, idx) => (
-                      <div
-                        key={idx}
-                        className="p-2.5 rounded-lg bg-slate-950 border border-slate-800 flex items-center justify-between"
-                      >
-                        <span className="text-slate-400 font-mono">
-                          {p.publicPort ? (
-                            <>
-                              Host <span className="text-cyan-300 font-bold">:{p.publicPort}</span>
-                            </>
-                          ) : (
-                            'Private container port'
+                    {container.ports.map((p, idx) => {
+                      const isActiveWebPort =
+                        p.publicPort &&
+                        (customPort ? parseInt(customPort, 10) === p.publicPort : container.primaryPort === p.publicPort);
+
+                      return (
+                        <div
+                          key={idx}
+                          className={`p-2.5 rounded-lg border flex items-center justify-between transition-all ${
+                            isActiveWebPort
+                              ? 'bg-cyan-950/30 border-cyan-500/40 shadow-[0_0_12px_rgba(6,182,212,0.15)]'
+                              : 'bg-slate-950 border-slate-800'
+                          }`}
+                        >
+                          <div className="flex flex-col gap-0.5">
+                            <span className="text-slate-300 font-mono flex items-center gap-1.5">
+                              {p.publicPort ? (
+                                <>
+                                  Host <span className="text-cyan-300 font-bold">:{p.publicPort}</span>
+                                </>
+                              ) : (
+                                'Private container port'
+                              )}
+                              {p.label && (
+                                <span className={`text-[9px] px-1 py-0.2 rounded font-sans uppercase ${
+                                  isActiveWebPort ? 'bg-cyan-900/60 text-cyan-300' : 'bg-slate-800 text-slate-400'
+                                }`}>
+                                  {p.label}
+                                </span>
+                              )}
+                            </span>
+                            <span className="text-slate-400 font-mono text-[11px]">
+                              → {p.privatePort}/{p.type}
+                            </span>
+                          </div>
+
+                          {p.publicPort && (
+                            <div className="flex items-center gap-1.5">
+                              {isActiveWebPort ? (
+                                <span className="px-2 py-1 rounded bg-cyan-950 border border-cyan-500/50 text-cyan-300 text-[11px] font-bold flex items-center gap-1">
+                                  <Globe className="w-3 h-3 text-cyan-400" /> Active
+                                </span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setCustomPort(String(p.publicPort));
+                                    onSaveOverride(container.id, {
+                                      customName: customName.trim() || undefined,
+                                      customGroup: customGroup || undefined,
+                                      customPort: p.publicPort,
+                                      customUrl: customUrl.trim() || undefined,
+                                      customIcon: customIcon.trim() || undefined,
+                                      notes: notes.trim() || undefined,
+                                    });
+                                  }}
+                                  className="px-2 py-1 rounded bg-slate-900 border border-slate-700 hover:border-cyan-400 text-slate-300 hover:text-cyan-300 text-[11px] transition-colors"
+                                  title={`Make :${p.publicPort} the primary Web UI port`}
+                                >
+                                  Set as Web UI
+                                </button>
+                              )}
+                            </div>
                           )}
-                        </span>
-                        <span className="text-slate-300 font-mono">
-                          → {p.privatePort}/{p.type}
-                        </span>
-                      </div>
-                    ))}
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -467,7 +516,39 @@ export const InspectModal: React.FC<InspectModalProps> = ({
                 </div>
 
                 <div>
-                  <label className="block text-slate-300 font-bold mb-1">Primary Launch Port</label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-slate-300 font-bold">Primary Launch Port</label>
+                    {container.ports.filter((p) => Boolean(p.publicPort)).length > 0 && (
+                      <span className="text-[10px] text-slate-400">Detected ports:</span>
+                    )}
+                  </div>
+                  {container.ports.filter((p) => Boolean(p.publicPort)).length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mb-2">
+                      {container.ports
+                        .filter((p) => Boolean(p.publicPort))
+                        .map((p, idx) => {
+                          const isSelected = customPort === String(p.publicPort);
+                          return (
+                            <button
+                              key={idx}
+                              type="button"
+                              onClick={() => setCustomPort(String(p.publicPort))}
+                              className={`px-2 py-1 rounded-md text-[11px] font-mono border transition-all flex items-center gap-1 ${
+                                isSelected
+                                  ? 'bg-cyan-500/20 border-cyan-400 text-cyan-200 font-bold shadow-[0_0_8px_rgba(6,182,212,0.2)]'
+                                  : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700'
+                              }`}
+                            >
+                              {isSelected && <Check className="w-3 h-3 text-cyan-400" />}
+                              <span>:{p.publicPort}</span>
+                              {p.label && (
+                                <span className="opacity-70 text-[10px]">({p.label})</span>
+                              )}
+                            </button>
+                          );
+                        })}
+                    </div>
+                  )}
                   <input
                     type="number"
                     value={customPort}

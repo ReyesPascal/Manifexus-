@@ -10,6 +10,10 @@ import {
   Radio,
   Server,
   Terminal,
+  Globe,
+  ChevronDown,
+  Check,
+  Sliders,
 } from 'lucide-react';
 import { DeepContainerMetadata, UserGroup } from '../types';
 
@@ -20,6 +24,7 @@ interface AppCardProps {
   onInspect: (container: DeepContainerMetadata) => void;
   onAssignGroup: (containerId: string, groupId: string) => void;
   onAction: (containerId: string, action: 'start' | 'stop' | 'restart') => Promise<void>;
+  onSetPrimaryPort?: (containerId: string, port: number) => void;
 }
 
 export const AppCard: React.FC<AppCardProps> = ({
@@ -29,14 +34,19 @@ export const AppCard: React.FC<AppCardProps> = ({
   onInspect,
   onAssignGroup,
   onAction,
+  onSetPrimaryPort,
 }) => {
   const [imgError, setImgError] = useState(false);
   const [isActing, setIsActing] = useState(false);
   const [showGroupSelect, setShowGroupSelect] = useState(false);
+  const [showPortSelect, setShowPortSelect] = useState(false);
 
   const isRunning = container.state === 'running';
   const displayName = container.customName || container.cleanName;
   const primaryPort = container.primaryPort;
+
+  // Filter published ports that can be accessed externally
+  const publishedPorts = container.ports.filter((p) => Boolean(p.publicPort));
 
   // Build target URL
   const targetUrl = container.customUrl
@@ -66,6 +76,13 @@ export const AppCard: React.FC<AppCardProps> = ({
     setShowGroupSelect(false);
   };
 
+  const handleSelectPort = (port: number) => {
+    if (onSetPrimaryPort) {
+      onSetPrimaryPort(container.id, port);
+    }
+    setShowPortSelect(false);
+  };
+
   const currentGroup = groups.find((g) => g.id === container.customGroup);
 
   return (
@@ -75,6 +92,10 @@ export const AppCard: React.FC<AppCardProps> = ({
           ? 'border-slate-800 hover:border-cyan-500/50 hover:shadow-[0_0_25px_rgba(6,182,212,0.12)]'
           : 'border-slate-850 opacity-75 hover:opacity-100 hover:border-slate-700'
       }`}
+      onClick={() => {
+        if (showGroupSelect) setShowGroupSelect(false);
+        if (showPortSelect) setShowPortSelect(false);
+      }}
     >
       {/* Subtle top edge tech glow for running containers */}
       {isRunning && (
@@ -183,29 +204,64 @@ export const AppCard: React.FC<AppCardProps> = ({
 
       {/* Technical Ports & Links Section */}
       <div className="mt-4 pt-3 border-t border-slate-800/80 flex flex-col gap-3">
-        {/* Exposed / Mapped Ports */}
+        {/* Exposed / Mapped Ports with Multi-Port Quick Selection */}
         <div className="flex flex-wrap items-center gap-1.5 min-h-[28px]">
           {container.ports.length > 0 ? (
-            container.ports.map((p, idx) => (
-              <span
-                key={idx}
-                className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-mono border ${
-                  p.publicPort
-                    ? 'bg-cyan-950/40 border-cyan-500/30 text-cyan-300'
-                    : 'bg-slate-900 border-slate-800 text-slate-400'
-                }`}
-              >
-                {p.publicPort ? (
-                  <>
-                    <span className="font-semibold text-cyan-300">:{p.publicPort}</span>
-                    <span className="text-cyan-600/70 mx-1">→</span>
-                    <span>{p.privatePort}/{p.type}</span>
-                  </>
-                ) : (
+            container.ports.map((p, idx) => {
+              const isPrimary = p.publicPort && p.publicPort === primaryPort;
+              const hasMultiplePublic = publishedPorts.length > 1;
+
+              if (p.publicPort) {
+                return (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (hasMultiplePublic && onSetPrimaryPort) {
+                        handleSelectPort(p.publicPort!);
+                      }
+                    }}
+                    title={
+                      isPrimary
+                        ? `Active Web UI Port (: ${p.publicPort})`
+                        : hasMultiplePublic
+                        ? `Click to set :${p.publicPort} as primary Web UI port`
+                        : `Port :${p.publicPort}`
+                    }
+                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-mono border transition-all ${
+                      isPrimary
+                        ? 'bg-cyan-500/20 border-cyan-400 text-cyan-200 ring-1 ring-cyan-500/40 font-bold shadow-[0_0_10px_rgba(6,182,212,0.2)]'
+                        : hasMultiplePublic
+                        ? 'bg-slate-900/90 border-slate-700 text-slate-300 hover:border-cyan-400/60 hover:text-cyan-300 hover:bg-slate-800 cursor-pointer'
+                        : 'bg-cyan-950/40 border-cyan-500/30 text-cyan-300'
+                    }`}
+                  >
+                    {isPrimary && <Globe className="w-3 h-3 text-cyan-400" />}
+                    <span className="font-semibold">:{p.publicPort}</span>
+                    <span className="opacity-60 text-[10px]">→ {p.privatePort}/{p.type}</span>
+                    {p.label && (
+                      <span
+                        className={`text-[9px] px-1 py-0.2 rounded font-sans uppercase ${
+                          isPrimary ? 'bg-cyan-950 text-cyan-300' : 'bg-slate-800 text-slate-400'
+                        }`}
+                      >
+                        {p.label}
+                      </span>
+                    )}
+                  </button>
+                );
+              }
+
+              return (
+                <span
+                  key={idx}
+                  className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-mono border bg-slate-900 border-slate-800 text-slate-400"
+                >
                   <span>{p.privatePort}/{p.type}</span>
-                )}
-              </span>
-            ))
+                </span>
+              );
+            })
           ) : (
             <span className="text-xs text-slate-500 font-mono italic">
               No exposed host ports
@@ -214,27 +270,119 @@ export const AppCard: React.FC<AppCardProps> = ({
         </div>
 
         {/* Bottom Interactive Bar: Launch Button & Container Action Controls */}
-        <div className="flex items-center justify-between gap-2 pt-1">
-          {/* Direct Web Port Launcher (Opens in new tab) */}
-          {targetUrl ? (
-            <a
-              href={targetUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex-1 inline-flex items-center justify-center gap-2 px-3 py-2 rounded-xl text-xs font-semibold font-mono bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 hover:border-cyan-400 hover:shadow-[0_0_15px_rgba(6,182,212,0.2)] transition-all text-center"
-              title={`Open ${targetUrl} in a new tab`}
-            >
-              <span>Open Port {primaryPort}</span>
-              <ExternalLink className="w-3.5 h-3.5 text-cyan-400" />
-            </a>
-          ) : (
-            <button
-              onClick={() => onInspect(container)}
-              className="flex-1 inline-flex items-center justify-center gap-2 px-3 py-2 rounded-xl text-xs font-mono bg-slate-900 text-slate-400 border border-slate-800 hover:border-slate-700 transition-colors"
-            >
-              <span>Inspect Container</span>
-            </button>
-          )}
+        <div className="flex items-center justify-between gap-2 pt-1 relative">
+          {/* Direct Web Port Launcher with Optional Multi-Port Selector Dropdown */}
+          <div className="flex-1 flex items-stretch relative">
+            {targetUrl ? (
+              <>
+                <a
+                  href={targetUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className={`flex-1 inline-flex items-center justify-center gap-2 px-3 py-2 text-xs font-semibold font-mono bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 hover:border-cyan-400 hover:shadow-[0_0_15px_rgba(6,182,212,0.2)] transition-all text-center ${
+                    publishedPorts.length > 1 ? 'rounded-l-xl border-r-0' : 'rounded-xl'
+                  }`}
+                  title={`Open ${targetUrl} in a new tab`}
+                >
+                  <Globe className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>Open Port {primaryPort}</span>
+                  <ExternalLink className="w-3 h-3 text-cyan-400/80" />
+                </a>
+
+                {/* Multi-Port Selector Trigger when container exposes more than 1 port */}
+                {publishedPorts.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowPortSelect(!showPortSelect);
+                      setShowGroupSelect(false);
+                    }}
+                    className="px-2.5 bg-cyan-950/60 hover:bg-cyan-900/60 border border-cyan-500/40 hover:border-cyan-400 text-cyan-300 rounded-r-xl transition-all flex items-center justify-center"
+                    title="Select Web UI port or launch alternative port"
+                  >
+                    <ChevronDown className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </>
+            ) : (
+              <button
+                onClick={() => onInspect(container)}
+                className="flex-1 inline-flex items-center justify-center gap-2 px-3 py-2 rounded-xl text-xs font-mono bg-slate-900 text-slate-400 border border-slate-800 hover:border-slate-700 transition-colors"
+              >
+                <span>Inspect Container</span>
+              </button>
+            )}
+
+            {/* Port Selection Dropdown Menu */}
+            {showPortSelect && publishedPorts.length > 1 && (
+              <div
+                className="absolute left-0 bottom-full mb-2 w-64 bg-[#0c101d] border border-cyan-500/40 rounded-xl shadow-2xl p-2 z-40 animate-in fade-in zoom-in-95 duration-150"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-center justify-between px-2 py-1.5 border-b border-slate-800 mb-1">
+                  <span className="text-[11px] font-mono font-bold text-slate-300 flex items-center gap-1.5">
+                    <Sliders className="w-3 h-3 text-cyan-400" />
+                    Web UI Port Selection
+                  </span>
+                  <span className="text-[10px] text-cyan-400 font-mono">
+                    {publishedPorts.length} detected
+                  </span>
+                </div>
+
+                <div className="space-y-1">
+                  {publishedPorts.map((p, idx) => {
+                    const isSelected = p.publicPort === primaryPort;
+                    const directUrl = `http://${hostAddress || 'localhost'}:${p.publicPort}`;
+
+                    return (
+                      <div
+                        key={idx}
+                        className={`flex items-center justify-between p-2 rounded-lg text-xs font-mono border transition-all ${
+                          isSelected
+                            ? 'bg-cyan-500/15 border-cyan-500/40 text-cyan-200'
+                            : 'bg-slate-950/60 border-slate-800/80 text-slate-300 hover:bg-slate-800/60 hover:border-slate-700'
+                        }`}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => handleSelectPort(p.publicPort!)}
+                          className="flex-1 flex flex-col text-left mr-2"
+                        >
+                          <div className="flex items-center gap-1.5">
+                            {isSelected && <Check className="w-3 h-3 text-cyan-400 flex-shrink-0" />}
+                            <span className="font-bold">:{p.publicPort}</span>
+                            {p.label && (
+                              <span
+                                className={`text-[10px] px-1.5 py-0.2 rounded font-sans uppercase ${
+                                  isSelected ? 'bg-cyan-900/60 text-cyan-300' : 'bg-slate-800 text-slate-400'
+                                }`}
+                              >
+                                {p.label}
+                              </span>
+                            )}
+                          </div>
+                          <span className="text-[10px] text-slate-400">
+                            Maps to container {p.privatePort}/{p.type}
+                          </span>
+                        </button>
+
+                        <a
+                          href={directUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="p-1 rounded text-slate-400 hover:text-cyan-300 hover:bg-slate-800 transition-colors"
+                          title={`Open http://${hostAddress || 'localhost'}:${p.publicPort} directly in new tab`}
+                        >
+                          <ExternalLink className="w-3.5 h-3.5" />
+                        </a>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
 
           {/* Quick Group Assignment Toggle */}
           <div className="relative">
@@ -242,6 +390,7 @@ export const AppCard: React.FC<AppCardProps> = ({
               onClick={(e) => {
                 e.stopPropagation();
                 setShowGroupSelect(!showGroupSelect);
+                setShowPortSelect(false);
               }}
               className="p-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 hover:text-cyan-300 hover:border-slate-700 transition-colors"
               title="Assign to Custom Category"

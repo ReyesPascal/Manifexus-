@@ -129,6 +129,144 @@ export function sanitizeContainerName(rawName: string): string {
   return rawName.replace(/^\//, '');
 }
 
+// Classify port role and calculate smart priority score for Web UI detection
+export function classifyPort(
+  port: ContainerPort,
+  containerName: string,
+  imageName: string
+): { role: 'web' | 'p2p' | 'database' | 'dns' | 'service'; label?: string; score: number } {
+  const norm = `${containerName} ${imageName}`.toLowerCase();
+  const priv = port.privatePort;
+  const pub = port.publicPort ?? priv;
+  const isTcp = port.type === 'tcp';
+
+  // Base score: TCP published ports start at 100, private at 20, UDP at -500
+  const score = isTcp ? (port.publicPort ? 100 : 20) : -500;
+
+  // 1. DNS / DHCP / NTP
+  if (priv === 53 || pub === 53) {
+    return { role: 'dns', label: 'DNS', score: score - 900 };
+  }
+  if ([67, 68].includes(priv) || [67, 68].includes(pub)) {
+    return { role: 'dns', label: 'DHCP', score: score - 900 };
+  }
+
+  // 2. Database Engines
+  const dbPorts: Record<number, string> = {
+    3306: 'MySQL/MariaDB',
+    5432: 'PostgreSQL',
+    27017: 'MongoDB',
+    6379: 'Redis',
+    11211: 'Memcached',
+    9200: 'Elasticsearch',
+    9300: 'Elastic Cluster',
+  };
+  if (dbPorts[priv] || dbPorts[pub]) {
+    return { role: 'database', label: dbPorts[priv] || dbPorts[pub], score: score - 500 };
+  }
+
+  // 3. Known P2P / Torrent peer ports
+  const isTorrentApp =
+    norm.includes('torrent') || norm.includes('deluge') || norm.includes('transmission') || norm.includes('rtorrent');
+  const isTorrentPeerPort =
+    [6881, 6882, 6889, 51413, 58846].includes(priv) ||
+    [6881, 6882, 6889, 51413, 58846].includes(pub) ||
+    (isTorrentApp && (pub >= 40000 || priv >= 40000));
+  if (isTorrentPeerPort) {
+    return { role: 'p2p', label: 'P2P / Peer Traffic', score: score - 700 };
+  }
+
+  // 4. Wireguard VPN UDP
+  if (priv === 51820 || pub === 51820) {
+    return { role: 'service', label: 'VPN Traffic', score: score - 700 };
+  }
+
+  // 5. Specific high-confidence Web UI matches (e.g. qBittorrent 8080/8081 vs peer port 56098)
+  if (
+    norm.includes('qbittorrent') &&
+    ([8080, 8081, 8085].includes(priv) || [8080, 8081, 8085].includes(pub))
+  ) {
+    return { role: 'web', label: 'Web UI', score: score + 1000 };
+  }
+  if (norm.includes('deluge') && (priv === 8112 || pub === 8112)) {
+    return { role: 'web', label: 'Web UI', score: score + 1000 };
+  }
+  if (norm.includes('transmission') && (priv === 9091 || pub === 9091)) {
+    return { role: 'web', label: 'Web UI', score: score + 1000 };
+  }
+  if (norm.includes('pihole') && ([80, 8080].includes(priv) || [80, 8080].includes(pub))) {
+    return { role: 'web', label: 'Web Admin', score: score + 1000 };
+  }
+  if (
+    (norm.includes('wireguard') || norm.includes('wg-easy')) &&
+    (priv === 51821 || pub === 51821)
+  ) {
+    return { role: 'web', label: 'Web UI', score: score + 1000 };
+  }
+  if (norm.includes('syncthing') && (priv === 8384 || pub === 8384)) {
+    return { role: 'web', label: 'Web GUI', score: score + 1000 };
+  }
+  if (norm.includes('plex') && (priv === 32400 || pub === 32400)) {
+    return { role: 'web', label: 'Plex Web', score: score + 1000 };
+  }
+  if (
+    (norm.includes('jellyfin') || norm.includes('emby')) &&
+    ([8096, 8920].includes(priv) || [8096, 8920].includes(pub))
+  ) {
+    return { role: 'web', label: 'Web UI', score: score + 1000 };
+  }
+  if (norm.includes('portainer') && ([9000, 9443].includes(priv) || [9000, 9443].includes(pub))) {
+    return { role: 'web', label: 'Web UI', score: score + 1000 };
+  }
+  if (norm.includes('nginx') && ([81, 80, 443].includes(priv) || [81, 80, 443].includes(pub))) {
+    return { role: 'web', label: priv === 81 || pub === 81 ? 'Admin UI' : 'HTTP Web', score: score + 900 };
+  }
+
+  // 6. Generic well-known Web UI ports
+  const commonWebPorts: Record<number, string> = {
+    80: 'HTTP',
+    443: 'HTTPS',
+    8080: 'Web UI',
+    8081: 'Web UI',
+    8082: 'Web UI',
+    8085: 'Web UI',
+    8088: 'Web UI',
+    8090: 'Web UI',
+    8000: 'Web UI',
+    8443: 'Web SSL',
+    9443: 'Web SSL',
+    3000: 'Web UI',
+    3001: 'Web UI',
+    3334: 'Web UI',
+    5000: 'Web UI',
+    5055: 'Web UI',
+    8123: 'Home Assistant',
+    8989: 'Sonarr Web',
+    7878: 'Radarr Web',
+    8686: 'Lidarr Web',
+    9696: 'Prowlarr Web',
+    8787: 'Readarr Web',
+    6789: 'NZBGet Web',
+    8888: 'Jupyter/Web',
+    2342: 'PhotoPrism',
+    2283: 'Immich',
+    13378: 'Audiobookshelf',
+  };
+
+  if (commonWebPorts[priv] || commonWebPorts[pub]) {
+    return { role: 'web', label: commonWebPorts[priv] || commonWebPorts[pub], score: score + 600 };
+  }
+
+  // 7. Standard TCP port range heuristic
+  if (isTcp && pub >= 80 && pub <= 9999) {
+    return { role: 'web', label: 'HTTP / TCP', score: score + 80 };
+  } else if (pub >= 10000) {
+    return { role: 'service', label: 'High Service Port', score: score - 150 };
+  }
+
+  return { role: 'service', label: undefined, score };
+}
+
 // Convert raw docker inspect object to DeepContainerMetadata
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function parseRawContainer(inspectData: any): DeepContainerMetadata {
@@ -191,9 +329,26 @@ export function parseRawContainer(inspectData: any): DeepContainerMetadata {
     }
   }
 
-  // Find primary web port: prioritize published publicPort (like 80, 8080, 3000, 8096, 32400)
-  const sortedPublished = ports.filter((p) => p.publicPort && p.type === 'tcp');
-  const primaryPort = sortedPublished.length > 0 ? sortedPublished[0].publicPort : ports[0]?.publicPort || ports[0]?.privatePort;
+  const containerImage = inspectData.Config?.Image || inspectData.Image || '';
+
+  // Classify each port and assign suggested roles and labels
+  for (const port of ports) {
+    const classification = classifyPort(port, cleanName, containerImage);
+    port.suggestedRole = classification.role;
+    port.label = classification.label;
+  }
+
+  // Find primary web port using intelligent multi-port scoring
+  const scoredPorts = ports.map((p) => ({
+    port: p,
+    score: classifyPort(p, cleanName, containerImage).score,
+  }));
+  scoredPorts.sort((a, b) => b.score - a.score);
+
+  const primaryPort =
+    scoredPorts.length > 0
+      ? scoredPorts[0].port.publicPort ?? scoredPorts[0].port.privatePort
+      : undefined;
 
   // Mounts
   const mounts: ContainerMount[] = (inspectData.Mounts || []).map((m: { Type?: string; Source?: string; Destination?: string; Mode?: string; RW?: boolean }) => ({
@@ -355,6 +510,48 @@ let demoContainers: DeepContainerMetadata[] = [
     ipAddress: '172.28.0.3',
     restartPolicy: 'unless-stopped',
     iconUrl: 'https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/jellyfin.png',
+  },
+  {
+    id: 'f93d4a821e7b',
+    name: '/qbittorrent',
+    cleanName: 'qbittorrent',
+    image: 'lscr.io/linuxserver/qbittorrent:latest',
+    baseImage: 'lscr.io/linuxserver/qbittorrent:latest',
+    state: 'running',
+    status: 'Up 7 days',
+    created: Math.floor(Date.now() / 1000) - 604800,
+    ports: [
+      { ip: '0.0.0.0', privatePort: 8080, publicPort: 8081, type: 'tcp', suggestedRole: 'web', label: 'Web UI' },
+      { ip: '0.0.0.0', privatePort: 6881, publicPort: 56098, type: 'tcp', suggestedRole: 'p2p', label: 'P2P / Peer Traffic' },
+      { ip: '0.0.0.0', privatePort: 6881, publicPort: 56098, type: 'udp', suggestedRole: 'p2p', label: 'P2P UDP' },
+    ],
+    primaryPort: 8081,
+    mounts: [
+      { type: 'bind', source: '/mnt/storage/downloads', destination: '/downloads', rw: true },
+      { type: 'bind', source: '/home/ubuntu/appdata/qbittorrent/config', destination: '/config', rw: true },
+    ],
+    envVars: [
+      { key: 'WEBUI_PORT', value: '8080', isSensitive: false },
+      { key: 'TORRENTING_PORT', value: '6881', isSensitive: false },
+      { key: 'TZ', value: 'America/New_York', isSensitive: false },
+    ],
+    labels: {
+      'com.docker.compose.project': 'media-stack',
+      'com.docker.compose.service': 'qbittorrent',
+      'com.docker.compose.project.working_dir': '/home/ubuntu/docker/media-stack',
+      'com.docker.compose.project.config_files': '/home/ubuntu/docker/media-stack/docker-compose.yml',
+    },
+    compose: {
+      isCompose: true,
+      project: 'media-stack',
+      service: 'qbittorrent',
+      workingDir: '/home/ubuntu/docker/media-stack',
+      configFiles: '/home/ubuntu/docker/media-stack/docker-compose.yml',
+    },
+    networks: ['media-stack_default'],
+    ipAddress: '172.28.0.7',
+    restartPolicy: 'unless-stopped',
+    iconUrl: 'https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/qbittorrent.png',
   },
   {
     id: 'b149f012c85e',

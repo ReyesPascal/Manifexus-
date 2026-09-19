@@ -3,6 +3,8 @@ export interface ContainerPort {
   privatePort: number;
   publicPort?: number;
   type: 'tcp' | 'udp';
+  suggestedRole?: 'web' | 'p2p' | 'database' | 'dns' | 'service';
+  label?: string;
 }
 
 export interface ContainerMount {

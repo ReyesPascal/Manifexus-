@@ -47,7 +47,7 @@ services:
     container_name: manifexus
     restart: unless-stopped
     ports:
-      - "3344:3334"
+      - "3334:3334"
     environment:
       - NODE_ENV=production
       - PORT=3334
@@ -64,7 +64,7 @@ Launch the container:
 docker compose up -d
 ```
 
-Open your browser at `http://<your-server-ip>:3344`.
+Open your browser at `http://<your-server-ip>:3334`.
 
 ---
 
@@ -74,7 +74,7 @@ Open your browser at `http://<your-server-ip>:3344`.
 docker run -d \
   --name manifexus \
   --restart unless-stopped \
-  -p 3344:3334 \
+  -p 3334:3334 \
   -e PORT=3334 \
   -v /var/run/docker.sock:/var/run/docker.sock:ro \
   -v $(pwd)/data:/data \

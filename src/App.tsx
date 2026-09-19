@@ -142,6 +142,22 @@ export default function App() {
     }
   };
 
+  // Quick set primary Web UI port from app card
+  const handleSetPrimaryPort = async (containerId: string, port: number) => {
+    try {
+      const res = await fetch(`/api/containers/${containerId}/override`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ customPort: port }),
+      });
+      if (res.ok) {
+        await fetchData(true);
+      }
+    } catch (err) {
+      console.error('Failed to set primary port:', err);
+    }
+  };
+
   // Save dashboard configuration (host IP, refresh interval)
   const handleSaveConfig = async (updated: Partial<ManifexusConfig>) => {
     try {
@@ -442,6 +458,7 @@ export default function App() {
                           onInspect={setInspectContainer}
                           onAssignGroup={handleAssignGroup}
                           onAction={handleContainerAction}
+                          onSetPrimaryPort={handleSetPrimaryPort}
                         />
                       ))}
                     </div>
@@ -482,6 +499,7 @@ export default function App() {
                       onInspect={setInspectContainer}
                       onAssignGroup={handleAssignGroup}
                       onAction={handleContainerAction}
+                      onSetPrimaryPort={handleSetPrimaryPort}
                     />
                   ))}
                 </div>
@@ -541,6 +559,7 @@ export default function App() {
                       onInspect={setInspectContainer}
                       onAssignGroup={handleAssignGroup}
                       onAction={handleContainerAction}
+                      onSetPrimaryPort={handleSetPrimaryPort}
                     />
                   ))}
                 </div>
@@ -580,6 +599,7 @@ export default function App() {
                       onInspect={setInspectContainer}
                       onAssignGroup={handleAssignGroup}
                       onAction={handleContainerAction}
+                      onSetPrimaryPort={handleSetPrimaryPort}
                     />
                   ))}
                 </div>

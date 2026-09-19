@@ -34,7 +34,7 @@ export const HelpDrawer: React.FC<HelpDrawerProps> = ({ isOpen, onClose }) => {
     container_name: manifexus
     restart: unless-stopped
     ports:
-      - "3344:3334"
+      - "3334:3334"
     environment:
       - NODE_ENV=production
       - PORT=3334
@@ -49,7 +49,7 @@ export const HelpDrawer: React.FC<HelpDrawerProps> = ({ isOpen, onClose }) => {
   const dockerRunSnippet = `docker run -d \\
   --name manifexus \\
   --restart unless-stopped \\
-  -p 3344:3334 \\
+  -p 3334:3334 \\
   -e PORT=3334 \\
   -v /var/run/docker.sock:/var/run/docker.sock:ro \\
   -v $(pwd)/data:/data \\
