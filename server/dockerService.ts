@@ -46,8 +46,9 @@ export function queryDockerEngine<T>(path: string, method: string = 'GET', body?
         if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
           try {
             resolve(data ? JSON.parse(data) : ({} as T));
-          } catch (e) {
-            reject(new Error(`Failed to parse Docker response from ${path}: ${(e as Error).message}`));
+          } catch {
+            // For plain text (logs) or multi-line streaming responses (image pull), return raw text
+            resolve(data as unknown as T);
           }
         } else {
           reject(new Error(`Docker API ${path} returned status ${res.statusCode}: ${data}`));
@@ -69,6 +70,79 @@ export function queryDockerEngine<T>(path: string, method: string = 'GET', body?
     }
     req.end();
   });
+}
+
+// Pull an image from registry via Docker Engine API
+export async function pullDockerImage(imageName: string): Promise<boolean> {
+  try {
+    const [image, tag = 'latest'] = imageName.split(':');
+    await queryDockerEngine(
+      `/images/create?fromImage=${encodeURIComponent(image)}&tag=${encodeURIComponent(tag)}`,
+      'POST'
+    );
+    return true;
+  } catch (err) {
+    console.error(`Failed to pull image ${imageName}:`, err);
+    return false;
+  }
+}
+
+// Inspect host and find an already downloaded image for host orchestration tasks
+export async function getBestAvailableImage(): Promise<string> {
+  try {
+    // 1. Inspect running containers: Manifexus itself is guaranteed to be running on host!
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const containers = await queryDockerEngine<any[]>('/containers/json?all=1', 'GET');
+    if (Array.isArray(containers)) {
+      const manifexus = containers.find(
+        (c) =>
+          (c.Names && c.Names.some((n: string) => n.toLowerCase().includes('manifexus'))) ||
+          (c.Image && c.Image.toLowerCase().includes('manifexus'))
+      );
+      if (manifexus && manifexus.Image) {
+        return manifexus.Image;
+      }
+    }
+
+    // 2. Check local images on host for familiar tools (docker, compose, node, alpine, debian, ubuntu)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const images = await queryDockerEngine<any[]>('/images/json', 'GET');
+    if (Array.isArray(images) && images.length > 0) {
+      for (const img of images) {
+        const tags: string[] = img.RepoTags || [];
+        const foundManifexus = tags.find((t) => t.toLowerCase().includes('manifexus'));
+        if (foundManifexus) return foundManifexus;
+      }
+
+      const preferredPatterns = ['docker', 'compose', 'alpine', 'debian', 'ubuntu', 'node', 'busybox'];
+      for (const pattern of preferredPatterns) {
+        for (const img of images) {
+          const tags: string[] = img.RepoTags || [];
+          const match = tags.find((t) => t.toLowerCase().includes(pattern));
+          if (match && !match.includes('<none>')) return match;
+        }
+      }
+
+      // If any non-dangling image tag exists, return the first one
+      for (const img of images) {
+        const tags: string[] = img.RepoTags || [];
+        const valid = tags.find((t) => !t.includes('<none>'));
+        if (valid) return valid;
+      }
+    }
+  } catch (err) {
+    console.warn('[DockerService] Error detecting local images:', err);
+  }
+
+  // 3. Fallback: pull alpine
+  try {
+    const pulled = await pullDockerImage('alpine:latest');
+    if (pulled) return 'alpine:latest';
+  } catch {
+    // ignore
+  }
+
+  return 'ghcr.io/reyespascal/manifexus:latest';
 }
 
 // Icon dictionary for self-hosted apps
@@ -407,6 +481,13 @@ export function parseRawContainer(inspectData: any): DeepContainerMetadata {
 
   // Environment variables
   const rawEnv: string[] = inspectData.Config?.Env || [];
+  const rawEnvVars = rawEnv.map((envStr) => {
+    const eqIdx = envStr.indexOf('=');
+    const key = eqIdx > -1 ? envStr.substring(0, eqIdx) : envStr;
+    const val = eqIdx > -1 ? envStr.substring(eqIdx + 1) : '';
+    return { key, value: val };
+  });
+
   const envVars = rawEnv.map((envStr) => {
     const eqIdx = envStr.indexOf('=');
     const key = eqIdx > -1 ? envStr.substring(0, eqIdx) : envStr;
@@ -462,6 +543,7 @@ export function parseRawContainer(inspectData: any): DeepContainerMetadata {
     primaryPort,
     mounts,
     envVars,
+    rawEnvVars,
     labels,
     compose,
     networks,

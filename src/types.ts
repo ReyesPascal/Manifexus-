@@ -40,6 +40,7 @@ export interface DeepContainerMetadata {
   primaryPort?: number;
   mounts: ContainerMount[];
   envVars: { key: string; value: string; isSensitive: boolean }[];
+  rawEnvVars?: { key: string; value: string }[];
   labels: Record<string, string>;
   compose: ComposeMetadata;
   networks: string[];

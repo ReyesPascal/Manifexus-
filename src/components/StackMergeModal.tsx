@@ -72,8 +72,14 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
     logs?: string[];
     isAutomated?: boolean;
     mode?: string;
+    isMigratingSelf?: boolean;
   } | null>(null);
   const [copiedType, setCopiedType] = useState<'yaml' | 'script' | 'rollback' | 'cleanup' | null>(null);
+
+  // Live reconnection state when central command (Manifexus) migrates into new stack
+  const [isReconnecting, setIsReconnecting] = useState(false);
+  const [reconnectAttempt, setReconnectAttempt] = useState(0);
+  const [reconnectSuccess, setReconnectSuccess] = useState(false);
 
   // Group containers by stack for quick selection
   const groupedStacks = useMemo(() => {
@@ -196,6 +202,9 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
     if (!plan) return;
     setIsExecuting(true);
     setShowConfirmExecuteDialog(false);
+    setIsReconnecting(false);
+    setReconnectAttempt(0);
+    setReconnectSuccess(false);
 
     try {
       const res = await fetch('/api/stacks/execute-merge', {
@@ -213,7 +222,39 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
       setExecutionResult(result);
       if (result.success) {
         setCurrentStep(4);
-        if (onMergeSuccess) onMergeSuccess();
+        // Sequential refreshes to catch Docker daemon state transitions (created -> running)
+        if (onMergeSuccess) {
+          onMergeSuccess();
+          setTimeout(() => onMergeSuccess(), 2000);
+          setTimeout(() => onMergeSuccess(), 4500);
+        }
+
+        // If Manifexus is migrating into the stack, poll /api/health until the new instance boots
+        if (result.isMigratingSelf) {
+          setIsReconnecting(true);
+          let attempts = 0;
+          const maxAttempts = 35;
+          const pollTimer = setInterval(async () => {
+            attempts++;
+            setReconnectAttempt(attempts);
+            try {
+              const ping = await fetch('/api/health', { cache: 'no-store' });
+              if (ping.ok) {
+                clearInterval(pollTimer);
+                setReconnectSuccess(true);
+                setTimeout(() => {
+                  window.location.reload();
+                }, 1200);
+              }
+            } catch {
+              // Expected while container restarts on host
+            }
+
+            if (attempts >= maxAttempts) {
+              clearInterval(pollTimer);
+            }
+          }, 1000);
+        }
       }
     } catch (err) {
       setExecutionResult({ success: false, message: (err as Error).message });
@@ -921,6 +962,47 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
           {/* STEP 4: GITHUB UPDATE GUIDE & VERIFICATION */}
           {currentStep === 4 && (
             <div className="space-y-6">
+              {/* Central Command Reconnection Status (When Manifexus is migrating into stack) */}
+              {isReconnecting && (
+                <div className="p-5 rounded-xl bg-gradient-to-r from-cyan-950/80 via-slate-900 to-purple-950/80 border border-cyan-500/50 text-xs space-y-3 shadow-xl">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2.5 rounded-xl bg-cyan-500/20 border border-cyan-500/40 text-cyan-300">
+                        <RefreshCw className={`w-5 h-5 ${reconnectSuccess ? 'text-emerald-400' : 'animate-spin'}`} />
+                      </div>
+                      <div>
+                        <h4 className="text-sm font-bold text-white">
+                          {reconnectSuccess ? 'Central Command Reconnected!' : 'Migrating Manifexus to Unified Stack...'}
+                        </h4>
+                        <p className="text-xs text-slate-300">
+                          {reconnectSuccess
+                            ? 'Reloading dashboard to display unified stack view...'
+                            : `Central command container is restarting inside ${plan?.targetStackName || 'the new stack'} on port 3334.`}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-slate-950 border border-cyan-500/30 text-cyan-300 font-mono">
+                        {reconnectSuccess ? 'ONLINE' : `Ping Attempt ${reconnectAttempt}/35`}
+                      </span>
+                      <button
+                        onClick={() => window.location.reload()}
+                        className="px-3 py-1.5 rounded-lg bg-cyan-500 text-slate-950 hover:bg-cyan-400 font-bold text-xs transition-colors"
+                      >
+                        Refresh Now
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="w-full bg-slate-950 rounded-full h-1.5 overflow-hidden border border-slate-800">
+                    <div
+                      className={`h-full transition-all duration-300 ${reconnectSuccess ? 'bg-emerald-400 w-full' : 'bg-cyan-400 animate-pulse w-3/4'}`}
+                    />
+                  </div>
+                </div>
+              )}
+
               {/* Success Banner if Executed */}
               {executionResult && (
                 <div className="p-4 rounded-xl bg-emerald-950/60 border border-emerald-500/40 text-emerald-200 text-xs space-y-2">

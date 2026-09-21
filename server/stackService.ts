@@ -204,7 +204,8 @@ export function generateStackMergePlan(
     const ignoredEnvPrefixes = ['PHP_', 'APACHE_', 'NGINX_', 'NODE_', 'YARN_', 'DEBIAN_'];
     const ignoredExactKeys = ['HOSTNAME', 'HOME', 'PATH', 'GPG_KEYS', 'PHPIZE_DEPS', 'MARIADB_MAJOR', 'MARIADB_VERSION', 'MYSQL_MAJOR'];
 
-    for (const env of container.envVars) {
+    const envSource = container.rawEnvVars && container.rawEnvVars.length > 0 ? container.rawEnvVars : container.envVars;
+    for (const env of envSource) {
       if (!env.key || env.value === undefined || env.value === 'undefined') continue;
       if (ignoredExactKeys.includes(env.key)) continue;
       if (ignoredEnvPrefixes.some((prefix) => env.key.startsWith(prefix))) continue;

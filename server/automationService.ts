@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { exec } from 'child_process';
 import util from 'util';
-import { isDockerSocketAvailable, queryDockerEngine } from './dockerService';
+import { isDockerSocketAvailable, queryDockerEngine, getBestAvailableImage } from './dockerService';
 
 const execAsync = util.promisify(exec);
 
@@ -118,6 +118,7 @@ export interface AutomatedMergeResult {
   writtenPath?: string;
   stoppedContainers: string[];
   logs: string[];
+  isMigratingSelf?: boolean;
 }
 
 // Translate a host path like /home/ryan/utilities-stack to container path
@@ -149,12 +150,20 @@ export async function executeAutomatedStackMerge(
   const logs: string[] = [];
   const stoppedContainers: string[] = [];
 
-  logs.push(`[1/5] Checking automation privileges: Mode is ${privs.mode.toUpperCase()}`);
+  const isMigratingManifexus =
+    req.sourceContainerIds.some((id) => id.toLowerCase().includes('manifexus')) ||
+    req.yamlContent.toLowerCase().includes('manifexus');
+
+  // Select a reliable image guaranteed to exist locally on host (no 404s)
+  const helperImage = await getBestAvailableImage();
+  logs.push(`[1/5] Automation environment: Mode=${privs.mode.toUpperCase()}, Runner=${helperImage}`);
+
+  let fileWritten = false;
+  let targetContainerDir = req.targetDirectory;
+  let backupPath = '';
+  const targetComposePath = path.join(req.targetDirectory, 'docker-compose.yml');
 
   // Strategy A: Direct Host Filesystem Write (if host FS is mounted)
-  let targetContainerDir = req.targetDirectory;
-  let usedDirectFs = false;
-
   if (privs.isHostFsMounted) {
     targetContainerDir = resolveHostPathToContainer(req.targetDirectory, privs.hostRootPath);
     logs.push(`[2/5] Host directory mapped: "${req.targetDirectory}" -> "${targetContainerDir}"`);
@@ -165,124 +174,245 @@ export async function executeAutomatedStackMerge(
         logs.push(`Created directory: ${targetContainerDir}`);
       }
 
-      const targetComposePath = path.join(targetContainerDir, 'docker-compose.yml');
-      let backupPath = '';
-
-      if (fs.existsSync(targetComposePath)) {
+      const localComposePath = path.join(targetContainerDir, 'docker-compose.yml');
+      if (fs.existsSync(localComposePath)) {
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
         backupPath = path.join(targetContainerDir, `docker-compose.backup.${timestamp}.yml`);
-        fs.copyFileSync(targetComposePath, backupPath);
+        fs.copyFileSync(localComposePath, backupPath);
         logs.push(`Saved safety backup to: ${backupPath}`);
       }
 
-      fs.writeFileSync(targetComposePath, req.yamlContent, 'utf8');
-      logs.push(`Successfully wrote unified docker-compose.yml to ${targetComposePath}`);
-      usedDirectFs = true;
+      fs.writeFileSync(localComposePath, req.yamlContent, 'utf8');
+      if (fs.existsSync(localComposePath) && fs.statSync(localComposePath).size > 0) {
+        logs.push(`Successfully wrote unified docker-compose.yml (${fs.statSync(localComposePath).size} bytes)`);
+        fileWritten = true;
+      }
     } catch (err) {
-      logs.push(`Direct filesystem write error: ${(err as Error).message}`);
+      logs.push(`Direct filesystem write notice: ${(err as Error).message}`);
     }
   }
 
-  // Strategy B: If direct FS wasn't possible but socket is writable, use a transient docker helper
-  if (!usedDirectFs && privs.isSocketWritable) {
-    logs.push(`[2/5] Using Docker Engine helper container to write compose file on host...`);
+  // Strategy B: If direct FS wasn't used or failed, use Docker Engine helper container
+  if (!fileWritten && privs.isSocketWritable) {
+    logs.push(`[2/5] Writing docker-compose.yml on host via Docker Engine helper container...`);
     try {
-      // Create a temporary container that mounts host directory
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const createRes = await queryDockerEngine<any>('/containers/create', 'POST', {
-        Image: 'alpine:latest',
+        Image: helperImage,
+        Entrypoint: [],
         Cmd: [
           'sh',
           '-c',
-          `mkdir -p /work && [ -f /work/docker-compose.yml ] && cp /work/docker-compose.yml /work/docker-compose.backup.$(date +%s).yml || true; echo "$COMPOSE_DATA" > /work/docker-compose.yml && echo "SUCCESS"`,
+          `mkdir -p "$TARGET_DIR" && if [ -f "$TARGET_DIR/docker-compose.yml" ]; then cp "$TARGET_DIR/docker-compose.yml" "$TARGET_DIR/docker-compose.backup.$(date +%s).yml"; fi && printf '%s' "$COMPOSE_DATA" > "$TARGET_DIR/docker-compose.yml" && sync && [ -s "$TARGET_DIR/docker-compose.yml" ] && echo "COMPOSE_WRITE_SUCCESS"`,
         ],
-        Env: [`COMPOSE_DATA=${req.yamlContent}`],
+        Env: [
+          `TARGET_DIR=${req.targetDirectory}`,
+          `COMPOSE_DATA=${req.yamlContent}`,
+        ],
         HostConfig: {
-          Binds: [`${req.targetDirectory}:/work`],
-          AutoRemove: true,
+          Binds: [`${req.targetDirectory}:${req.targetDirectory}`],
         },
       });
 
       if (createRes && createRes.Id) {
-        await queryDockerEngine(`/containers/${createRes.Id}/start`, 'POST');
-        logs.push(`Helper container wrote compose file directly to host ${req.targetDirectory}/docker-compose.yml`);
+        const writerId = createRes.Id;
+        await queryDockerEngine(`/containers/${writerId}/start`, 'POST');
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const waitRes = await queryDockerEngine<any>(`/containers/${writerId}/wait`, 'POST');
+        const writerLogs = await queryDockerEngine<string>(`/containers/${writerId}/logs?stdout=1&stderr=1`, 'GET');
+
+        try {
+          await queryDockerEngine(`/containers/${writerId}?force=true`, 'DELETE');
+        } catch {
+          // ignore
+        }
+
+        if (typeof writerLogs === 'string' && writerLogs.includes('COMPOSE_WRITE_SUCCESS')) {
+          fileWritten = true;
+          logs.push(`Helper container verified write to ${req.targetDirectory}/docker-compose.yml`);
+        } else if (waitRes && waitRes.StatusCode === 0) {
+          fileWritten = true;
+          logs.push(`Helper container successfully exited with code 0.`);
+        } else {
+          logs.push(`Helper container response: ${typeof writerLogs === 'string' ? writerLogs : JSON.stringify(writerLogs)}`);
+        }
       }
     } catch (err) {
-      logs.push(`Docker helper container notice: ${(err as Error).message}`);
+      logs.push(`Docker helper container error: ${(err as Error).message}`);
     }
   }
 
-  // Step 3: Gracefully stop previous individual containers via Docker socket API
-  logs.push(`[3/5] Gracefully stopping previous separate containers (Volumes strictly preserved)...`);
+  // Abort if the file could not be written to prevent disrupting containers
+  if (!fileWritten) {
+    return {
+      success: false,
+      message: `Failed to write docker-compose.yml to host directory: ${req.targetDirectory}. Container states were not altered.`,
+      logs,
+      stoppedContainers: [],
+    };
+  }
+
+  // Step 3: Inspect containers to only stop foreign containers, preserving existing target stack services
+  logs.push(`[3/5] Inspecting containers to preserve existing stack services...`);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let runningContainers: any[] = [];
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    runningContainers = await queryDockerEngine<any[]>('/containers/json?all=1', 'GET');
+  } catch {
+    // ignore
+  }
+
   for (const containerId of req.sourceContainerIds) {
     try {
-      if (privs.isDockerConnected) {
-        // Do not stop manifexus itself prematurely!
-        if (containerId.includes('manifexus')) {
-          logs.push(`Skipping premature stop of Manifexus until new stack is signaled.`);
-          continue;
-        }
+      const match = runningContainers.find(
+        (c) =>
+          c.Id === containerId ||
+          c.Id.startsWith(containerId) ||
+          (c.Names && c.Names.some((n: string) => n.replace('/', '') === containerId))
+      );
 
+      const composeProject = match?.Labels?.['com.docker.compose.project'];
+      const composeWorkingDir = match?.Labels?.['com.docker.compose.project.working_dir'];
+      const containerCleanName = match?.Names?.[0]?.replace('/', '') || containerId;
+
+      // DO NOT STOP containers that already belong to the target stack
+      if (composeProject === req.targetStackName || composeWorkingDir === req.targetDirectory) {
+        logs.push(`Preserving target stack service "${containerCleanName}" (will be reloaded smoothly by Docker Compose)`);
+        continue;
+      }
+
+      // DO NOT STOP Manifexus prematurely; it will be atomically replaced during Compose launch
+      if (
+        containerCleanName.toLowerCase().includes('manifexus') ||
+        (match?.Image && match.Image.toLowerCase().includes('manifexus'))
+      ) {
+        logs.push(`Central command (${containerCleanName}) scheduled for atomic stack handoff.`);
+        continue;
+      }
+
+      // Foreign containers from other stacks can be gracefully stopped
+      if (privs.isDockerConnected) {
         await queryDockerEngine(`/containers/${containerId}/stop?t=10`, 'POST');
         stoppedContainers.push(containerId);
-        logs.push(`Stopped container: ${containerId}`);
+        logs.push(`Gracefully stopped external container: ${containerCleanName}`);
       }
     } catch (err) {
-      logs.push(`Notice stopping ${containerId}: ${(err as Error).message}`);
+      logs.push(`Notice handling ${containerId}: ${(err as Error).message}`);
     }
   }
 
   // Step 4: Launch the merged stack via Docker Compose
-  logs.push(`[4/5] Launching merged stack "${req.targetStackName}" via Docker Compose...`);
+  logs.push(`[4/5] Orchestrating Docker Compose for "${req.targetStackName}" on host...`);
   let composeLaunched = false;
 
-  if (privs.hasDockerCli) {
+  // Script to run inside helper container with Docker socket
+  const orchestrateScript = `
+set -e
+echo "[ORCHESTRATOR] Navigating to ${req.targetDirectory}..."
+cd "${req.targetDirectory}"
+
+if [ "${isMigratingManifexus}" = "true" ]; then
+  echo "[ORCHESTRATOR] Releasing standalone manifexus container for stack adoption..."
+  docker rm -f manifexus 2>/dev/null || true
+fi
+
+echo "[ORCHESTRATOR] Running docker compose up -d..."
+if which docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+  docker compose up -d --remove-orphans
+elif which docker-compose >/dev/null 2>&1; then
+  docker-compose up -d --remove-orphans
+else
+  docker compose up -d --remove-orphans
+fi
+
+echo "COMPOSE_LAUNCH_SUCCESS"
+`;
+
+  if (privs.isSocketWritable) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const runner = await queryDockerEngine<any>('/containers/create', 'POST', {
+        Image: helperImage,
+        Entrypoint: [],
+        Cmd: ['sh', '-c', orchestrateScript],
+        HostConfig: {
+          Binds: [
+            `${DOCKER_SOCKET_PATH}:/var/run/docker.sock`,
+            `${req.targetDirectory}:${req.targetDirectory}`,
+          ],
+        },
+      });
+
+      if (runner && runner.Id) {
+        const runnerId = runner.Id;
+        await queryDockerEngine(`/containers/${runnerId}/start`, 'POST');
+
+        // If migrating Manifexus itself, the old container terminates to free port 3334.
+        // Return immediately with isMigratingSelf=true so the UI starts reconnection polling.
+        if (isMigratingManifexus) {
+          logs.push(`[ORCHESTRATOR] Atomic handoff in progress: Manifexus is restarting under "${req.targetStackName}" on port 3334.`);
+          return {
+            success: true,
+            isMigratingSelf: true,
+            message: `Migration initiated! Manifexus is restarting as part of "${req.targetStackName}" on port 3334.`,
+            backupPath: backupPath || `${req.targetDirectory}/docker-compose.backup.yml`,
+            writtenPath: targetComposePath,
+            stoppedContainers,
+            logs,
+          };
+        }
+
+        // Otherwise wait for compose completion
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const waitRes = await queryDockerEngine<any>(`/containers/${runnerId}/wait`, 'POST');
+        const runnerLogs = await queryDockerEngine<string>(`/containers/${runnerId}/logs?stdout=1&stderr=1`, 'GET');
+
+        try {
+          await queryDockerEngine(`/containers/${runnerId}?force=true`, 'DELETE');
+        } catch {
+          // ignore
+        }
+
+        if (typeof runnerLogs === 'string') {
+          runnerLogs.split('\n').filter(Boolean).forEach((l) => logs.push(l));
+          if (runnerLogs.includes('COMPOSE_LAUNCH_SUCCESS') || (waitRes && waitRes.StatusCode === 0)) {
+            composeLaunched = true;
+          }
+        } else if (waitRes && waitRes.StatusCode === 0) {
+          composeLaunched = true;
+        }
+      }
+    } catch (err) {
+      logs.push(`Docker socket compose runner notice: ${(err as Error).message}`);
+    }
+  }
+
+  // Fallback to local CLI if socket runner wasn't available
+  if (!composeLaunched && privs.hasDockerCli) {
     try {
       const composeFile = path.join(targetContainerDir, 'docker-compose.yml');
       const { stdout } = await execAsync(
         `docker compose -f "${composeFile}" --project-directory "${targetContainerDir}" up -d`
       );
-      logs.push(`Docker compose output:\n${stdout}`);
+      logs.push(`Docker compose CLI output:\n${stdout}`);
       composeLaunched = true;
     } catch (err) {
       logs.push(`Docker compose CLI output: ${(err as Error).message}`);
     }
   }
 
-  // If inside container without compose CLI or path differences, run compose runner via Docker socket
-  if (!composeLaunched && privs.isSocketWritable) {
-    try {
-      logs.push(`Launching compose orchestrator container via Docker Engine socket...`);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const runner = await queryDockerEngine<any>('/containers/create', 'POST', {
-        Image: 'docker/compose:latest',
-        Cmd: ['-f', '/work/docker-compose.yml', '--project-directory', '/work', 'up', '-d'],
-        HostConfig: {
-          Binds: [
-            `${DOCKER_SOCKET_PATH}:/var/run/docker.sock`,
-            `${req.targetDirectory}:/work`,
-          ],
-          AutoRemove: true,
-        },
-      });
-
-      if (runner && runner.Id) {
-        await queryDockerEngine(`/containers/${runner.Id}/start`, 'POST');
-        logs.push(`Docker Compose orchestrator started on host for ${req.targetDirectory}`);
-        composeLaunched = true;
-      }
-    } catch (err) {
-      logs.push(`Compose orchestrator notice: ${(err as Error).message}`);
-    }
-  }
-
   logs.push(`[5/5] Automation complete. Fleet state refreshing.`);
 
   return {
-    success: true,
-    message: `Stack "${req.targetStackName}" successfully consolidated into ${req.targetDirectory}!`,
-    backupPath: path.join(targetContainerDir, 'docker-compose.backup.yml'),
-    writtenPath: path.join(targetContainerDir, 'docker-compose.yml'),
+    success: composeLaunched || fileWritten,
+    isMigratingSelf: false,
+    message: composeLaunched
+      ? `Stack "${req.targetStackName}" successfully consolidated and running on host!`
+      : `Compose file written to ${req.targetDirectory}/docker-compose.yml. Check logs for launch details.`,
+    backupPath: backupPath || `${req.targetDirectory}/docker-compose.backup.yml`,
+    writtenPath: targetComposePath,
     stoppedContainers,
     logs,
   };
