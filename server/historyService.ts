@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { DeepContainerMetadata } from '../src/types';
+import { readHostFile } from './hostFsService';
 
 export interface MergeHistoryRecord {
   id: string; // unique merge run id, e.g. merge_20260921_123456_abc
@@ -136,9 +137,9 @@ export async function createPreMergeSnapshot(params: {
       if (workingDir) {
         const compPath = path.join(workingDir, 'docker-compose.yml');
         try {
-          if (fs.existsSync(compPath)) {
-            originalCompose = fs.readFileSync(compPath, 'utf8');
-            // Write archive copy
+          const content = await readHostFile(compPath);
+          if (content && content.trim().length > 0) {
+            originalCompose = content;
             const archiveCompPath = path.join(backupArchiveDir, `${proj}.docker-compose.pre-merge.yml`);
             fs.writeFileSync(archiveCompPath, originalCompose, 'utf8');
           }

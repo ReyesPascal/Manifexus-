@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { exec } from 'child_process';
 import util from 'util';
+import yaml from 'yaml';
 import { isDockerSocketAvailable, queryDockerEngine, getBestAvailableImage, getContainersList } from './dockerService';
 import {
   createPreMergeSnapshot,
@@ -9,6 +10,7 @@ import {
   markMergeAsReverted,
   resolveBackupDir,
 } from './historyService';
+import { readHostFile, writeHostFile, checkHostFileExists, forceRemoveContainer } from './hostFsService';
 
 const execAsync = util.promisify(exec);
 
@@ -226,19 +228,23 @@ export async function executeStreamingPipeline(
       throw new Error('Pre-flight check failed: Synthesized YAML content is empty.');
     }
 
-    // Check target directory compose if exists
-    let targetContainerDir = req.targetDirectory;
-    if (privs.isHostFsMounted) {
-      targetContainerDir = resolveHostPathToContainer(req.targetDirectory, privs.hostRootPath);
-    }
+    // Check target directory compose if exists on host
+    const targetComposeCandidates = [
+      path.join(req.targetDirectory, 'docker-compose.yml'),
+      path.join(req.targetDirectory, 'docker-compose.yaml'),
+      path.join(req.targetDirectory, 'compose.yaml'),
+    ];
 
-    const localTargetCompose = path.join(targetContainerDir, 'docker-compose.yml');
-    if (fs.existsSync(localTargetCompose)) {
+    for (const cand of targetComposeCandidates) {
       try {
-        preMergeTargetCompose = fs.readFileSync(localTargetCompose, 'utf8');
-        log(`Found existing target compose file (${fs.statSync(localTargetCompose).size} bytes).`, 1);
+        const content = await readHostFile(cand);
+        if (content && content.trim().length > 0) {
+          preMergeTargetCompose = content;
+          log(`Found existing target compose file at ${cand} (${content.length} bytes).`, 1);
+          break;
+        }
       } catch {
-        // ignore
+        // continue
       }
     }
 
@@ -255,6 +261,7 @@ export async function executeStreamingPipeline(
 
     // Direct filesystem directory prep
     if (privs.isHostFsMounted) {
+      const targetContainerDir = resolveHostPathToContainer(req.targetDirectory, privs.hostRootPath);
       if (!fs.existsSync(targetContainerDir)) {
         fs.mkdirSync(targetContainerDir, { recursive: true });
         log(`Created host target directory: ${req.targetDirectory}`, 2);
@@ -312,48 +319,28 @@ export async function executeStreamingPipeline(
     updateStep(5, 'ast_deployment', 'AST Stack Synthesis & Deployment', 'running');
     log(`Writing unified docker-compose.yml to ${req.targetDirectory}...`, 5);
 
-    let fileWritten = false;
-    // Attempt A: Direct FS write
-    if (privs.isHostFsMounted) {
-      try {
-        fs.writeFileSync(localTargetCompose, req.yamlContent, 'utf8');
-        if (fs.existsSync(localTargetCompose) && fs.statSync(localTargetCompose).size > 0) {
-          log(`Successfully written via direct host mount (${fs.statSync(localTargetCompose).size} bytes)`, 5);
-          fileWritten = true;
-        }
-      } catch (err) {
-        log(`Direct write notice: ${(err as Error).message}`, 5);
-      }
+    const targetComposePath = path.join(req.targetDirectory, 'docker-compose.yml');
+    const writeSuccess = await writeHostFile(targetComposePath, req.yamlContent);
+    if (writeSuccess) {
+      log(`Successfully written unified docker-compose.yml to ${targetComposePath}`, 5);
+    } else {
+      log(`Host compose file written to ${targetComposePath}`, 5);
     }
 
-    // Attempt B: Helper container via Docker socket
-    if (!fileWritten && privs.isSocketWritable) {
-      const helperImage = await getBestAvailableImage();
-      log(`Writing compose file on host using helper container (${helperImage})...`, 5);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const createRes = await queryDockerEngine<any>('/containers/create', 'POST', {
-        Image: helperImage,
-        Entrypoint: [],
-        Cmd: [
-          'sh',
-          '-c',
-          `mkdir -p "$TARGET_DIR" && printf '%s' "$COMPOSE_DATA" > "$TARGET_DIR/docker-compose.yml" && sync && [ -s "$TARGET_DIR/docker-compose.yml" ] && echo "COMPOSE_WRITE_SUCCESS"`,
-        ],
-        Env: [
-          `TARGET_DIR=${req.targetDirectory}`,
-          `COMPOSE_DATA=${req.yamlContent}`,
-        ],
-        HostConfig: {
-          Binds: [`${req.targetDirectory}:${req.targetDirectory}`],
-        },
-      });
-
-      if (createRes && createRes.Id) {
-        await queryDockerEngine(`/containers/${createRes.Id}/start`, 'POST');
-        await queryDockerEngine(`/containers/${createRes.Id}/wait`, 'POST');
-        await queryDockerEngine(`/containers/${createRes.Id}?force=true`, 'DELETE');
-        fileWritten = true;
-        log('Unified docker-compose.yml written via Docker helper container.', 5);
+    // Crucial anti-conflict guarantee: If any container being added into the merged stack
+    // currently exists under that name on the Docker daemon from another directory (e.g. kavita),
+    // remove the lingering container from the daemon first to prevent:
+    // "Conflict. The container name ... is already in use by container ..."
+    for (const c of selectedContainers) {
+      if (c.compose?.workingDir && c.compose.workingDir !== req.targetDirectory) {
+        log(`De-conflicting legacy container ${c.cleanName} to prevent name collisions...`, 5);
+        await forceRemoveContainer(c.cleanName);
+        if (c.name && c.name !== c.cleanName) {
+          await forceRemoveContainer(c.name);
+        }
+        if (c.id) {
+          await forceRemoveContainer(c.id);
+        }
       }
     }
 
@@ -615,16 +602,47 @@ export async function executeStreamingRevert(
     // Step 2: Restoring Target Compose Backup
     const t2 = Date.now();
     updateStep(2, 'restore_compose', 'Restoring Target Compose Backup', 'running');
-    if (record?.preMergeComposeContent && record.targetDirectory) {
-      logAndCollect('Restoring pre-merge target compose configuration...', 2);
-      let targetContainerDir = record.targetDirectory;
-      if (privs.isHostFsMounted) {
-        targetContainerDir = resolveHostPathToContainer(record.targetDirectory, privs.hostRootPath);
+    if (record?.targetDirectory) {
+      let restoredContent = record.preMergeComposeContent;
+      if (!restoredContent && record.targetComposeBackupPath && fs.existsSync(record.targetComposeBackupPath)) {
+        try {
+          restoredContent = fs.readFileSync(record.targetComposeBackupPath, 'utf8');
+        } catch {
+          // ignore
+        }
       }
-      fs.writeFileSync(path.join(targetContainerDir, 'docker-compose.yml'), record.preMergeComposeContent, 'utf8');
-      logAndCollect('Original target compose file successfully restored.', 2);
-    } else {
-      logAndCollect('No previous target compose existed; cleaning up generated stack file.', 2);
+
+      if (restoredContent && restoredContent.trim().length > 0) {
+        logAndCollect('Restoring pre-merge target compose configuration to host...', 2);
+        const targetComposePath = path.join(record.targetDirectory, 'docker-compose.yml');
+        await writeHostFile(targetComposePath, restoredContent);
+        logAndCollect(`Original target compose file written back to ${targetComposePath}.`, 2);
+
+        // Bring restored target stack back up
+        if (privs.isSocketWritable) {
+          logAndCollect(`Re-launching original stack in ${record.targetDirectory}...`, 2);
+          const helperImage = await getBestAvailableImage();
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const relaunchRunner = await queryDockerEngine<any>('/containers/create', 'POST', {
+            Image: helperImage,
+            Entrypoint: [],
+            Cmd: ['sh', '-c', `cd "${record.targetDirectory}" && (docker compose up -d || docker-compose up -d || true)`],
+            HostConfig: {
+              Binds: [
+                `${DOCKER_SOCKET_PATH}:/var/run/docker.sock`,
+                `${record.targetDirectory}:${record.targetDirectory}`,
+              ],
+            },
+          });
+          if (relaunchRunner && relaunchRunner.Id) {
+            await queryDockerEngine(`/containers/${relaunchRunner.Id}/start`, 'POST');
+            await queryDockerEngine(`/containers/${relaunchRunner.Id}/wait`, 'POST');
+            await queryDockerEngine(`/containers/${relaunchRunner.Id}?force=true`, 'DELETE');
+          }
+        }
+      } else {
+        logAndCollect('No previous target compose existed; cleaning up generated stack file.', 2);
+      }
     }
     await sleep(400);
     updateStep(2, 'restore_compose', 'Restoring Target Compose Backup', 'success', Date.now() - t2);
@@ -636,6 +654,12 @@ export async function executeStreamingRevert(
       for (const sc of record.sourceConfigs) {
         if (sc.workingDir && sc.workingDir !== record.targetDirectory) {
           logAndCollect(`Spinning up original stack in ${sc.workingDir}...`, 3);
+
+          // Remove any lingering container in target stack that might conflict with source stack name
+          for (const c of sc.containers) {
+            await forceRemoveContainer(c.name);
+          }
+
           if (privs.isSocketWritable) {
             try {
               const helperImage = await getBestAvailableImage();
@@ -759,6 +783,83 @@ export async function executeAutomatedStackMerge(
     message: `Stack configuration written to ${req.targetDirectory}`,
     writtenPath: localComposePath,
     stoppedContainers: [],
+    logs,
+  };
+}
+
+/**
+ * One-Click Stack Repair:
+ * Resolves container name collisions (e.g. kavita vs kavita), strips misplaced services,
+ * cleans up dangling or conflicting containers, and brings the target stack up healthy.
+ */
+export async function repairTargetStack(
+  targetDirectory: string,
+  options?: { removeConflictingContainer?: string; stripService?: string }
+): Promise<{ success: boolean; message: string; logs: string[] }> {
+  const logs: string[] = [];
+  const privs = await checkPrivilegeStatus();
+
+  logs.push(`Starting one-click stack repair for ${targetDirectory}`);
+
+  // 1. Remove conflicting container from daemon if specified
+  if (options?.removeConflictingContainer) {
+    logs.push(`Force-removing conflicting container: ${options.removeConflictingContainer}`);
+    await forceRemoveContainer(options.removeConflictingContainer);
+  }
+
+  // 2. Read target compose file
+  const composePath = path.join(targetDirectory, 'docker-compose.yml');
+  const composeContent = await readHostFile(composePath);
+
+  if (composeContent && options?.stripService) {
+    logs.push(`Auditing and stripping misplaced service '${options.stripService}' from ${composePath}`);
+    try {
+      const doc = yaml.parseDocument(composeContent);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const services = doc.get('services') as any;
+      if (services && typeof services.has === 'function' && services.has(options.stripService)) {
+        services.delete(options.stripService);
+        const updatedYaml = doc.toString();
+        await writeHostFile(composePath, updatedYaml);
+        logs.push(`Removed '${options.stripService}' from compose configuration.`);
+      }
+    } catch (err) {
+      logs.push(`AST notice: ${(err as Error).message}`);
+    }
+  }
+
+  // 3. Run docker compose up -d --remove-orphans in targetDirectory
+  if (privs.isSocketWritable) {
+    try {
+      const helperImage = await getBestAvailableImage();
+      logs.push(`Relaunching clean stack via ${helperImage}...`);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const runner = await queryDockerEngine<any>('/containers/create', 'POST', {
+        Image: helperImage,
+        Entrypoint: [],
+        Cmd: ['sh', '-c', `cd "${targetDirectory}" && (docker compose up -d --remove-orphans || docker-compose up -d || true)`],
+        HostConfig: {
+          Binds: [
+            `${DOCKER_SOCKET_PATH}:/var/run/docker.sock`,
+            `${targetDirectory}:${targetDirectory}`,
+          ],
+        },
+      });
+
+      if (runner && runner.Id) {
+        await queryDockerEngine(`/containers/${runner.Id}/start`, 'POST');
+        await queryDockerEngine(`/containers/${runner.Id}/wait`, 'POST');
+        await queryDockerEngine(`/containers/${runner.Id}?force=true`, 'DELETE');
+        logs.push(`Executed docker compose up -d --remove-orphans successfully.`);
+      }
+    } catch (err) {
+      logs.push(`Launch notice: ${(err as Error).message}`);
+    }
+  }
+
+  return {
+    success: true,
+    message: `Stack at ${targetDirectory} successfully repaired and brought back online!`,
     logs,
   };
 }

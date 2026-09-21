@@ -383,9 +383,11 @@ export function parseRawContainer(inspectData: any): DeepContainerMetadata {
     oneOff: labels['com.docker.compose.oneoff'] === 'True',
   };
 
-  // Extract Ports
+  // Extract Ports: combine NetworkSettings.Ports with HostConfig.PortBindings so stopped/exited containers never lose their port mappings
   const ports: ContainerPort[] = [];
-  const rawPortBindings = inspectData.NetworkSettings?.Ports || {};
+  const networkPorts = inspectData.NetworkSettings?.Ports || {};
+  const hostConfigPorts = inspectData.HostConfig?.PortBindings || {};
+  const combinedPortBindings = { ...hostConfigPorts, ...networkPorts };
   const rawPortsList = inspectData.Ports || [];
 
   if (Array.isArray(rawPortsList) && rawPortsList.length > 0) {
@@ -397,27 +399,28 @@ export function parseRawContainer(inspectData: any): DeepContainerMetadata {
         type: (p.Type as 'tcp' | 'udp') || 'tcp',
       });
     }
-  } else {
-    for (const [key, bindings] of Object.entries(rawPortBindings)) {
-      const [portNumStr, typeStr] = key.split('/');
-      const privPort = parseInt(portNumStr, 10);
-      const protocol = (typeStr as 'tcp' | 'udp') || 'tcp';
+  }
 
-      if (Array.isArray(bindings) && bindings.length > 0) {
-        for (const b of bindings as { HostIp?: string; HostPort?: string }[]) {
-          ports.push({
-            ip: b.HostIp || '0.0.0.0',
-            privatePort: privPort,
-            publicPort: b.HostPort ? parseInt(b.HostPort, 10) : undefined,
-            type: protocol,
-          });
-        }
-      } else {
+  // Also parse combined port bindings to ensure stopped containers or bindings without active socket listeners are captured
+  for (const [key, bindings] of Object.entries(combinedPortBindings)) {
+    const [portNumStr, typeStr] = key.split('/');
+    const privPort = parseInt(portNumStr, 10);
+    const protocol = (typeStr as 'tcp' | 'udp') || 'tcp';
+
+    if (Array.isArray(bindings) && bindings.length > 0) {
+      for (const b of bindings as { HostIp?: string; HostPort?: string }[]) {
         ports.push({
+          ip: b.HostIp || '0.0.0.0',
           privatePort: privPort,
+          publicPort: b.HostPort ? parseInt(b.HostPort, 10) : undefined,
           type: protocol,
         });
       }
+    } else if (ports.length === 0) {
+      ports.push({
+        privatePort: privPort,
+        type: protocol,
+      });
     }
   }
 

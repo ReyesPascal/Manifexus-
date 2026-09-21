@@ -155,11 +155,11 @@ export function generateStackMergePlan(
   const composeServicesObj: Record<string, any> = {};
 
   for (const container of selectedContainers) {
-    // Determine unique service name
-    let baseServiceName = container.compose?.service || container.cleanName;
-    baseServiceName = baseServiceName.toLowerCase().replace(/[^a-z0-9_-]/g, '-');
-    if (!baseServiceName || (baseServiceName === 'app' && selectedContainers.length > 2)) {
-      baseServiceName = container.cleanName.toLowerCase().replace(/[^a-z0-9_-]/g, '-');
+    // Determine unique service name - strictly preserve original compose service names (e.g. 'db', 'app', 'nextcloud')
+    const originalService = container.compose?.service ? container.compose.service.toLowerCase().replace(/[^a-z0-9_-]/g, '-') : '';
+    let baseServiceName = originalService || container.cleanName.toLowerCase().replace(/[^a-z0-9_-]/g, '-');
+    if (!baseServiceName) {
+      baseServiceName = 'service';
     }
 
     let serviceName = baseServiceName;
@@ -307,6 +307,14 @@ export function generateStackMergePlan(
       serviceConfig.labels = customLabels;
     }
 
+    if (originalService && originalService !== serviceName) {
+      serviceConfig.networks = {
+        default: {
+          aliases: [originalService],
+        },
+      };
+    }
+
     composeServicesObj[serviceName] = serviceConfig;
 
     servicesList.push({
@@ -345,7 +353,26 @@ export function generateStackMergePlan(
   let existingComposeMergedWithAst = false;
 
   if (mode === 'existing-stack' && existingComposeContent && existingComposeContent.trim().length > 0) {
-    const astResult = mergeComposeWithAst(existingComposeContent, composeServicesObj, externalNamedVolumes);
+    // Only inject services from containers that are incoming from other stacks/directories,
+    // leaving existing target stack service definitions completely untouched and preserved.
+    const incomingServicesObj: Record<string, any> = {};
+    for (const c of selectedContainers) {
+      const isLocalToTarget = c.compose?.workingDir && path.resolve(c.compose.workingDir) === path.resolve(targetDirClean);
+      if (!isLocalToTarget) {
+        const sName = c.compose?.service || c.cleanName;
+        if (composeServicesObj[sName]) {
+          incomingServicesObj[sName] = composeServicesObj[sName];
+        } else {
+          const foundKey = Object.keys(composeServicesObj).find((k) => k === sName || k.startsWith(`${sName}-`));
+          if (foundKey) {
+            incomingServicesObj[foundKey] = composeServicesObj[foundKey];
+          }
+        }
+      }
+    }
+
+    const servicesToInject = Object.keys(incomingServicesObj).length > 0 ? incomingServicesObj : composeServicesObj;
+    const astResult = mergeComposeWithAst(existingComposeContent, servicesToInject, externalNamedVolumes);
     if (astResult && astResult.trim().length > 0) {
       generatedComposeYaml = astResult;
       existingComposeMergedWithAst = true;

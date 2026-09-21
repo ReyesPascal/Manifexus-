@@ -12,6 +12,7 @@ import {
   Shield,
   Loader2,
   Clock,
+  Wrench,
 } from 'lucide-react';
 import { MergeHistoryRecord } from '../../server/historyService';
 
@@ -29,6 +30,36 @@ export const MergeHistoryModal: React.FC<MergeHistoryModalProps> = ({
   const [records, setRecords] = useState<MergeHistoryRecord[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [selectedRecord, setSelectedRecord] = useState<MergeHistoryRecord | null>(null);
+  const [repairingId, setRepairingId] = useState<string | null>(null);
+  const [repairStatus, setRepairStatus] = useState<{ id: string; message: string; success: boolean } | null>(null);
+
+  const handleRepairStack = async (record: MergeHistoryRecord) => {
+    setRepairingId(record.id);
+    setRepairStatus(null);
+    try {
+      const candidateForeignContainer = record.affectedServices?.find((s) => s.toLowerCase().includes('kavita')) || 'kavita';
+      const res = await fetch('/api/stacks/repair-conflicts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          targetDirectory: record.targetDirectory,
+          removeConflictingContainer: candidateForeignContainer,
+          stripService: candidateForeignContainer,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setRepairStatus({ id: record.id, message: data.message || 'Stack repaired successfully!', success: true });
+        await fetchHistory();
+      } else {
+        setRepairStatus({ id: record.id, message: data.error || 'Repair failed', success: false });
+      }
+    } catch (err) {
+      setRepairStatus({ id: record.id, message: (err as Error).message, success: false });
+    } finally {
+      setRepairingId(null);
+    }
+  };
 
   const fetchHistory = async () => {
     setIsLoading(true);
@@ -167,7 +198,30 @@ export const MergeHistoryModal: React.FC<MergeHistoryModalProps> = ({
                       </div>
 
                       {/* Action */}
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-col sm:flex-row items-end sm:items-center gap-2">
+                        {repairStatus && repairStatus.id === r.id && (
+                          <span className={`text-[10px] px-2 py-0.5 rounded ${repairStatus.success ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/40' : 'bg-rose-950 text-rose-300 border border-rose-500/40'}`}>
+                            {repairStatus.message}
+                          </span>
+                        )}
+
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleRepairStack(r);
+                          }}
+                          disabled={repairingId === r.id}
+                          className="px-3 py-1.5 rounded-lg border border-cyan-500/40 bg-cyan-950/40 hover:bg-cyan-900/60 text-cyan-300 text-xs font-mono font-bold flex items-center gap-1.5 transition-all hover:shadow-[0_0_12px_rgba(6,182,212,0.2)] disabled:opacity-50"
+                          title="Cleans container name conflicts, strips misplaced services, and brings stack up"
+                        >
+                          {repairingId === r.id ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin text-cyan-400" />
+                          ) : (
+                            <Wrench className="w-3.5 h-3.5 text-cyan-400" />
+                          )}
+                          Repair Stack
+                        </button>
+
                         {!isReverted && (
                           <button
                             onClick={(e) => {

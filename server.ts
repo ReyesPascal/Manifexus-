@@ -22,7 +22,9 @@ import {
   executeStreamingPipeline,
   executeStreamingRevert,
   resolveHostPathToContainer,
+  repairTargetStack,
 } from './server/automationService';
+import { readHostFile } from './server/hostFsService';
 import {
   getMergeHistory,
   finalizeMergeRecord,
@@ -296,15 +298,19 @@ async function startServer() {
       let existingComposeContent: string | undefined;
 
       // Directive 5: Check if target directory has existing docker-compose.yml for AST mutation
-      const privs = await checkPrivilegeStatus();
-      let targetContainerDir = targetDir;
-      if (privs.isHostFsMounted) {
-        targetContainerDir = resolveHostPathToContainer(targetDir, privs.hostRootPath);
-      }
-      const existingComposePath = path.join(targetContainerDir, 'docker-compose.yml');
-      if (fs.existsSync(existingComposePath)) {
+      const candidatePaths = [
+        path.join(targetDir, 'docker-compose.yml'),
+        path.join(targetDir, 'docker-compose.yaml'),
+        path.join(targetDir, 'compose.yaml'),
+      ];
+
+      for (const cp of candidatePaths) {
         try {
-          existingComposeContent = fs.readFileSync(existingComposePath, 'utf8');
+          const content = await readHostFile(cp);
+          if (content && content.trim().length > 0) {
+            existingComposeContent = content;
+            break;
+          }
         } catch {
           // ignore
         }
@@ -314,12 +320,29 @@ async function startServer() {
         sourceContainerIds,
         targetStackName: targetStackName || 'combined-stack',
         targetDirectory: targetDir,
-        mode: mode || 'new-stack',
+        mode: existingComposeContent ? 'existing-stack' : (mode || 'new-stack'),
         volumeHandling: volumeHandling || 'preserve-absolute',
         existingComposeContent,
       });
 
       res.json(plan);
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // Repair / De-Conflict Stack Endpoint
+  app.post('/api/stacks/repair-conflicts', async (req, res) => {
+    try {
+      const { targetDirectory, removeConflictingContainer, stripService } = req.body;
+      if (!targetDirectory) {
+        return res.status(400).json({ error: 'Target directory is required' });
+      }
+      const result = await repairTargetStack(targetDirectory, {
+        removeConflictingContainer,
+        stripService,
+      });
+      res.json(result);
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
     }
