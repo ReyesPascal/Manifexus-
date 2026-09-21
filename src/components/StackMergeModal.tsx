@@ -21,6 +21,7 @@ import {
   Zap,
   ShieldAlert,
   Plus,
+  PlusCircle,
 } from 'lucide-react';
 import { DeepContainerMetadata, StackMergePlan, AutomationPrivileges } from '../types';
 
@@ -116,7 +117,9 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
   const unselectedManifexus = useMemo(() => {
     return containers.find(
       (c) =>
-        (c.compose?.project === 'manifexus' || c.cleanName.toLowerCase().includes('manifexus')) &&
+        (c.compose?.project === 'manifexus' || 
+         c.cleanName.toLowerCase().includes('manifexus') ||
+         c.image.toLowerCase().includes('manifexus')) &&
         !selectedIds.includes(c.id)
     );
   }, [containers, selectedIds]);
@@ -131,6 +134,17 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
   // Synchronize initial selection when modal opens
   useEffect(() => {
     if (isOpen) {
+      // RESET ALL INTERACTION STATE ON OPEN TO PREVENT STICKY PREVIOUS SESSIONS
+      setCurrentStep(1);
+      setPlan(null);
+      setPlanError(null);
+      setExecutionResult(null);
+      setShowConfirmExecuteDialog(false);
+      setCopiedType(null);
+      setIsReconnecting(false);
+      setReconnectAttempt(0);
+      setReconnectSuccess(false);
+
       if (initialSelectedIds && initialSelectedIds.length > 0) {
         setSelectedIds(initialSelectedIds);
       } else {
@@ -157,6 +171,11 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
         setTargetStackName(initialTargetStack);
         const existingDir = containers.find((c) => c.compose?.project === initialTargetStack)?.compose?.workingDir;
         if (existingDir) setTargetDirectory(existingDir);
+      } else {
+        // Defaults for new stack
+        setMode('new-stack');
+        setTargetStackName('combined-stack');
+        setTargetDirectory('/home/ryan/combined-stack');
       }
     }
   }, [isOpen, initialSelectedIds, initialTargetStack, containers]);
@@ -472,15 +491,15 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
                 </div>
               </div>
 
-              {/* Safeguard Banner: Self-Merge Warning when only target stack's own containers are selected */}
+              {/* Safeguard Banner: Prompt to add more apps when only target stack's own containers are selected */}
               {isSelfMergeOnly && (
-                <div className="p-3.5 rounded-xl bg-amber-950/40 border border-amber-500/40 text-xs text-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-in fade-in duration-200">
+                <div className="p-3.5 rounded-xl bg-cyan-950/30 border border-cyan-500/30 text-xs text-cyan-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-in fade-in slide-in-from-top-2 duration-300">
                   <div className="flex items-start gap-2.5">
-                    <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
+                    <Info className="w-4 h-4 text-cyan-400 flex-shrink-0 mt-0.5" />
                     <div>
-                      <span className="font-bold text-amber-300 block">Notice: Only services already in "{targetStackName}" are selected</span>
+                      <span className="font-bold text-cyan-300 block">Adding Services to "{targetStackName}"</span>
                       <span>
-                        No outside apps are selected to merge into this stack. To add an app (like Manifexus), select it below or click the quick button.
+                        You've selected services already in this stack. <strong>Select other apps below</strong> to merge them into <code className="text-cyan-400 font-bold">{targetStackName}</code>.
                       </span>
                     </div>
                   </div>
@@ -489,12 +508,48 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
                       onClick={() => {
                         setSelectedIds((prev) => [...prev, unselectedManifexus.id]);
                       }}
-                      className="px-3 py-1.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow-md flex-shrink-0 transition-all"
+                      className="px-3 py-1.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow-lg shadow-cyan-500/20 flex-shrink-0 transition-all active:scale-95"
                     >
                       <Plus className="w-3.5 h-3.5" />
                       <span>Add Manifexus to {targetStackName}</span>
                     </button>
                   )}
+                </div>
+              )}
+
+              {/* Quick Selection Shortcuts */}
+              {groupedStacks.standalone.length > 0 && (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 text-[10px] uppercase font-bold text-slate-500 tracking-wider">
+                    <Zap className="w-3 h-3" />
+                    <span>Quick Add Standalone Apps</span>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {groupedStacks.standalone.map((c) => (
+                      <button
+                        key={c.id}
+                        onClick={() => {
+                          if (selectedIds.includes(c.id)) {
+                            setSelectedIds(selectedIds.filter((id) => id !== c.id));
+                          } else {
+                            setSelectedIds([...selectedIds, c.id]);
+                          }
+                        }}
+                        className={`px-3 py-1.5 rounded-lg border text-[11px] font-bold transition-all flex items-center gap-1.5 ${
+                          selectedIds.includes(c.id)
+                            ? 'bg-cyan-900/40 border-cyan-500/60 text-cyan-300 shadow-sm'
+                            : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700'
+                        }`}
+                      >
+                        {selectedIds.includes(c.id) ? (
+                          <CheckCircle2 className="w-3.5 h-3.5 text-cyan-400" />
+                        ) : (
+                          <PlusCircle className="w-3.5 h-3.5" />
+                        )}
+                        <span>{c.cleanName}</span>
+                      </button>
+                    ))}
+                  </div>
                 </div>
               )}
 
@@ -720,15 +775,15 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
                   </div>
                 </div>
 
-                {/* Self-Merge Alert in Step 2 */}
+                {/* Self-Merge Notice in Step 2 */}
                 {isSelfMergeOnly && (
-                  <div className="p-3.5 rounded-xl bg-amber-950/40 border border-amber-500/40 text-xs text-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="p-3.5 rounded-xl bg-cyan-950/20 border border-cyan-500/30 text-xs text-cyan-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <div className="flex items-start gap-2.5">
-                      <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
+                      <Info className="w-4 h-4 text-cyan-400 flex-shrink-0 mt-0.5" />
                       <div>
-                        <span className="font-bold text-amber-300 block">Notice: No New Apps Being Added</span>
+                        <span className="font-bold text-cyan-300 block">Consolidating {targetStackName}</span>
                         <span>
-                          All {selectedContainersList.length} selected services already exist in "{targetStackName}". Did you want to add Manifexus into this stack?
+                          No external apps are currently selected. This will re-synchronize your <code className="text-cyan-400">{targetStackName}</code> configuration.
                         </span>
                       </div>
                     </div>
@@ -737,10 +792,10 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
                         onClick={() => {
                           setSelectedIds((prev) => [...prev, unselectedManifexus.id]);
                         }}
-                        className="px-3 py-1.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow-md flex-shrink-0"
+                        className="px-3 py-1.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow-md flex-shrink-0 transition-all"
                       >
                         <Plus className="w-3.5 h-3.5" />
-                        <span>Add Manifexus to {targetStackName}</span>
+                        <span>Add Manifexus</span>
                       </button>
                     )}
                   </div>

@@ -324,7 +324,12 @@ ${dump(fullComposeDoc, { indent: 2, lineWidth: -1 })}`;
 set -e
 
 echo "=== [Step 1/6] Safety Pre-flight & Directory Preparation ==="
-mkdir -p "${targetDirClean}"
+if [ ! -d "${targetDirClean}" ]; then
+  echo "Creating target directory ${targetDirClean}..."
+  mkdir -p "${targetDirClean}"
+else
+  echo "Target directory ${targetDirClean} already exists. Using existing path."
+fi
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 
 # Backup existing compose file in target directory if one exists

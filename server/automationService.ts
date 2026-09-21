@@ -201,7 +201,9 @@ export async function executeAutomatedStackMerge(
     try {
       if (!fs.existsSync(targetContainerDir)) {
         fs.mkdirSync(targetContainerDir, { recursive: true });
-        logs.push(`Created directory: ${targetContainerDir}`);
+        logs.push(`Created host directory: ${req.targetDirectory}`);
+      } else {
+        logs.push(`Using existing host directory: ${req.targetDirectory}`);
       }
 
       const localComposePath = path.join(targetContainerDir, 'docker-compose.yml');
