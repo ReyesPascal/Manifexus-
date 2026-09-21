@@ -20,6 +20,7 @@ import {
   Trash2,
   Zap,
   ShieldAlert,
+  Plus,
 } from 'lucide-react';
 import { DeepContainerMetadata, StackMergePlan, AutomationPrivileges } from '../types';
 
@@ -99,6 +100,33 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
     }
     return { stacks, standalone };
   }, [containers]);
+
+  // Selected container objects list
+  const selectedContainersList = useMemo(() => {
+    return containers.filter((c) => selectedIds.includes(c.id));
+  }, [containers, selectedIds]);
+
+  // Determine if this is a self-merge (all selected services already belong to the target stack)
+  const isSelfMergeOnly = useMemo(() => {
+    if (mode !== 'existing-stack' || !targetStackName || selectedContainersList.length === 0) return false;
+    return selectedContainersList.every((c) => c.compose?.project === targetStackName);
+  }, [mode, targetStackName, selectedContainersList]);
+
+  // Check if Manifexus container is running on the host but not currently selected
+  const unselectedManifexus = useMemo(() => {
+    return containers.find(
+      (c) =>
+        (c.compose?.project === 'manifexus' || c.cleanName.toLowerCase().includes('manifexus')) &&
+        !selectedIds.includes(c.id)
+    );
+  }, [containers, selectedIds]);
+
+  // Check if Manifexus is currently selected
+  const isManifexusSelected = useMemo(() => {
+    return selectedContainersList.some(
+      (c) => c.compose?.project === 'manifexus' || c.cleanName.toLowerCase().includes('manifexus')
+    );
+  }, [selectedContainersList]);
 
   // Synchronize initial selection when modal opens
   useEffect(() => {
@@ -398,7 +426,7 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
                 </div>
 
                 {/* Quick Presets */}
-                <div className="flex items-center gap-2 self-start sm:self-center">
+                <div className="flex items-center gap-2 self-start sm:self-center flex-wrap">
                   <button
                     onClick={() => {
                       const ids = containers
@@ -415,10 +443,18 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
                       setTargetStackName('utilities-stack');
                       setTargetDirectory('/home/ryan/utilities-stack');
                     }}
-                    className="px-3 py-1.5 rounded-lg bg-purple-950/80 hover:bg-purple-900 border border-purple-500/40 text-purple-200 text-xs font-bold transition-colors flex items-center gap-1.5"
+                    className={`px-3 py-1.5 rounded-lg border text-xs font-bold transition-all flex items-center gap-1.5 ${
+                      isManifexusSelected && selectedContainersList.some((c) => c.compose?.project === 'utilities-stack')
+                        ? 'bg-emerald-950/80 border-emerald-500/50 text-emerald-200 shadow-[0_0_12px_rgba(16,185,129,0.2)]'
+                        : 'bg-purple-950/80 hover:bg-purple-900 border-purple-500/40 text-purple-200 shadow-[0_0_10px_rgba(168,85,247,0.15)]'
+                    }`}
                   >
                     <Layers className="w-3.5 h-3.5 text-purple-400" />
-                    <span>Merge: utilities-stack + manifexus</span>
+                    <span>
+                      {isManifexusSelected && selectedContainersList.some((c) => c.compose?.project === 'utilities-stack')
+                        ? '✓ utilities-stack + Manifexus Selected'
+                        : 'Preset: Merge utilities-stack + Manifexus'}
+                    </span>
                   </button>
 
                   <button
@@ -433,6 +469,51 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
                   >
                     Clear
                   </button>
+                </div>
+              </div>
+
+              {/* Safeguard Banner: Self-Merge Warning when only target stack's own containers are selected */}
+              {isSelfMergeOnly && (
+                <div className="p-3.5 rounded-xl bg-amber-950/40 border border-amber-500/40 text-xs text-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-in fade-in duration-200">
+                  <div className="flex items-start gap-2.5">
+                    <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
+                    <div>
+                      <span className="font-bold text-amber-300 block">Notice: Only services already in "{targetStackName}" are selected</span>
+                      <span>
+                        No outside apps are selected to merge into this stack. To add an app (like Manifexus), select it below or click the quick button.
+                      </span>
+                    </div>
+                  </div>
+                  {unselectedManifexus && (
+                    <button
+                      onClick={() => {
+                        setSelectedIds((prev) => [...prev, unselectedManifexus.id]);
+                      }}
+                      className="px-3 py-1.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow-md flex-shrink-0 transition-all"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Add Manifexus to {targetStackName}</span>
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* Selection Summary Bar */}
+              <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800/80 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-bold text-slate-300">Selected Services:</span>
+                  <span className="px-2 py-0.5 rounded-full bg-cyan-950 text-cyan-300 font-mono text-[11px] border border-cyan-500/30">
+                    {selectedIds.length} {selectedIds.length === 1 ? 'service' : 'services'}
+                  </span>
+                  {isManifexusSelected && (
+                    <span className="px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-300 font-mono text-[11px] border border-emerald-500/30 flex items-center gap-1">
+                      <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                      Manifexus Included
+                    </span>
+                  )}
+                </div>
+                <div className="text-slate-400 text-[11px] truncate max-w-md">
+                  {selectedContainersList.map((c) => c.cleanName).join(', ') || 'None selected'}
                 </div>
               </div>
 
@@ -638,6 +719,32 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
                     />
                   </div>
                 </div>
+
+                {/* Self-Merge Alert in Step 2 */}
+                {isSelfMergeOnly && (
+                  <div className="p-3.5 rounded-xl bg-amber-950/40 border border-amber-500/40 text-xs text-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="flex items-start gap-2.5">
+                      <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
+                      <div>
+                        <span className="font-bold text-amber-300 block">Notice: No New Apps Being Added</span>
+                        <span>
+                          All {selectedContainersList.length} selected services already exist in "{targetStackName}". Did you want to add Manifexus into this stack?
+                        </span>
+                      </div>
+                    </div>
+                    {unselectedManifexus && (
+                      <button
+                        onClick={() => {
+                          setSelectedIds((prev) => [...prev, unselectedManifexus.id]);
+                        }}
+                        className="px-3 py-1.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow-md flex-shrink-0"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>Add Manifexus to {targetStackName}</span>
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* ZERO DATA LOSS VOLUME AUDIT */}
@@ -1269,34 +1376,56 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
                 </div>
               </div>
 
-              <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800/80 space-y-2 text-[11px]">
+              <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800/80 space-y-2.5 text-[11px]">
                 <div className="font-bold text-slate-200 mb-1 border-b border-slate-800 pb-1 flex items-center justify-between">
                   <span>Automated Execution Operations:</span>
                   <span className="text-[10px] text-cyan-400 font-normal">Safe Atomic Operations</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-slate-400">1. Target Host Compose:</span>
-                  <span className="font-bold text-cyan-300">{plan?.targetDirectory}/docker-compose.yml</span>
+                  <span className="font-bold text-cyan-300 font-mono">{plan?.targetDirectory}/docker-compose.yml</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-slate-400">2. Pre-Merge Safety Backup:</span>
-                  <span className="font-bold text-emerald-400">docker-compose.backup.yml</span>
+                  <span className="font-bold text-emerald-400 font-mono">docker-compose.backup.yml</span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className="text-slate-400">3. Old Container Cleanup:</span>
-                  <span className="font-bold text-purple-300">
-                    {containers.filter((c) => selectedIds.includes(c.id)).map((c) => c.cleanName).join(', ') || 'Selected services'}
+                  <span className="text-slate-400">3. Services in Final Stack:</span>
+                  <span className="font-bold text-cyan-300">
+                    {plan?.services?.map((s) => s.serviceName).join(', ') ||
+                      selectedContainersList.map((c) => c.cleanName).join(', ')}
                   </span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className="text-slate-400">4. Compose Stack Command:</span>
-                  <span className="font-bold text-cyan-300">docker compose up -d</span>
+                  <span className="text-slate-400">4. Foreign Containers Replaced:</span>
+                  <span className="font-bold text-purple-300">
+                    {selectedContainersList
+                      .filter((c) => c.compose?.project !== plan?.targetStackName)
+                      .map((c) => c.cleanName)
+                      .join(', ') || 'None (all belong to target stack)'}
+                  </span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className="text-slate-400">5. Storage Volumes:</span>
+                  <span className="text-slate-400">5. Target Stack Services:</span>
+                  <span className="font-bold text-emerald-400">
+                    Preserved & hot-reloaded smoothly
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-400">6. Storage Volumes:</span>
                   <span className="font-bold text-emerald-400">100% Retained and Preserved</span>
                 </div>
               </div>
+
+              {isSelfMergeOnly && (
+                <div className="p-3 rounded-xl bg-amber-950/40 border border-amber-500/30 text-amber-200 text-xs flex items-start gap-2.5">
+                  <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <strong className="block text-amber-300">Notice: No External Apps Selected</strong>
+                    You are consolidating "{plan?.targetStackName}" with its existing services. Manifexus and standalone containers are not being added.
+                  </div>
+                </div>
+              )}
 
               {!privileges?.canAutoExecute && (
                 <div className="p-3 rounded-xl bg-purple-950/40 border border-purple-500/40 text-xs text-purple-200">
