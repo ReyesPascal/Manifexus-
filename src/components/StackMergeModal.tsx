@@ -18,8 +18,10 @@ import {
   Info,
   CheckCircle2,
   Trash2,
+  Zap,
+  ShieldAlert,
 } from 'lucide-react';
-import { DeepContainerMetadata, StackMergePlan } from '../types';
+import { DeepContainerMetadata, StackMergePlan, AutomationPrivileges } from '../types';
 
 interface StackMergeModalProps {
   isOpen: boolean;
@@ -28,6 +30,9 @@ interface StackMergeModalProps {
   initialSelectedIds?: string[];
   initialTargetStack?: string;
   onMergeSuccess?: () => void;
+  privileges?: AutomationPrivileges | null;
+  onOpenAutomationModal?: () => void;
+  onRefreshPrivileges?: () => Promise<void>;
 }
 
 export const StackMergeModal: React.FC<StackMergeModalProps> = ({
@@ -37,6 +42,9 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
   initialSelectedIds = [],
   initialTargetStack,
   onMergeSuccess,
+  privileges,
+  onOpenAutomationModal,
+  onRefreshPrivileges,
 }) => {
   // Step navigation: 1 = select, 2 = target & storage, 3 = review yaml & execute, 4 = update guide & post-verify
   const [currentStep, setCurrentStep] = useState<1 | 2 | 3 | 4>(1);
@@ -55,9 +63,16 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
   const [isGeneratingPlan, setIsGeneratingPlan] = useState(false);
   const [planError, setPlanError] = useState<string | null>(null);
 
-  // Execution state
+  // Execution state & Host confirmation dialog
   const [isExecuting, setIsExecuting] = useState(false);
-  const [executionResult, setExecutionResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [showConfirmExecuteDialog, setShowConfirmExecuteDialog] = useState(false);
+  const [executionResult, setExecutionResult] = useState<{
+    success: boolean;
+    message: string;
+    logs?: string[];
+    isAutomated?: boolean;
+    mode?: string;
+  } | null>(null);
   const [copiedType, setCopiedType] = useState<'yaml' | 'script' | 'rollback' | 'cleanup' | null>(null);
 
   // Group containers by stack for quick selection
@@ -180,6 +195,7 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
   const executeMerge = async () => {
     if (!plan) return;
     setIsExecuting(true);
+    setShowConfirmExecuteDialog(false);
 
     try {
       const res = await fetch('/api/stacks/execute-merge', {
@@ -189,6 +205,7 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
           sourceContainerIds: selectedIds,
           targetStackName: plan.targetStackName,
           targetDirectory: plan.targetDirectory,
+          yamlContent: plan.generatedComposeYaml,
         }),
       });
 
@@ -705,6 +722,90 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
                 </div>
               )}
 
+              {/* Host Automation & Privileges Status Banner */}
+              {privileges?.canAutoExecute ? (
+                <div className="p-4 rounded-xl bg-gradient-to-r from-purple-950/40 via-slate-900 to-emerald-950/40 border border-emerald-500/40 text-xs space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 font-bold text-emerald-300">
+                      <Zap className="w-4 h-4 text-emerald-400" />
+                      <span>Full Host Automation Active</span>
+                    </div>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-950 border border-emerald-500/40 text-emerald-300">
+                      Zero-Touch Live Merge Ready
+                    </span>
+                  </div>
+                  <p className="text-slate-300 text-[11px] leading-relaxed">
+                    Manifexus has full host write permissions. Clicking <strong>Execute Live Host Merge</strong> will automatically write the merged <code className="text-cyan-300">{plan.targetDirectory}/docker-compose.yml</code>, save an automated backup, stop the old standalone containers, and start <code className="text-purple-300">docker compose up -d</code> on your Ubuntu host.
+                  </p>
+                  <div className="flex items-center gap-3 pt-1">
+                    <button
+                      onClick={() => setShowConfirmExecuteDialog(true)}
+                      disabled={isExecuting}
+                      className="px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold transition-all flex items-center gap-2 shadow-lg shadow-emerald-500/20"
+                    >
+                      <Zap className="w-4 h-4" />
+                      <span>Execute Automated Merge on Host</span>
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="p-4 rounded-xl bg-purple-950/30 border border-purple-500/40 text-xs space-y-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 font-bold text-purple-300">
+                      <ShieldAlert className="w-4 h-4 text-purple-400" />
+                      <span>Host Execution Notice (Sandboxed Mode Active)</span>
+                    </div>
+                    {onOpenAutomationModal && (
+                      <button
+                        onClick={onOpenAutomationModal}
+                        className="px-3 py-1.5 rounded-lg bg-purple-600/30 hover:bg-purple-600/50 border border-purple-500/50 text-purple-200 text-xs font-bold transition-all flex items-center gap-1.5 self-start sm:self-auto"
+                      >
+                        <Zap className="w-3.5 h-3.5 text-purple-300" />
+                        <span>Elevate to 1-Click Automation</span>
+                      </button>
+                    )}
+                  </div>
+                  <p className="text-slate-300 text-[11px] leading-relaxed">
+                    Manifexus is currently running with a read-only Docker socket (<code className="text-purple-300">/var/run/docker.sock:ro</code>). To execute this merge completely automatically from this button without opening terminal, click <strong className="text-purple-300">Elevate to 1-Click Automation</strong>. Otherwise, follow the 3 quick commands below.
+                  </p>
+                </div>
+              )}
+
+              {/* Quick 3-Step Host Command Box */}
+              <div className="p-4 rounded-xl bg-slate-900/80 border border-slate-800 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="text-xs font-bold text-white flex items-center gap-2">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>3-Step Quick Merge on Your Ubuntu Server</span>
+                  </div>
+                  <button
+                    onClick={() => {
+                      const quickCmds = `# Step 1: Stop standalone old stack\ncd /home/ryan/manifexus && docker compose down\n\n# Step 2: Open utilities-stack compose and paste the unified YAML\ncd ${plan.targetDirectory}\n# (paste the generated YAML from below)\n\n# Step 3: Start the combined stack\ndocker compose up -d`;
+                      copyToClipboard(quickCmds, 'script');
+                    }}
+                    className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-mono transition-colors flex items-center gap-1.5"
+                  >
+                    {copiedType === 'script' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedType === 'script' ? 'Copied Steps!' : 'Copy Steps'}</span>
+                  </button>
+                </div>
+
+                <div className="p-3 rounded-lg bg-[#07090e] border border-slate-800 text-[11px] font-mono text-cyan-300 space-y-2">
+                  <div>
+                    <span className="text-slate-500"># 1. Stop the standalone Manifexus instance (volumes are 100% retained):</span>
+                    <div className="text-slate-200 font-bold">cd /home/ryan/manifexus && docker compose down</div>
+                  </div>
+                  <div>
+                    <span className="text-slate-500"># 2. Paste the unified docker-compose.yml below into:</span>
+                    <div className="text-purple-300 font-bold">{plan.targetDirectory}/docker-compose.yml</div>
+                  </div>
+                  <div>
+                    <span className="text-slate-500"># 3. Spin up your unified stack:</span>
+                    <div className="text-emerald-400 font-bold">cd {plan.targetDirectory} && docker compose pull && docker compose up -d</div>
+                  </div>
+                </div>
+              </div>
+
               {/* Volume Safety Table */}
               <div className="rounded-xl border border-slate-800 bg-slate-950/50 overflow-hidden">
                 <div className="p-3 bg-slate-900/80 border-b border-slate-800 flex items-center justify-between">
@@ -825,11 +926,26 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
                 <div className="p-4 rounded-xl bg-emerald-950/60 border border-emerald-500/40 text-emerald-200 text-xs space-y-2">
                   <div className="flex items-center gap-2 font-bold text-emerald-300 text-sm">
                     <CheckCircle2 className="w-5 h-5 text-emerald-400" />
-                    <span>Merge Execution Successful!</span>
+                    <span>{executionResult.isAutomated ? 'Automated Host Merge Executed!' : 'Merge Verification Ready!'}</span>
                   </div>
                   <p className="text-emerald-200/90 text-xs">
                     {executionResult.message}
                   </p>
+                </div>
+              )}
+
+              {/* Host Orchestration Logs Box */}
+              {executionResult?.logs && executionResult.logs.length > 0 && (
+                <div className="p-4 rounded-xl bg-slate-900/80 border border-slate-800 space-y-2">
+                  <div className="flex items-center gap-2 font-bold text-xs text-white">
+                    <Terminal className="w-4 h-4 text-cyan-400" />
+                    <span>Automated Host Orchestration Execution Logs</span>
+                  </div>
+                  <div className="p-3 rounded-lg bg-[#07090e] border border-slate-800 text-[11px] font-mono text-cyan-300 space-y-1 max-h-52 overflow-y-auto">
+                    {executionResult.logs.map((log, idx) => (
+                      <div key={idx} className="whitespace-pre-wrap">{log}</div>
+                    ))}
+                  </div>
                 </div>
               )}
 
@@ -993,23 +1109,43 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
                   GitHub Update Guide
                 </button>
 
-                <button
-                  onClick={executeMerge}
-                  disabled={isExecuting}
-                  className="px-5 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold transition-all flex items-center gap-2 shadow-lg shadow-purple-600/20"
-                >
-                  {isExecuting ? (
-                    <>
-                      <RefreshCw className="w-4 h-4 animate-spin" />
-                      <span>Consolidating Stacks...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Play className="w-4 h-4 fill-current" />
-                      <span>Execute Merge Live</span>
-                    </>
-                  )}
-                </button>
+                {privileges?.canAutoExecute ? (
+                  <button
+                    onClick={() => setShowConfirmExecuteDialog(true)}
+                    disabled={isExecuting}
+                    className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold transition-all flex items-center gap-2 shadow-lg shadow-emerald-500/20"
+                  >
+                    {isExecuting ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                        <span>Executing Live on Host...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Zap className="w-4 h-4" />
+                        <span>Execute Automated Merge</span>
+                      </>
+                    )}
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => setShowConfirmExecuteDialog(true)}
+                    disabled={isExecuting}
+                    className="px-5 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-bold transition-all flex items-center gap-2 shadow-lg shadow-cyan-500/20"
+                  >
+                    {isExecuting ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                        <span>Checking Fleet...</span>
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle2 className="w-4 h-4" />
+                        <span>Next: Verification & Guide</span>
+                      </>
+                    )}
+                  </button>
+                )}
               </div>
             )}
 
@@ -1024,6 +1160,98 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Confirmation & Warning Popup Modal for Host Automated Execution */}
+      {showConfirmExecuteDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-150">
+          <div className="w-full max-w-xl bg-[#0b0f19] border border-cyan-500/40 rounded-2xl shadow-2xl overflow-hidden font-mono text-xs">
+            <div className="px-6 py-4 bg-gradient-to-r from-slate-900 to-purple-950/60 border-b border-slate-800 flex items-center justify-between">
+              <div className="flex items-center gap-2.5 font-bold text-white text-sm">
+                <AlertTriangle className="w-5 h-5 text-amber-400" />
+                <span>Confirm Automated Host Stack Merge</span>
+              </div>
+              <button
+                onClick={() => setShowConfirmExecuteDialog(false)}
+                className="text-slate-400 hover:text-white transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4 text-slate-300 leading-relaxed">
+              <div className="p-3 rounded-xl bg-amber-950/40 border border-amber-500/30 text-amber-200 text-xs flex items-start gap-2.5">
+                <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
+                <div>
+                  <strong className="block text-amber-300">Warning: Host System Orchestration</strong>
+                  This action will orchestrate Docker directly on your Ubuntu host filesystem to consolidate standalone containers into <code className="text-cyan-300 font-bold">{plan?.targetStackName}</code>.
+                </div>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800/80 space-y-2 text-[11px]">
+                <div className="font-bold text-slate-200 mb-1 border-b border-slate-800 pb-1 flex items-center justify-between">
+                  <span>Automated Execution Operations:</span>
+                  <span className="text-[10px] text-cyan-400 font-normal">Safe Atomic Operations</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-400">1. Target Host Compose:</span>
+                  <span className="font-bold text-cyan-300">{plan?.targetDirectory}/docker-compose.yml</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-400">2. Pre-Merge Safety Backup:</span>
+                  <span className="font-bold text-emerald-400">docker-compose.backup.yml</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-400">3. Old Container Cleanup:</span>
+                  <span className="font-bold text-purple-300">
+                    {containers.filter((c) => selectedIds.includes(c.id)).map((c) => c.cleanName).join(', ') || 'Selected services'}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-400">4. Compose Stack Command:</span>
+                  <span className="font-bold text-cyan-300">docker compose up -d</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-400">5. Storage Volumes:</span>
+                  <span className="font-bold text-emerald-400">100% Retained and Preserved</span>
+                </div>
+              </div>
+
+              {!privileges?.canAutoExecute && (
+                <div className="p-3 rounded-xl bg-purple-950/40 border border-purple-500/40 text-xs text-purple-200">
+                  <p className="font-bold text-purple-300 mb-1">Notice: Sandboxed Mode</p>
+                  Because Manifexus is currently running with a read-only Docker socket, automatic filesystem writing requires host elevation. If not elevated, Manifexus will advance you to the verified 3-step guide to run in 5 seconds on your host.
+                </div>
+              )}
+            </div>
+
+            <div className="px-6 py-4 bg-slate-900/90 border-t border-slate-800 flex items-center justify-end gap-3">
+              <button
+                onClick={() => setShowConfirmExecuteDialog(false)}
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={executeMerge}
+                disabled={isExecuting}
+                className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold transition-all flex items-center gap-2 shadow-lg shadow-emerald-500/20"
+              >
+                {isExecuting ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Executing Live on Host...</span>
+                  </>
+                ) : (
+                  <>
+                    <Zap className="w-3.5 h-3.5" />
+                    <span>Confirm & Execute Live Merge</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

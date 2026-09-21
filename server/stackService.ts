@@ -201,12 +201,14 @@ export function generateStackMergePlan(
 
     // Process Environment Variables
     const environmentYaml: string[] = [];
+    const ignoredEnvPrefixes = ['PHP_', 'APACHE_', 'NGINX_', 'NODE_', 'YARN_', 'DEBIAN_'];
+    const ignoredExactKeys = ['HOSTNAME', 'HOME', 'PATH', 'GPG_KEYS', 'PHPIZE_DEPS', 'MARIADB_MAJOR', 'MARIADB_VERSION', 'MYSQL_MAJOR'];
+
     for (const env of container.envVars) {
-      if (env.key) {
-        // Only skip internal docker-injected vars like PATH, HOSTNAME
-        if (['HOSTNAME', 'HOME', 'PATH'].includes(env.key)) continue;
-        environmentYaml.push(`${env.key}=${env.value}`);
-      }
+      if (!env.key || env.value === undefined || env.value === 'undefined') continue;
+      if (ignoredExactKeys.includes(env.key)) continue;
+      if (ignoredEnvPrefixes.some((prefix) => env.key.startsWith(prefix))) continue;
+      environmentYaml.push(`${env.key}=${env.value}`);
     }
 
     // Construct service object for Compose

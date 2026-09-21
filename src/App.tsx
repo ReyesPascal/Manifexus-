@@ -28,10 +28,14 @@ import { GroupManagerModal } from './components/GroupManagerModal';
 import { SettingsModal } from './components/SettingsModal';
 import { SimulateContainerModal } from './components/SimulateContainerModal';
 import { StackMergeModal } from './components/StackMergeModal';
+import { HostAutomationModal } from './components/HostAutomationModal';
+import { AutomationPrivileges } from './types';
 
 export default function App() {
   const [containers, setContainers] = useState<DeepContainerMetadata[]>([]);
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
+  const [privileges, setPrivileges] = useState<AutomationPrivileges | null>(null);
+  const [isAutomationModalOpen, setIsAutomationModalOpen] = useState(false);
   const [config, setConfig] = useState<ManifexusConfig | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -83,9 +87,23 @@ export default function App() {
     }
   }, []);
 
+  // Fetch host automation privilege status (detects sandboxed vs elevated mode)
+  const fetchPrivileges = useCallback(async () => {
+    try {
+      const res = await fetch('/api/system/privileges');
+      if (res.ok) {
+        const data = await res.json();
+        setPrivileges(data);
+      }
+    } catch (err) {
+      console.error('[Manifexus] Error fetching privileges:', err);
+    }
+  }, []);
+
   // Initial fetch and auto-refresh interval
   useEffect(() => {
     fetchData();
+    fetchPrivileges();
 
     const intervalSeconds = config?.refreshIntervalSeconds || 10;
     const timer = setInterval(() => {
@@ -93,7 +111,7 @@ export default function App() {
     }, intervalSeconds * 1000);
 
     return () => clearInterval(timer);
-  }, [fetchData, config?.refreshIntervalSeconds]);
+  }, [fetchData, fetchPrivileges, config?.refreshIntervalSeconds]);
 
   // Execute container lifecycle action
   const handleContainerAction = async (
@@ -323,6 +341,8 @@ export default function App() {
       {/* Top Command Navbar */}
       <Navbar
         systemStatus={systemStatus}
+        privileges={privileges}
+        onOpenAutomationModal={() => setIsAutomationModalOpen(true)}
         viewMode={viewMode}
         onViewModeChange={setViewMode}
         searchQuery={searchQuery}
@@ -338,7 +358,10 @@ export default function App() {
           setMergeModalInitialStack(undefined);
           setIsMergeModalOpen(true);
         }}
-        onRefresh={() => fetchData(true)}
+        onRefresh={() => {
+          fetchData(true);
+          fetchPrivileges();
+        }}
         isRefreshing={isRefreshing}
       />
 
@@ -713,9 +736,21 @@ export default function App() {
         containers={containers}
         initialSelectedIds={mergeModalInitialIds}
         initialTargetStack={mergeModalInitialStack}
+        privileges={privileges}
+        onOpenAutomationModal={() => setIsAutomationModalOpen(true)}
+        onRefreshPrivileges={fetchPrivileges}
         onMergeSuccess={() => {
           fetchData(true);
+          fetchPrivileges();
         }}
+      />
+
+      {/* Host Automation & Privileges Elevation Modal */}
+      <HostAutomationModal
+        isOpen={isAutomationModalOpen}
+        onClose={() => setIsAutomationModalOpen(false)}
+        privileges={privileges}
+        onRefreshPrivileges={fetchPrivileges}
       />
     </div>
   );

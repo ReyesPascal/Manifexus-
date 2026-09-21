@@ -133,3 +133,20 @@ export interface StackMergePlan {
   cleanupScript: string;
 }
 
+export interface AutomationPrivileges {
+  isDockerConnected: boolean;
+  isSocketWritable: boolean;
+  isHostFsMounted: boolean;
+  hostRootPath: string;
+  hasDockerCli: boolean;
+  mode: 'sandboxed' | 'elevated';
+  canAutoExecute: boolean;
+  statusMessage: string;
+  details: {
+    socketPath: string;
+    socketWritable: boolean;
+    hostMounts: string[];
+    dockerCliAvailable: boolean;
+  };
+}
+

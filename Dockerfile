@@ -18,10 +18,24 @@ FROM node:22-bookworm-slim AS runner
 
 WORKDIR /app
 
+# Install docker-cli and docker compose plugin so Manifexus can orchestrate host stacks
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    gnupg \
+    && install -m 0755 -d /etc/apt/keyrings \
+    && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
+    && chmod a+r /etc/apt/keyrings/docker.asc \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian bookworm stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends docker-ce-cli docker-compose-plugin \
+    && rm -rf /var/lib/apt/lists/*
+
 ENV NODE_ENV=production
 ENV PORT=3334
 ENV MANIFEXUS_DOCKER=true
 ENV DOCKER_SOCKET_PATH=/var/run/docker.sock
+ENV HOST_ROOT=/host
 
 # Create persistent storage directory
 RUN mkdir -p /data

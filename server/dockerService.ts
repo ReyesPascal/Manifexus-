@@ -14,17 +14,26 @@ export function isDockerSocketAvailable(): boolean {
 }
 
 // Low-level HTTP request over Unix Domain Socket
-function queryDockerEngine<T>(path: string, method: string = 'GET'): Promise<T> {
+export function queryDockerEngine<T>(path: string, method: string = 'GET', body?: unknown): Promise<T> {
   return new Promise((resolve, reject) => {
+    const payload = body !== undefined ? (typeof body === 'string' ? body : JSON.stringify(body)) : null;
+
+    const headers: Record<string, string | number> = {
+      Host: 'docker.local',
+      Accept: 'application/json',
+    };
+
+    if (payload) {
+      headers['Content-Type'] = 'application/json';
+      headers['Content-Length'] = Buffer.byteLength(payload);
+    }
+
     const options: http.RequestOptions = {
       socketPath: DOCKER_SOCKET_PATH,
       path: path,
       method: method,
-      headers: {
-        Host: 'docker.local',
-        Accept: 'application/json',
-      },
-      timeout: 5000,
+      headers: headers,
+      timeout: 10000,
     };
 
     const req = http.request(options, (res) => {
@@ -55,6 +64,9 @@ function queryDockerEngine<T>(path: string, method: string = 'GET'): Promise<T> 
       reject(new Error(`Docker API request to ${path} timed out`));
     });
 
+    if (payload) {
+      req.write(payload);
+    }
     req.end();
   });
 }

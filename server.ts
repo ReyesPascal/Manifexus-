@@ -15,6 +15,11 @@ import {
   updateAppOverride,
 } from './server/storageService';
 import { generateStackMergePlan, MergePlanRequest } from './server/stackService';
+import {
+  checkPrivilegeStatus,
+  executeAutomatedStackMerge,
+  generateElevateScript,
+} from './server/automationService';
 import { DeepContainerMetadata } from './src/types';
 
 async function startServer() {
@@ -291,10 +296,29 @@ async function startServer() {
     }
   });
 
-  // Execute / confirm stack merge
+  // Get host automation privileges (detects if sandboxed or elevated)
+  app.get('/api/system/privileges', async (req, res) => {
+    try {
+      const status = await checkPrivilegeStatus();
+      res.json(status);
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // Serve the 1-line elevation script to upgrade to Full Host Automation
+  app.get('/api/system/elevate.sh', (req, res) => {
+    const hostHeader = req.get('host') || 'localhost:3334';
+    const script = generateElevateScript(hostHeader);
+    res.setHeader('Content-Type', 'text/x-shellscript');
+    res.setHeader('Content-Disposition', 'inline; filename="elevate.sh"');
+    res.send(script);
+  });
+
+  // Execute stack merge (either automated via elevated privileges or simulated in demo)
   app.post('/api/stacks/execute-merge', async (req, res) => {
     try {
-      const { sourceContainerIds, targetStackName, targetDirectory } = req.body;
+      const { sourceContainerIds, targetStackName, targetDirectory, yamlContent } = req.body;
 
       if (!Array.isArray(sourceContainerIds) || sourceContainerIds.length === 0) {
         return res.status(400).json({ error: 'Source container IDs required' });
@@ -302,13 +326,45 @@ async function startServer() {
 
       const targetDir = targetDirectory || `/home/ryan/${targetStackName || 'combined-stack'}`;
       const stackName = targetStackName || 'combined-stack';
+      const privs = await checkPrivilegeStatus();
 
-      // Update in-memory state for immediate reactive UI update
-      mergeDemoContainersIntoStack(sourceContainerIds, stackName, targetDir);
+      // If in Elevated Mode and we have yamlContent, execute full zero-touch host automation!
+      if (privs.canAutoExecute && yamlContent) {
+        const result = await executeAutomatedStackMerge({
+          targetStackName: stackName,
+          targetDirectory: targetDir,
+          yamlContent,
+          sourceContainerIds,
+        });
 
+        return res.json({
+          ...result,
+          isAutomated: true,
+          mode: privs.mode,
+          targetStackName: stackName,
+          targetDirectory: targetDir,
+        });
+      }
+
+      // If in demo mode
+      if (!privs.isDockerConnected) {
+        mergeDemoContainersIntoStack(sourceContainerIds, stackName, targetDir);
+        return res.json({
+          success: true,
+          isAutomated: false,
+          mode: 'demo',
+          message: `[Demo] Services consolidated into '${stackName}' at ${targetDir}!`,
+          targetStackName: stackName,
+          targetDirectory: targetDir,
+        });
+      }
+
+      // If connected to live Docker but in read-only sandboxed mode
       res.json({
         success: true,
-        message: `Services successfully consolidated into '${stackName}' at ${targetDir}!`,
+        isAutomated: false,
+        mode: 'sandboxed',
+        message: `Plan generated. Because Manifexus is in Sandboxed Mode, run the quick 3-step commands or click "Elevate Automation Mode" to enable 1-click execution.`,
         targetStackName: stackName,
         targetDirectory: targetDir,
       });
