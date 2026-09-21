@@ -37,8 +37,8 @@ ENV MANIFEXUS_DOCKER=true
 ENV DOCKER_SOCKET_PATH=/var/run/docker.sock
 ENV HOST_ROOT=/host
 
-# Create persistent storage directory
-RUN mkdir -p /data
+# Create persistent storage directories
+RUN mkdir -p /data /app/backups
 
 # Copy production artifacts from builder
 COPY --from=builder /app/package.json ./
@@ -48,7 +48,7 @@ COPY --from=builder /app/node_modules ./node_modules
 # Expose Manifexus central command port
 EXPOSE 3334
 
-# Declare persistent volume for settings, groups & overrides
-VOLUME ["/data"]
+# Declare persistent volumes for settings, groups & overrides, and pre-merge backup snapshots
+VOLUME ["/data", "/app/backups"]
 
 CMD ["node", "dist/server.cjs"]
