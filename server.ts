@@ -14,12 +14,21 @@ import {
   saveConfig,
   updateAppOverride,
 } from './server/storageService';
-import { generateStackMergePlan, MergePlanRequest } from './server/stackService';
+import { generateStackMergePlan, MergePlanRequest, isManifexusContainer } from './server/stackService';
 import {
   checkPrivilegeStatus,
   executeAutomatedStackMerge,
   generateElevateScript,
+  executeStreamingPipeline,
+  executeStreamingRevert,
+  resolveHostPathToContainer,
 } from './server/automationService';
+import {
+  getMergeHistory,
+  finalizeMergeRecord,
+  getHistoryRecordById,
+} from './server/historyService';
+import fs from 'fs';
 import { DeepContainerMetadata } from './src/types';
 
 async function startServer() {
@@ -274,25 +283,135 @@ async function startServer() {
       }
 
       const { containers } = await getContainersList();
-      const selectedContainers = containers.filter(
-        (c) => sourceContainerIds.includes(c.id) || sourceContainerIds.includes(c.cleanName)
-      );
+      // Directive 1: Programmatically filter out Manifexus from all merge calculations
+      const selectedContainers = containers
+        .filter((c) => !isManifexusContainer(c))
+        .filter((c) => sourceContainerIds.includes(c.id) || sourceContainerIds.includes(c.cleanName));
 
       if (selectedContainers.length === 0) {
-        return res.status(404).json({ error: 'None of the selected containers were found.' });
+        return res.status(404).json({ error: 'None of the selected containers were found (or Manifexus was excluded for system self-protection).' });
+      }
+
+      const targetDir = targetDirectory || `/home/ryan/${targetStackName || 'combined-stack'}`;
+      let existingComposeContent: string | undefined;
+
+      // Directive 5: Check if target directory has existing docker-compose.yml for AST mutation
+      const privs = await checkPrivilegeStatus();
+      let targetContainerDir = targetDir;
+      if (privs.isHostFsMounted) {
+        targetContainerDir = resolveHostPathToContainer(targetDir, privs.hostRootPath);
+      }
+      const existingComposePath = path.join(targetContainerDir, 'docker-compose.yml');
+      if (fs.existsSync(existingComposePath)) {
+        try {
+          existingComposeContent = fs.readFileSync(existingComposePath, 'utf8');
+        } catch {
+          // ignore
+        }
       }
 
       const plan = generateStackMergePlan(selectedContainers, {
         sourceContainerIds,
         targetStackName: targetStackName || 'combined-stack',
-        targetDirectory: targetDirectory || `/home/ryan/${targetStackName || 'combined-stack'}`,
+        targetDirectory: targetDir,
         mode: mode || 'new-stack',
         volumeHandling: volumeHandling || 'preserve-absolute',
+        existingComposeContent,
       });
 
       res.json(plan);
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // Directive 3: GitHub Actions-Style Live Streaming Pipeline Endpoint (SSE)
+  app.post('/api/stacks/execute-merge-stream', async (req, res) => {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    // @ts-ignore
+    if (res.flushHeaders) res.flushHeaders();
+
+    const sendEvent = (data: any) => {
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+
+    try {
+      const { sourceContainerIds, targetStackName, targetDirectory, yamlContent } = req.body;
+      if (!Array.isArray(sourceContainerIds) || sourceContainerIds.length === 0) {
+        sendEvent({ type: 'failed', log: 'Source container IDs required' });
+        res.end();
+        return;
+      }
+
+      // Execute the 7 sequential steps with real-time SSE streaming
+      await executeStreamingPipeline(
+        {
+          targetStackName: targetStackName || 'combined-stack',
+          targetDirectory: targetDirectory || `/home/ryan/${targetStackName || 'combined-stack'}`,
+          yamlContent: yamlContent || '',
+          sourceContainerIds,
+        },
+        sendEvent
+      );
+    } catch (err) {
+      sendEvent({ type: 'failed', log: (err as Error).message });
+    } finally {
+      res.end();
+    }
+  });
+
+  // Directive 6: Merge History and State Ledger Endpoints
+  app.get('/api/history', (req, res) => {
+    try {
+      const history = getMergeHistory();
+      res.json({ history });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.get('/api/history/:id', (req, res) => {
+    try {
+      const record = getHistoryRecordById(req.params.id);
+      if (!record) {
+        return res.status(404).json({ error: 'Merge record not found' });
+      }
+      res.json(record);
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // Directive 4: Keep Changes
+  app.post('/api/history/:id/keep', (req, res) => {
+    try {
+      const success = finalizeMergeRecord(req.params.id);
+      res.json({ success });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // Directive 4 & 6: Automated Rollback Pipeline Streamer (SSE)
+  app.post('/api/history/:id/revert-stream', async (req, res) => {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    // @ts-ignore
+    if (res.flushHeaders) res.flushHeaders();
+
+    const sendEvent = (data: any) => {
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+
+    try {
+      await executeStreamingRevert(req.params.id, sendEvent);
+    } catch (err) {
+      sendEvent({ type: 'failed', log: (err as Error).message });
+    } finally {
+      res.end();
     }
   });
 

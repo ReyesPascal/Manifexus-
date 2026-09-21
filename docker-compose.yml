@@ -10,10 +10,12 @@ services:
       - PORT=3334
       - DOCKER_SOCKET_PATH=/var/run/docker.sock
     volumes:
-      # Mount the Docker daemon socket (read-only for automatic container discovery)
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Mount the Docker daemon socket (read-only for automatic container discovery, or rw for elevated automation)
+      - /var/run/docker.sock:/var/run/docker.sock
       # Mount persistent storage for custom groups, app overrides, and dashboard config
       - ./data:/data
+      # Directive 9: Dedicated persistent volume for zero-loss pre-merge snapshots and state ledgers
+      - ./backups:/app/backups
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3334/api/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"]
       interval: 30s

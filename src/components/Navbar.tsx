@@ -10,6 +10,7 @@ import {
   CheckCircle2,
   AlertTriangle,
   Server,
+  History,
 } from 'lucide-react';
 import { SystemStatus, AutomationPrivileges } from '../types';
 import { Zap, ShieldAlert } from 'lucide-react';
@@ -29,6 +30,7 @@ interface NavbarProps {
   onOpenGroupManager: () => void;
   onOpenSimulateModal: () => void;
   onOpenStackMerger?: () => void;
+  onOpenHistory?: () => void;
   onRefresh: () => void;
   isRefreshing: boolean;
 }
@@ -48,6 +50,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenGroupManager,
   onOpenSimulateModal,
   onOpenStackMerger,
+  onOpenHistory,
   onRefresh,
   isRefreshing,
 }) => {
@@ -268,6 +271,18 @@ export const Navbar: React.FC<NavbarProps> = ({
               >
                 <Layers className="w-3.5 h-3.5 text-purple-400" />
                 <span>Merge Stacks</span>
+              </button>
+            )}
+
+            {/* Merge State Ledger & Backups */}
+            {onOpenHistory && (
+              <button
+                onClick={onOpenHistory}
+                className="px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700/80 text-xs font-mono text-purple-300 hover:border-purple-500/40 hover:bg-purple-950/40 transition-colors flex items-center gap-1.5"
+                title="Open Merge State Ledger & Snapshots"
+              >
+                <History className="w-3.5 h-3.5 text-purple-400" />
+                <span className="hidden lg:inline">Ledger</span>
               </button>
             )}
 

@@ -29,7 +29,11 @@ import { SettingsModal } from './components/SettingsModal';
 import { SimulateContainerModal } from './components/SimulateContainerModal';
 import { StackMergeModal } from './components/StackMergeModal';
 import { HostAutomationModal } from './components/HostAutomationModal';
+import { ManifexusHeroHeader } from './components/ManifexusHeroHeader';
+import { MergeHistoryModal } from './components/MergeHistoryModal';
+import { ExecutionPipelineConsole } from './components/ExecutionPipelineConsole';
 import { AutomationPrivileges } from './types';
+import { History } from 'lucide-react';
 
 export default function App() {
   const [containers, setContainers] = useState<DeepContainerMetadata[]>([]);
@@ -53,6 +57,8 @@ export default function App() {
   const [isGroupManagerOpen, setIsGroupManagerOpen] = useState(false);
   const [isSimulateOpen, setIsSimulateOpen] = useState(false);
   const [isMergeModalOpen, setIsMergeModalOpen] = useState(false);
+  const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
+  const [revertRecordToStream, setRevertRecordToStream] = useState<any | null>(null);
   const [mergeModalInitialIds, setMergeModalInitialIds] = useState<string[]>([]);
   const [mergeModalInitialStack, setMergeModalInitialStack] = useState<string | undefined>(undefined);
 
@@ -250,9 +256,24 @@ export default function App() {
     }
   };
 
+  // Directive 1: Hero Layout & Structural Self-Protection Filter
+  const isManifexus = useCallback((c: DeepContainerMetadata) => {
+    const clean = (c.cleanName || c.name || '').toLowerCase();
+    const proj = (c.compose?.project || '').toLowerCase();
+    const img = (c.image || '').toLowerCase();
+    return clean === 'manifexus' || clean === '/manifexus' || proj === 'manifexus' || img.includes('manifexus');
+  }, []);
+
+  const manifexusHeroContainer = useMemo(() => {
+    return containers.find(isManifexus);
+  }, [containers, isManifexus]);
+
   // Filtered containers based on search and status
   const filteredContainers = useMemo(() => {
     return containers.filter((c) => {
+      // Directive 1: Never show Manifexus in standard cards grid - rendered as Hero element
+      if (isManifexus(c)) return false;
+
       // Status filter
       if (statusFilter === 'running' && c.state !== 'running') return false;
       if (statusFilter === 'stopped' && c.state === 'running') return false;
@@ -358,6 +379,7 @@ export default function App() {
           setMergeModalInitialStack(undefined);
           setIsMergeModalOpen(true);
         }}
+        onOpenHistory={() => setIsHistoryModalOpen(true)}
         onRefresh={() => {
           fetchData(true);
           fetchPrivileges();
@@ -367,6 +389,15 @@ export default function App() {
 
       {/* Main Dashboard Canvas */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 lg:px-6 py-6">
+        {/* Directive 1: Hero Layout & Structural Protection for Manifexus */}
+        <ManifexusHeroHeader
+          container={manifexusHeroContainer}
+          systemStatus={systemStatus}
+          privileges={privileges}
+          onOpenElevateModal={() => setIsAutomationModalOpen(true)}
+          onInspectContainer={(c) => setInspectContainer(c)}
+        />
+
         {/* Standby / Demo Mode Notification Banner (Visible when socket is not attached) */}
         {systemStatus?.isDemoMode && (
           <div className="mb-6 p-4 rounded-2xl bg-gradient-to-r from-amber-950/40 via-slate-900/80 to-cyan-950/30 border border-amber-500/30 shadow-[0_0_20px_rgba(245,158,11,0.08)] flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 font-mono text-xs">
@@ -752,6 +783,33 @@ export default function App() {
         privileges={privileges}
         onRefreshPrivileges={fetchPrivileges}
       />
+
+      {/* Directive 6: Merge State Ledger & Backups Modal */}
+      <MergeHistoryModal
+        isOpen={isHistoryModalOpen}
+        onClose={() => setIsHistoryModalOpen(false)}
+        onTriggerRevert={(record) => {
+          setIsHistoryModalOpen(false);
+          setRevertRecordToStream(record);
+        }}
+      />
+
+      {/* Directive 4 & 6: Revert Execution Pipeline Console */}
+      {revertRecordToStream && (
+        <ExecutionPipelineConsole
+          isOpen={Boolean(revertRecordToStream)}
+          onClose={() => setRevertRecordToStream(null)}
+          title={`Rollback: Reverting "${revertRecordToStream.targetStackName}" to Pre-Merge State`}
+          mode="revert"
+          mergeId={revertRecordToStream.id}
+          streamUrl={`/api/history/${revertRecordToStream.id}/revert-stream`}
+          streamPayload={{}}
+          onSuccessDone={() => {
+            fetchData(true);
+            setRevertRecordToStream(null);
+          }}
+        />
+      )}
     </div>
   );
 }

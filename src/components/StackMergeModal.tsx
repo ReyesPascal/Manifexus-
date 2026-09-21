@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   X,
   Layers,
@@ -22,8 +22,11 @@ import {
   ShieldAlert,
   Plus,
   PlusCircle,
+  Clock,
+  RotateCcw,
 } from 'lucide-react';
 import { DeepContainerMetadata, StackMergePlan, AutomationPrivileges } from '../types';
+import { ExecutionPipelineConsole } from './ExecutionPipelineConsole';
 
 interface StackMergeModalProps {
   isOpen: boolean;
@@ -37,6 +40,14 @@ interface StackMergeModalProps {
   onRefreshPrivileges?: () => Promise<void>;
 }
 
+// Directive 1: Helper to strictly filter out Manifexus from all merge calculations
+export function isManifexusContainer(c: DeepContainerMetadata): boolean {
+  const clean = (c.cleanName || c.name || '').toLowerCase();
+  const proj = (c.compose?.project || '').toLowerCase();
+  const img = (c.image || '').toLowerCase();
+  return clean === 'manifexus' || clean === '/manifexus' || proj === 'manifexus' || img.includes('manifexus');
+}
+
 export const StackMergeModal: React.FC<StackMergeModalProps> = ({
   isOpen,
   onClose,
@@ -48,11 +59,16 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
   onOpenAutomationModal,
   onRefreshPrivileges,
 }) => {
-  // Step navigation: 1 = select, 2 = target & storage, 3 = review yaml & execute, 4 = update guide & post-verify
+  // Step navigation: 1 = select, 2 = target & storage, 3 = review yaml & execute, 4 = updates
   const [currentStep, setCurrentStep] = useState<1 | 2 | 3 | 4>(1);
 
+  // Directive 1: Strictly filter out Manifexus from ALL mergeable containers
+  const mergeableContainers = useMemo(() => {
+    return containers.filter((c) => !isManifexusContainer(c));
+  }, [containers]);
+
   // Selection
-  const [selectedIds, setSelectedIds] = useState<string[]>(initialSelectedIds);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
 
   // Target config
   const [mode, setMode] = useState<'existing-stack' | 'new-stack'>('new-stack');
@@ -65,30 +81,23 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
   const [isGeneratingPlan, setIsGeneratingPlan] = useState(false);
   const [planError, setPlanError] = useState<string | null>(null);
 
-  // Execution state & Host confirmation dialog
-  const [isExecuting, setIsExecuting] = useState(false);
+  // Execution state & Confirmation dialog
   const [showConfirmExecuteDialog, setShowConfirmExecuteDialog] = useState(false);
-  const [executionResult, setExecutionResult] = useState<{
-    success: boolean;
-    message: string;
-    logs?: string[];
-    isAutomated?: boolean;
-    mode?: string;
-    isMigratingSelf?: boolean;
-  } | null>(null);
   const [copiedType, setCopiedType] = useState<'yaml' | 'script' | 'rollback' | 'cleanup' | null>(null);
 
-  // Live reconnection state when central command (Manifexus) migrates into new stack
-  const [isReconnecting, setIsReconnecting] = useState(false);
-  const [reconnectAttempt, setReconnectAttempt] = useState(0);
-  const [reconnectSuccess, setReconnectSuccess] = useState(false);
+  // Directive 3 & 4: Live Streaming Pipeline Console State
+  const [isPipelineConsoleOpen, setIsPipelineConsoleOpen] = useState(false);
+  const [pipelineMode, setPipelineMode] = useState<'merge' | 'revert'>('merge');
+  const [pipelineMergeId, setPipelineMergeId] = useState<string | undefined>(undefined);
+  const [pipelineStreamUrl, setPipelineStreamUrl] = useState<string>('/api/stacks/execute-merge-stream');
+  const [pipelineStreamPayload, setPipelineStreamPayload] = useState<Record<string, unknown>>({});
 
-  // Group containers by stack for quick selection
+  // Group containers by stack for selection
   const groupedStacks = useMemo(() => {
     const stacks: Record<string, { dir?: string; items: DeepContainerMetadata[] }> = {};
     const standalone: DeepContainerMetadata[] = [];
 
-    for (const c of containers) {
+    for (const c of mergeableContainers) {
       if (c.compose?.isCompose && c.compose.project) {
         const p = c.compose.project;
         if (!stacks[p]) {
@@ -100,12 +109,12 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
       }
     }
     return { stacks, standalone };
-  }, [containers]);
+  }, [mergeableContainers]);
 
   // Selected container objects list
   const selectedContainersList = useMemo(() => {
-    return containers.filter((c) => selectedIds.includes(c.id));
-  }, [containers, selectedIds]);
+    return mergeableContainers.filter((c) => selectedIds.includes(c.id));
+  }, [mergeableContainers, selectedIds]);
 
   // Determine if this is a self-merge (all selected services already belong to the target stack)
   const isSelfMergeOnly = useMemo(() => {
@@ -113,72 +122,46 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
     return selectedContainersList.every((c) => c.compose?.project === targetStackName);
   }, [mode, targetStackName, selectedContainersList]);
 
-  // Check if Manifexus container is running on the host but not currently selected
-  const unselectedManifexus = useMemo(() => {
-    return containers.find(
-      (c) =>
-        (c.compose?.project === 'manifexus' || 
-         c.cleanName.toLowerCase().includes('manifexus') ||
-         c.image.toLowerCase().includes('manifexus')) &&
-        !selectedIds.includes(c.id)
-    );
-  }, [containers, selectedIds]);
-
-  // Check if Manifexus is currently selected
-  const isManifexusSelected = useMemo(() => {
-    return selectedContainersList.some(
-      (c) => c.compose?.project === 'manifexus' || c.cleanName.toLowerCase().includes('manifexus')
-    );
-  }, [selectedContainersList]);
-
-  // Synchronize initial selection when modal opens
+  // Directive 2: Decouple local modal state from global polling refreshes
+  // Reset state ONLY when the modal transitions from closed to open
+  const wasOpenRef = useRef(false);
   useEffect(() => {
-    if (isOpen) {
-      // RESET ALL INTERACTION STATE ON OPEN TO PREVENT STICKY PREVIOUS SESSIONS
+    if (isOpen && !wasOpenRef.current) {
       setCurrentStep(1);
       setPlan(null);
       setPlanError(null);
-      setExecutionResult(null);
       setShowConfirmExecuteDialog(false);
       setCopiedType(null);
-      setIsReconnecting(false);
-      setReconnectAttempt(0);
-      setReconnectSuccess(false);
+      setIsPipelineConsoleOpen(false);
 
-      if (initialSelectedIds && initialSelectedIds.length > 0) {
-        setSelectedIds(initialSelectedIds);
+      // Clean out any Manifexus IDs that might have been passed
+      const safeInitial = (initialSelectedIds || []).filter((id) => {
+        const found = containers.find((c) => c.id === id || c.cleanName === id);
+        return found ? !isManifexusContainer(found) : true;
+      });
+
+      if (safeInitial.length > 0) {
+        setSelectedIds(safeInitial);
+      } else if (mergeableContainers.length > 0) {
+        // Pre-select first mergeable container or stack
+        setSelectedIds([mergeableContainers[0].id]);
       } else {
-        // Pre-select utilities-stack + manifexus if present as a helpful default
-        const autoPicks = containers
-          .filter(
-            (c) =>
-              c.compose?.project === 'utilities-stack' ||
-              c.compose?.project === 'manifexus' ||
-              c.cleanName.includes('utilities') ||
-              c.cleanName.includes('manifexus')
-          )
-          .map((c) => c.id);
-
-        if (autoPicks.length > 0) {
-          setSelectedIds(autoPicks);
-        } else if (containers.length > 0) {
-          setSelectedIds([containers[0].id]);
-        }
+        setSelectedIds([]);
       }
 
-      if (initialTargetStack) {
+      if (initialTargetStack && initialTargetStack !== 'manifexus') {
         setMode('existing-stack');
         setTargetStackName(initialTargetStack);
-        const existingDir = containers.find((c) => c.compose?.project === initialTargetStack)?.compose?.workingDir;
+        const existingDir = mergeableContainers.find((c) => c.compose?.project === initialTargetStack)?.compose?.workingDir;
         if (existingDir) setTargetDirectory(existingDir);
       } else {
-        // Defaults for new stack
         setMode('new-stack');
         setTargetStackName('combined-stack');
         setTargetDirectory('/home/ryan/combined-stack');
       }
     }
-  }, [isOpen, initialSelectedIds, initialTargetStack, containers]);
+    wasOpenRef.current = isOpen;
+  }, [isOpen, initialSelectedIds, initialTargetStack, containers, mergeableContainers]);
 
   // Pre-fill target directory when stack name changes in new-stack mode
   const handleStackNameChange = (name: string) => {
@@ -189,16 +172,18 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
     }
   };
 
-  // Toggle container selection
-  const toggleContainer = (id: string) => {
+  // Toggle container selection with stopPropagation
+  const toggleContainer = (id: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
     setSelectedIds((prev) =>
       prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
     );
   };
 
   // Select entire compose stack at once
-  const selectEntireStack = (projectName: string) => {
-    const stackContainerIds = containers
+  const selectEntireStack = (projectName: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    const stackContainerIds = mergeableContainers
       .filter((c) => c.compose?.project === projectName)
       .map((c) => c.id);
 
@@ -230,12 +215,12 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
       });
 
       if (!res.ok) {
-        const errData = await res.json();
-        throw new Error(errData.error || 'Failed to generate stack merge plan');
+        const data = await res.json();
+        throw new Error(data.error || 'Failed to synthesize Docker Compose stack');
       }
 
-      const data: StackMergePlan = await res.json();
-      setPlan(data);
+      const planData = await res.json();
+      setPlan(planData);
       setCurrentStep(3);
     } catch (err) {
       setPlanError((err as Error).message);
@@ -244,81 +229,55 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
     }
   };
 
-  // Execute Merge
-  const executeMerge = async () => {
+  // Directive 3: Launch Live Streaming Pipeline Execution
+  const triggerStreamingExecution = (e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
     if (!plan) return;
-    setIsExecuting(true);
+
     setShowConfirmExecuteDialog(false);
-    setIsReconnecting(false);
-    setReconnectAttempt(0);
-    setReconnectSuccess(false);
+    setPipelineMode('merge');
+    setPipelineMergeId(undefined);
+    setPipelineStreamUrl('/api/stacks/execute-merge-stream');
+    setPipelineStreamPayload({
+      sourceContainerIds: selectedIds,
+      targetStackName: plan.targetStackName,
+      targetDirectory: plan.targetDirectory,
+      yamlContent: plan.generatedComposeYaml,
+    });
+    setIsPipelineConsoleOpen(true);
+  };
 
-    try {
-      const res = await fetch('/api/stacks/execute-merge', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sourceContainerIds: selectedIds,
-          targetStackName: plan.targetStackName,
-          targetDirectory: plan.targetDirectory,
-          yamlContent: plan.generatedComposeYaml,
-        }),
-      });
+  // Directive 4: Launch Revert Streaming Execution
+  const handleTriggerRevert = (mergeId: string) => {
+    setPipelineMode('revert');
+    setPipelineMergeId(mergeId);
+    setPipelineStreamUrl(`/api/history/${mergeId}/revert-stream`);
+    setPipelineStreamPayload({});
+    setIsPipelineConsoleOpen(true);
+  };
 
-      const result = await res.json();
-      setExecutionResult(result);
-      if (result.success) {
-        setCurrentStep(4);
-        // Sequential refreshes to catch Docker daemon state transitions (created -> running)
-        if (onMergeSuccess) {
-          onMergeSuccess();
-          setTimeout(() => onMergeSuccess(), 2000);
-          setTimeout(() => onMergeSuccess(), 4500);
-        }
-
-        // If Manifexus is migrating into the stack, poll /api/health until the new instance boots
-        if (result.isMigratingSelf) {
-          setIsReconnecting(true);
-          let attempts = 0;
-          const maxAttempts = 35;
-          const pollTimer = setInterval(async () => {
-            attempts++;
-            setReconnectAttempt(attempts);
-            try {
-              const ping = await fetch('/api/health', { cache: 'no-store' });
-              if (ping.ok) {
-                clearInterval(pollTimer);
-                setReconnectSuccess(true);
-                setTimeout(() => {
-                  window.location.reload();
-                }, 1200);
-              }
-            } catch {
-              // Expected while container restarts on host
-            }
-
-            if (attempts >= maxAttempts) {
-              clearInterval(pollTimer);
-            }
-          }, 1000);
-        }
-      }
-    } catch (err) {
-      setExecutionResult({ success: false, message: (err as Error).message });
-    } finally {
-      setIsExecuting(false);
+  // Directive 4: Keep Changes
+  const handleKeepChanges = () => {
+    setIsPipelineConsoleOpen(false);
+    if (onMergeSuccess) {
+      onMergeSuccess();
+      setTimeout(() => onMergeSuccess(), 2000);
+      setTimeout(() => onMergeSuccess(), 4500);
     }
+    onClose();
   };
 
   // Copy helper
-  const copyToClipboard = (text: string, type: 'yaml' | 'script' | 'rollback' | 'cleanup') => {
+  const copyToClipboard = (text: string, type: 'yaml' | 'script' | 'rollback' | 'cleanup', e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
     navigator.clipboard.writeText(text);
     setCopiedType(type);
     setTimeout(() => setCopiedType(null), 2500);
   };
 
   // Download compose file
-  const downloadYaml = () => {
+  const downloadYaml = (e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
     if (!plan) return;
     const blob = new Blob([plan.generatedComposeYaml], { type: 'text/yaml' });
     const url = URL.createObjectURL(blob);
@@ -334,13 +293,19 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-black/85 backdrop-blur-md animate-in fade-in duration-200"
+      onClick={(e) => {
+        e.stopPropagation();
+        onClose();
+      }}
+    >
       <div
         className="w-full max-w-5xl max-h-[92vh] flex flex-col bg-[#0b0f19] border border-cyan-500/30 rounded-2xl shadow-2xl overflow-hidden font-mono"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Modal Header */}
-        <div className="px-6 py-4 bg-gradient-to-r from-slate-900 via-slate-900/90 to-purple-950/40 border-b border-slate-800 flex items-center justify-between">
+        <div className="px-6 py-4 bg-gradient-to-r from-slate-900 via-slate-900/90 to-purple-950/40 border-b border-slate-800 flex items-center justify-between flex-shrink-0">
           <div className="flex items-center gap-3">
             <div className="p-2.5 rounded-xl bg-cyan-500/10 border border-cyan-500/40 text-cyan-400">
               <Layers className="w-5 h-5" />
@@ -355,23 +320,29 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
                 </span>
               </div>
               <p className="text-xs text-slate-400 mt-0.5">
-                Consolidate separate Docker Compose apps into a single unified stack with preserved host configs & volumes.
+                Consolidate separate Docker Compose apps into a single unified stack with AST synthesis and host data preservation.
               </p>
             </div>
           </div>
 
           <button
-            onClick={onClose}
+            onClick={(e) => {
+              e.stopPropagation();
+              onClose();
+            }}
             className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800/80 transition-colors"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        {/* Multi-step progress tabs */}
-        <div className="grid grid-cols-4 border-b border-slate-800 text-xs font-mono bg-slate-950/60">
+        {/* Multi-step Progress Tabs */}
+        <div className="grid grid-cols-4 border-b border-slate-800 text-xs font-mono bg-slate-950/60 flex-shrink-0">
           <button
-            onClick={() => setCurrentStep(1)}
+            onClick={(e) => {
+              e.stopPropagation();
+              setCurrentStep(1);
+            }}
             className={`py-3 px-4 flex items-center justify-center gap-2 border-r border-slate-800 transition-colors ${
               currentStep === 1
                 ? 'bg-cyan-500/10 text-cyan-300 border-b-2 border-b-cyan-400 font-bold'
@@ -383,7 +354,8 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
           </button>
 
           <button
-            onClick={() => {
+            onClick={(e) => {
+              e.stopPropagation();
               if (selectedIds.length > 0) setCurrentStep(2);
             }}
             disabled={selectedIds.length === 0}
@@ -400,7 +372,8 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
           </button>
 
           <button
-            onClick={() => {
+            onClick={(e) => {
+              e.stopPropagation();
               if (plan) setCurrentStep(3);
             }}
             disabled={!plan}
@@ -417,7 +390,10 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
           </button>
 
           <button
-            onClick={() => setCurrentStep(4)}
+            onClick={(e) => {
+              e.stopPropagation();
+              setCurrentStep(4);
+            }}
             className={`py-3 px-4 flex items-center justify-center gap-2 transition-colors ${
               currentStep === 4
                 ? 'bg-purple-500/10 text-purple-300 border-b-2 border-b-purple-400 font-bold'
@@ -425,7 +401,7 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
             }`}
           >
             <span className="w-5 h-5 rounded-full bg-slate-800 flex items-center justify-center text-[10px]">4</span>
-            <span>GitHub & Updates</span>
+            <span>Rollbacks & Ledger</span>
           </button>
         </div>
 
@@ -440,50 +416,26 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
                     Choose Docker Compose Apps & Containers to Combine
                   </h3>
                   <p className="text-xs text-slate-400 mt-0.5">
-                    Select the apps you want to merge into a single Compose project. You can pick entire stacks or standalone containers.
+                    Select any services or standalone containers to consolidate into a unified stack.
                   </p>
                 </div>
 
                 {/* Quick Presets */}
                 <div className="flex items-center gap-2 self-start sm:self-center flex-wrap">
                   <button
-                    onClick={() => {
-                      const ids = containers
-                        .filter(
-                          (c) =>
-                            c.compose?.project === 'utilities-stack' ||
-                            c.compose?.project === 'manifexus' ||
-                            c.cleanName.includes('utilities') ||
-                            c.cleanName.includes('manifexus')
-                        )
-                        .map((c) => c.id);
-                      setSelectedIds(ids);
-                      setMode('existing-stack');
-                      setTargetStackName('utilities-stack');
-                      setTargetDirectory('/home/ryan/utilities-stack');
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSelectedIds(mergeableContainers.map((c) => c.id));
                     }}
-                    className={`px-3 py-1.5 rounded-lg border text-xs font-bold transition-all flex items-center gap-1.5 ${
-                      isManifexusSelected && selectedContainersList.some((c) => c.compose?.project === 'utilities-stack')
-                        ? 'bg-emerald-950/80 border-emerald-500/50 text-emerald-200 shadow-[0_0_12px_rgba(16,185,129,0.2)]'
-                        : 'bg-purple-950/80 hover:bg-purple-900 border-purple-500/40 text-purple-200 shadow-[0_0_10px_rgba(168,85,247,0.15)]'
-                    }`}
-                  >
-                    <Layers className="w-3.5 h-3.5 text-purple-400" />
-                    <span>
-                      {isManifexusSelected && selectedContainersList.some((c) => c.compose?.project === 'utilities-stack')
-                        ? '✓ utilities-stack + Manifexus Selected'
-                        : 'Preset: Merge utilities-stack + Manifexus'}
-                    </span>
-                  </button>
-
-                  <button
-                    onClick={() => setSelectedIds(containers.map((c) => c.id))}
                     className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs transition-colors"
                   >
-                    Select All
+                    Select All ({mergeableContainers.length})
                   </button>
                   <button
-                    onClick={() => setSelectedIds([])}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSelectedIds([]);
+                    }}
                     className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs transition-colors"
                   >
                     Clear
@@ -491,33 +443,20 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
                 </div>
               </div>
 
-              {/* Safeguard Banner: Prompt to add more apps when only target stack's own containers are selected */}
+              {/* Safeguard Notice: Guidance when only target stack's own containers are selected */}
               {isSelfMergeOnly && (
-                <div className="p-3.5 rounded-xl bg-cyan-950/30 border border-cyan-500/30 text-xs text-cyan-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-in fade-in slide-in-from-top-2 duration-300">
-                  <div className="flex items-start gap-2.5">
-                    <Info className="w-4 h-4 text-cyan-400 flex-shrink-0 mt-0.5" />
-                    <div>
-                      <span className="font-bold text-cyan-300 block">Adding Services to "{targetStackName}"</span>
-                      <span>
-                        You've selected services already in this stack. <strong>Select other apps below</strong> to merge them into <code className="text-cyan-400 font-bold">{targetStackName}</code>.
-                      </span>
-                    </div>
+                <div className="p-3.5 rounded-xl bg-cyan-950/30 border border-cyan-500/30 text-xs text-cyan-200 flex items-start gap-2.5">
+                  <Info className="w-4 h-4 text-cyan-400 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-bold text-cyan-300 block">Adding Services to "{targetStackName}"</span>
+                    <span>
+                      You've selected services already in this stack. Check additional standalone apps or external services below to merge them into <code className="text-cyan-400 font-bold">{targetStackName}</code>.
+                    </span>
                   </div>
-                  {unselectedManifexus && (
-                    <button
-                      onClick={() => {
-                        setSelectedIds((prev) => [...prev, unselectedManifexus.id]);
-                      }}
-                      className="px-3 py-1.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow-lg shadow-cyan-500/20 flex-shrink-0 transition-all active:scale-95"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                      <span>Add Manifexus to {targetStackName}</span>
-                    </button>
-                  )}
                 </div>
               )}
 
-              {/* Quick Selection Shortcuts */}
+              {/* Quick Standalone Apps Shortcuts */}
               {groupedStacks.standalone.length > 0 && (
                 <div className="space-y-2">
                   <div className="flex items-center gap-2 text-[10px] uppercase font-bold text-slate-500 tracking-wider">
@@ -528,13 +467,7 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
                     {groupedStacks.standalone.map((c) => (
                       <button
                         key={c.id}
-                        onClick={() => {
-                          if (selectedIds.includes(c.id)) {
-                            setSelectedIds(selectedIds.filter((id) => id !== c.id));
-                          } else {
-                            setSelectedIds([...selectedIds, c.id]);
-                          }
-                        }}
+                        onClick={(e) => toggleContainer(c.id, e)}
                         className={`px-3 py-1.5 rounded-lg border text-[11px] font-bold transition-all flex items-center gap-1.5 ${
                           selectedIds.includes(c.id)
                             ? 'bg-cyan-900/40 border-cyan-500/60 text-cyan-300 shadow-sm'
@@ -560,12 +493,6 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
                   <span className="px-2 py-0.5 rounded-full bg-cyan-950 text-cyan-300 font-mono text-[11px] border border-cyan-500/30">
                     {selectedIds.length} {selectedIds.length === 1 ? 'service' : 'services'}
                   </span>
-                  {isManifexusSelected && (
-                    <span className="px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-300 font-mono text-[11px] border border-emerald-500/30 flex items-center gap-1">
-                      <CheckCircle2 className="w-3 h-3 text-emerald-400" />
-                      Manifexus Included
-                    </span>
-                  )}
                 </div>
                 <div className="text-slate-400 text-[11px] truncate max-w-md">
                   {selectedContainersList.map((c) => c.cleanName).join(', ') || 'None selected'}
@@ -592,7 +519,8 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
                             ref={(el) => {
                               if (el) el.indeterminate = isSomeSelected && !isAllSelected;
                             }}
-                            onChange={() => selectEntireStack(projectName)}
+                            onChange={(e) => selectEntireStack(projectName, e as unknown as React.MouseEvent)}
+                            onClick={(e) => e.stopPropagation()}
                             className="w-4 h-4 rounded text-cyan-500 focus:ring-cyan-500 focus:ring-offset-slate-900 bg-slate-800 border-slate-700 cursor-pointer"
                           />
                           <div className="flex items-center gap-2">
@@ -604,43 +532,46 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
                         </div>
 
                         {stackData.dir && (
-                          <div className="flex items-center gap-1 text-[11px] text-slate-400 truncate max-w-sm">
-                            <FolderOpen className="w-3.5 h-3.5 text-purple-400 flex-shrink-0" />
-                            <span className="truncate">{stackData.dir}</span>
-                          </div>
+                          <span className="text-[11px] text-slate-500 truncate max-w-xs">
+                            {stackData.dir}
+                          </span>
                         )}
                       </div>
 
-                      <div className="p-3 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
-                        {stackData.items.map((item) => {
-                          const isSelected = selectedIds.includes(item.id);
+                      <div className="p-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {stackData.items.map((c) => {
+                          const isSelected = selectedIds.includes(c.id);
                           return (
                             <div
-                              key={item.id}
-                              onClick={() => toggleContainer(item.id)}
-                              className={`p-3 rounded-lg border cursor-pointer transition-all flex items-start gap-3 ${
+                              key={c.id}
+                              onClick={(e) => toggleContainer(c.id, e)}
+                              className={`p-2.5 rounded-lg border text-xs cursor-pointer transition-all flex items-center justify-between ${
                                 isSelected
-                                  ? 'bg-cyan-950/30 border-cyan-500/50 text-white'
+                                  ? 'bg-cyan-950/40 border-cyan-500/50 text-white'
                                   : 'bg-slate-900/30 border-slate-800/80 text-slate-400 hover:border-slate-700'
                               }`}
                             >
-                              <input
-                                type="checkbox"
-                                checked={isSelected}
-                                onChange={() => {}} // handled by parent onClick
-                                className="mt-0.5 w-4 h-4 rounded text-cyan-500 bg-slate-800 border-slate-700 pointer-events-none"
-                              />
-                              <div className="min-w-0 flex-1">
-                                <div className="font-bold text-xs truncate text-slate-200">
-                                  {item.cleanName}
-                                </div>
-                                <div className="text-[11px] text-slate-500 truncate mt-0.5">
-                                  {item.image}
-                                </div>
-                                {item.primaryPort && (
-                                  <div className="text-[10px] text-cyan-400 font-mono mt-1">
-                                    Port :{item.primaryPort}
+                              <div className="flex items-center gap-2.5">
+                                <input
+                                  type="checkbox"
+                                  checked={isSelected}
+                                  onChange={() => {}}
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="w-3.5 h-3.5 rounded text-cyan-500 bg-slate-800 border-slate-700"
+                                />
+                                <div>
+                                  <div className="font-bold text-slate-200">{c.cleanName}</div>
+                                  <div className="text-[10px] text-slate-500 truncate max-w-[200px]">
+                                    {c.image}
                                   </div>
+                                </div>
+                              </div>
+
+                              <div className="text-right text-[10px] text-slate-400">
+                                {c.ports.length > 0 && (
+                                  <span>
+                                    :{c.ports.map((p) => p.publicPort).filter(Boolean).join(', :')}
+                                  </span>
                                 )}
                               </div>
                             </div>
@@ -651,42 +582,53 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
                   );
                 })}
 
-                {/* Standalone Containers */}
+                {/* Standalone Containers List */}
                 {groupedStacks.standalone.length > 0 && (
                   <div className="rounded-xl border border-slate-800 bg-slate-950/40 overflow-hidden">
                     <div className="p-3 bg-slate-900/60 border-b border-slate-800 flex items-center justify-between">
-                      <span className="font-bold text-white text-xs">Standalone Containers</span>
-                      <span className="text-[11px] text-slate-400">
-                        {groupedStacks.standalone.length} available
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-white text-xs">Standalone Containers</span>
+                        <span className="px-2 py-0.5 rounded text-[10px] bg-slate-800 text-slate-400 border border-slate-700">
+                          {groupedStacks.standalone.length}
+                        </span>
+                      </div>
                     </div>
 
-                    <div className="p-3 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
-                      {groupedStacks.standalone.map((item) => {
-                        const isSelected = selectedIds.includes(item.id);
+                    <div className="p-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {groupedStacks.standalone.map((c) => {
+                        const isSelected = selectedIds.includes(c.id);
                         return (
                           <div
-                            key={item.id}
-                            onClick={() => toggleContainer(item.id)}
-                            className={`p-3 rounded-lg border cursor-pointer transition-all flex items-start gap-3 ${
+                            key={c.id}
+                            onClick={(e) => toggleContainer(c.id, e)}
+                            className={`p-2.5 rounded-lg border text-xs cursor-pointer transition-all flex items-center justify-between ${
                               isSelected
-                                ? 'bg-cyan-950/30 border-cyan-500/50 text-white'
+                                ? 'bg-cyan-950/40 border-cyan-500/50 text-white'
                                 : 'bg-slate-900/30 border-slate-800/80 text-slate-400 hover:border-slate-700'
                             }`}
                           >
-                            <input
-                              type="checkbox"
-                              checked={isSelected}
-                              onChange={() => {}}
-                              className="mt-0.5 w-4 h-4 rounded text-cyan-500 bg-slate-800 border-slate-700 pointer-events-none"
-                            />
-                            <div className="min-w-0 flex-1">
-                              <div className="font-bold text-xs truncate text-slate-200">
-                                {item.cleanName}
+                            <div className="flex items-center gap-2.5">
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => {}}
+                                onClick={(e) => e.stopPropagation()}
+                                className="w-3.5 h-3.5 rounded text-cyan-500 bg-slate-800 border-slate-700"
+                              />
+                              <div>
+                                <div className="font-bold text-slate-200">{c.cleanName}</div>
+                                <div className="text-[10px] text-slate-500 truncate max-w-[200px]">
+                                  {c.image}
+                                </div>
                               </div>
-                              <div className="text-[11px] text-slate-500 truncate mt-0.5">
-                                {item.image}
-                              </div>
+                            </div>
+
+                            <div className="text-right text-[10px] text-slate-400">
+                              {c.ports.length > 0 && (
+                                <span>
+                                  :{c.ports.map((p) => p.publicPort).filter(Boolean).join(', :')}
+                                </span>
+                              )}
                             </div>
                           </div>
                         );
@@ -698,108 +640,107 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
             </div>
           )}
 
-          {/* STEP 2: TARGET & STORAGE CONFIG */}
+          {/* STEP 2: TARGET & STORAGE */}
           {currentStep === 2 && (
             <div className="space-y-6">
+              {/* Stack Mode Selection */}
               <div className="p-4 rounded-xl bg-slate-900/60 border border-slate-800 space-y-4">
-                <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                  <FolderOpen className="w-4 h-4 text-cyan-400" />
-                  <span>Stack Destination & Directory Configuration</span>
+                <h3 className="text-sm font-bold text-slate-200">
+                  Target Stack Configuration
                 </h3>
 
-                {/* Mode Selector */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <button
-                    onClick={() => {
+                  <div
+                    onClick={(e) => {
+                      e.stopPropagation();
                       setMode('new-stack');
-                      setTargetStackName('test-stack');
-                      setTargetDirectory('/home/ryan/test-stack');
                     }}
-                    className={`p-4 rounded-xl border text-left transition-all ${
+                    className={`p-4 rounded-xl border cursor-pointer transition-all ${
                       mode === 'new-stack'
-                        ? 'bg-cyan-950/40 border-cyan-500/60 shadow-md'
+                        ? 'bg-cyan-950/40 border-cyan-500/60 text-white shadow-md'
                         : 'bg-slate-950/50 border-slate-800 text-slate-400 hover:border-slate-700'
                     }`}
                   >
-                    <div className="font-bold text-xs text-white">Create a Brand New Stack</div>
-                    <p className="text-[11px] text-slate-400 mt-1">
-                      Makes a new directory (e.g. <code className="text-cyan-300">mkdir -p ~/test-stack</code>) and unifies the selected apps there.
+                    <div className="flex items-center gap-2 text-cyan-400 font-bold text-xs mb-1">
+                      <Layers className="w-4 h-4" />
+                      <span>Create New Unified Stack</span>
+                    </div>
+                    <p className="text-[11px] text-slate-400">
+                      Creates a brand new dedicated directory and unified docker-compose.yml file.
                     </p>
-                  </button>
+                  </div>
 
-                  <button
-                    onClick={() => {
+                  <div
+                    onClick={(e) => {
+                      e.stopPropagation();
                       setMode('existing-stack');
-                      setTargetStackName('utilities-stack');
-                      setTargetDirectory('/home/ryan/utilities-stack');
                     }}
-                    className={`p-4 rounded-xl border text-left transition-all ${
+                    className={`p-4 rounded-xl border cursor-pointer transition-all ${
                       mode === 'existing-stack'
-                        ? 'bg-purple-950/40 border-purple-500/60 shadow-md'
+                        ? 'bg-cyan-950/40 border-cyan-500/60 text-white shadow-md'
                         : 'bg-slate-950/50 border-slate-800 text-slate-400 hover:border-slate-700'
                     }`}
                   >
-                    <div className="font-bold text-xs text-white">Merge Into Existing Stack</div>
-                    <p className="text-[11px] text-slate-400 mt-1">
-                      Adds apps (like Manifexus) directly into an existing stack (e.g. <code className="text-purple-300">utilities-stack</code>).
+                    <div className="flex items-center gap-2 text-purple-400 font-bold text-xs mb-1">
+                      <GitBranch className="w-4 h-4" />
+                      <span>Merge into Existing Stack</span>
+                    </div>
+                    <p className="text-[11px] text-slate-400">
+                      Appends services to an existing compose file via intelligent AST mutation.
                     </p>
-                  </button>
+                  </div>
                 </div>
 
-                {/* Target Inputs */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
+                {/* Form Fields */}
+                <div className="space-y-4 pt-2">
                   <div>
-                    <label className="block text-xs font-bold text-slate-300 mb-1">
-                      Stack Project Name
+                    <label className="block text-xs font-bold text-slate-300 mb-1.5">
+                      Stack Name:
                     </label>
-                    <input
-                      type="text"
-                      value={targetStackName}
-                      onChange={(e) => handleStackNameChange(e.target.value)}
-                      placeholder="e.g. utilities-stack, test-stack"
-                      className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-white text-xs font-mono focus:outline-none focus:border-cyan-400"
-                    />
+                    {mode === 'existing-stack' ? (
+                      <select
+                        value={targetStackName}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setTargetStackName(val);
+                          const existingDir = mergeableContainers.find((c) => c.compose?.project === val)?.compose?.workingDir;
+                          if (existingDir) setTargetDirectory(existingDir);
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                        className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-700 text-white text-xs focus:border-cyan-500 focus:outline-none"
+                      >
+                        {Object.keys(groupedStacks.stacks).map((p) => (
+                          <option key={p} value={p}>
+                            {p}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        type="text"
+                        value={targetStackName}
+                        onChange={(e) => handleStackNameChange(e.target.value)}
+                        onClick={(e) => e.stopPropagation()}
+                        placeholder="e.g. combined-stack"
+                        className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-700 text-white text-xs focus:border-cyan-500 focus:outline-none"
+                      />
+                    )}
                   </div>
 
                   <div>
-                    <label className="block text-xs font-bold text-slate-300 mb-1">
-                      Host Working Directory Path
+                    <label className="block text-xs font-bold text-slate-300 mb-1.5">
+                      Host Target Directory:
                     </label>
                     <input
                       type="text"
                       value={targetDirectory}
                       onChange={(e) => setTargetDirectory(e.target.value)}
-                      placeholder="e.g. /home/ryan/utilities-stack"
-                      className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-white text-xs font-mono focus:outline-none focus:border-cyan-400"
+                      onClick={(e) => e.stopPropagation()}
+                      placeholder="e.g. /home/ryan/combined-stack"
+                      className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-700 text-white text-xs focus:border-cyan-500 focus:outline-none"
                     />
                   </div>
                 </div>
-
-                {/* Self-Merge Notice in Step 2 */}
-                {isSelfMergeOnly && (
-                  <div className="p-3.5 rounded-xl bg-cyan-950/20 border border-cyan-500/30 text-xs text-cyan-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                    <div className="flex items-start gap-2.5">
-                      <Info className="w-4 h-4 text-cyan-400 flex-shrink-0 mt-0.5" />
-                      <div>
-                        <span className="font-bold text-cyan-300 block">Consolidating {targetStackName}</span>
-                        <span>
-                          No external apps are currently selected. This will re-synchronize your <code className="text-cyan-400">{targetStackName}</code> configuration.
-                        </span>
-                      </div>
-                    </div>
-                    {unselectedManifexus && (
-                      <button
-                        onClick={() => {
-                          setSelectedIds((prev) => [...prev, unselectedManifexus.id]);
-                        }}
-                        className="px-3 py-1.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow-md flex-shrink-0 transition-all"
-                      >
-                        <Plus className="w-3.5 h-3.5" />
-                        <span>Add Manifexus</span>
-                      </button>
-                    )}
-                  </div>
-                )}
               </div>
 
               {/* ZERO DATA LOSS VOLUME AUDIT */}
@@ -812,13 +753,9 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
                     </h3>
                   </div>
                   <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-950 border border-emerald-500/40 text-emerald-300">
-                    Audited: No Data Overwritten
+                    AST Preserved: No Data Overwritten
                   </span>
                 </div>
-
-                <p className="text-xs text-slate-400 leading-relaxed">
-                  How Manifexus protects all your databases, configs, and media volumes when moving stacks:
-                </p>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
                   <div className="p-3.5 rounded-xl bg-slate-950/80 border border-slate-800 space-y-2">
@@ -827,7 +764,7 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
                       <span>Host Directory Bind Mounts</span>
                     </div>
                     <p className="text-slate-400 text-[11px] leading-relaxed">
-                      Relative paths (like <code className="text-cyan-300">./data</code>) are resolved into absolute host paths (e.g. <code className="text-cyan-300">/home/ryan/manifexus/data</code>). The service continues to mount the exact same files with 0 file movement needed.
+                      Relative paths (like <code className="text-cyan-300">./data</code>) are resolved into absolute host paths. The service mounts the exact same files with zero file movement.
                     </p>
                   </div>
 
@@ -837,51 +774,8 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
                       <span>Docker Named Volumes</span>
                     </div>
                     <p className="text-slate-400 text-[11px] leading-relaxed">
-                      In Docker Compose, named volumes get namespaced. Manifexus automatically adds <code className="text-purple-300">external: true</code> to the merged YAML so Docker reuses your existing volume instead of creating an empty one!
+                      Named volumes automatically receive <code className="text-purple-300">external: true</code> to bind to the existing volume data without wiping databases.
                     </p>
-                  </div>
-                </div>
-
-                <div className="pt-2">
-                  <label className="block text-xs font-bold text-slate-300 mb-2">
-                    Volume Preservation Mode
-                  </label>
-                  <div className="flex flex-col sm:flex-row gap-3">
-                    <label className="flex items-start gap-2.5 p-3 rounded-lg border border-slate-800 bg-slate-950/50 cursor-pointer flex-1">
-                      <input
-                        type="radio"
-                        name="volumeHandling"
-                        checked={volumeHandling === 'preserve-absolute'}
-                        onChange={() => setVolumeHandling('preserve-absolute')}
-                        className="mt-0.5 text-cyan-500 focus:ring-cyan-500"
-                      />
-                      <div>
-                        <div className="text-xs font-bold text-slate-200">
-                          Preserve Absolute Host Paths (Recommended)
-                        </div>
-                        <div className="text-[11px] text-slate-500 mt-0.5">
-                          Points directly to existing host directories. 100% zero downtime and zero chance of data loss.
-                        </div>
-                      </div>
-                    </label>
-
-                    <label className="flex items-start gap-2.5 p-3 rounded-lg border border-slate-800 bg-slate-950/50 cursor-pointer flex-1">
-                      <input
-                        type="radio"
-                        name="volumeHandling"
-                        checked={volumeHandling === 'consolidate-relative'}
-                        onChange={() => setVolumeHandling('consolidate-relative')}
-                        className="mt-0.5 text-cyan-500 focus:ring-cyan-500"
-                      />
-                      <div>
-                        <div className="text-xs font-bold text-slate-200">
-                          Consolidate into Stack Subdirectories
-                        </div>
-                        <div className="text-[11px] text-slate-500 mt-0.5">
-                          Generates safe <code className="text-cyan-300">cp -a</code> commands to copy data into the new folder with pre-flight verification.
-                        </div>
-                      </div>
-                    </label>
                   </div>
                 </div>
               </div>
@@ -895,10 +789,10 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
             </div>
           )}
 
-          {/* STEP 3: REVIEW YAML & EXECUTION RUNNER */}
+          {/* STEP 3: REVIEW YAML & RUN PIPELINE */}
           {currentStep === 3 && plan && (
             <div className="space-y-6">
-              {/* Conflict & Health Check Banner */}
+              {/* Conflict Check Banner */}
               {plan.portConflicts.some((c) => c.conflict) ? (
                 <div className="p-4 rounded-xl bg-amber-950/50 border border-amber-500/40 text-amber-200 text-xs space-y-2">
                   <div className="flex items-center gap-2 font-bold text-amber-300">
@@ -918,369 +812,87 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
                   <div className="flex items-center gap-2.5">
                     <CheckCircle2 className="w-4 h-4 text-emerald-400" />
                     <span>
-                      Zero Port Collisions: All services expose independent ports ({plan.services.map((s) => s.ports.join(', ')).filter(Boolean).join(', ')}).
+                      Zero Port Collisions: All services expose independent ports.
                     </span>
                   </div>
                   <span className="text-[10px] uppercase font-bold text-emerald-400">Ready to Deploy</span>
                 </div>
               )}
 
-              {/* Host Automation & Privileges Status Banner */}
-              {privileges?.canAutoExecute ? (
-                <div className="p-4 rounded-xl bg-gradient-to-r from-purple-950/40 via-slate-900 to-emerald-950/40 border border-emerald-500/40 text-xs space-y-3">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2 font-bold text-emerald-300">
-                      <Zap className="w-4 h-4 text-emerald-400" />
-                      <span>Full Host Automation Active</span>
-                    </div>
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-950 border border-emerald-500/40 text-emerald-300">
-                      Zero-Touch Live Merge Ready
-                    </span>
-                  </div>
-                  <p className="text-slate-300 text-[11px] leading-relaxed">
-                    Manifexus has full host write permissions. Clicking <strong>Execute Live Host Merge</strong> will automatically write the merged <code className="text-cyan-300">{plan.targetDirectory}/docker-compose.yml</code>, save an automated backup, stop the old standalone containers, and start <code className="text-purple-300">docker compose up -d</code> on your Ubuntu host.
-                  </p>
-                  <div className="flex items-center gap-3 pt-1">
-                    <button
-                      onClick={() => setShowConfirmExecuteDialog(true)}
-                      disabled={isExecuting}
-                      className="px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold transition-all flex items-center gap-2 shadow-lg shadow-emerald-500/20"
-                    >
-                      <Zap className="w-4 h-4" />
-                      <span>Execute Automated Merge on Host</span>
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="p-4 rounded-xl bg-purple-950/30 border border-purple-500/40 text-xs space-y-3">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                    <div className="flex items-center gap-2 font-bold text-purple-300">
-                      <ShieldAlert className="w-4 h-4 text-purple-400" />
-                      <span>Host Execution Notice (Sandboxed Mode Active)</span>
-                    </div>
-                    {onOpenAutomationModal && (
-                      <button
-                        onClick={onOpenAutomationModal}
-                        className="px-3 py-1.5 rounded-lg bg-purple-600/30 hover:bg-purple-600/50 border border-purple-500/50 text-purple-200 text-xs font-bold transition-all flex items-center gap-1.5 self-start sm:self-auto"
-                      >
-                        <Zap className="w-3.5 h-3.5 text-purple-300" />
-                        <span>Elevate to 1-Click Automation</span>
-                      </button>
-                    )}
-                  </div>
-                  <p className="text-slate-300 text-[11px] leading-relaxed">
-                    Manifexus is currently running with a read-only Docker socket (<code className="text-purple-300">/var/run/docker.sock:ro</code>). To execute this merge completely automatically from this button without opening terminal, click <strong className="text-purple-300">Elevate to 1-Click Automation</strong>. Otherwise, follow the 3 quick commands below.
-                  </p>
-                </div>
-              )}
-
-              {/* Quick 3-Step Host Command Box */}
-              <div className="p-4 rounded-xl bg-slate-900/80 border border-slate-800 space-y-3">
+              {/* Host Automation & Streaming Execution Banner */}
+              <div className="p-4 rounded-xl bg-gradient-to-r from-purple-950/40 via-slate-900 to-emerald-950/40 border border-emerald-500/40 text-xs space-y-3">
                 <div className="flex items-center justify-between">
-                  <div className="text-xs font-bold text-white flex items-center gap-2">
-                    <CheckCircle2 className="w-3.5 h-3.5 text-cyan-400" />
-                    <span>3-Step Quick Merge on Your Ubuntu Server</span>
+                  <div className="flex items-center gap-2 font-bold text-emerald-300">
+                    <Zap className="w-4 h-4 text-emerald-400" />
+                    <span>Directive 3: Live GitHub Actions-Style Execution Pipeline</span>
                   </div>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-950 border border-emerald-500/40 text-emerald-300">
+                    7-Step Stream Ready
+                  </span>
+                </div>
+                <p className="text-slate-300 text-[11px] leading-relaxed">
+                  Clicking <strong>Execute Live Host Merge</strong> initiates a live, step-by-step pipeline streaming real-time logs, automated <code className="text-cyan-300">/app/backups</code> snapshots, AST compose synthesis, and container handoff.
+                </p>
+                <div className="flex items-center gap-3 pt-1">
                   <button
-                    onClick={() => {
-                      const quickCmds = `# Step 1: Stop standalone old stack\ncd /home/ryan/manifexus && docker compose down\n\n# Step 2: Open utilities-stack compose and paste the unified YAML\ncd ${plan.targetDirectory}\n# (paste the generated YAML from below)\n\n# Step 3: Start the combined stack\ndocker compose up -d`;
-                      copyToClipboard(quickCmds, 'script');
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowConfirmExecuteDialog(true);
                     }}
-                    className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-mono transition-colors flex items-center gap-1.5"
+                    className="px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold transition-all flex items-center gap-2 shadow-lg shadow-emerald-500/20"
                   >
-                    {copiedType === 'script' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                    <span>{copiedType === 'script' ? 'Copied Steps!' : 'Copy Steps'}</span>
+                    <Zap className="w-4 h-4" />
+                    <span>Execute Automated 7-Step Pipeline</span>
                   </button>
                 </div>
-
-                <div className="p-3 rounded-lg bg-[#07090e] border border-slate-800 text-[11px] font-mono text-cyan-300 space-y-2">
-                  <div>
-                    <span className="text-slate-500"># 1. Stop the standalone Manifexus instance (volumes are 100% retained):</span>
-                    <div className="text-slate-200 font-bold">cd /home/ryan/manifexus && docker compose down</div>
-                  </div>
-                  <div>
-                    <span className="text-slate-500"># 2. Paste the unified docker-compose.yml below into:</span>
-                    <div className="text-purple-300 font-bold">{plan.targetDirectory}/docker-compose.yml</div>
-                  </div>
-                  <div>
-                    <span className="text-slate-500"># 3. Spin up your unified stack:</span>
-                    <div className="text-emerald-400 font-bold">cd {plan.targetDirectory} && docker compose pull && docker compose up -d</div>
-                  </div>
-                </div>
               </div>
 
-              {/* Volume Safety Table */}
-              <div className="rounded-xl border border-slate-800 bg-slate-950/50 overflow-hidden">
+              {/* YAML Preview */}
+              <div className="rounded-xl border border-slate-800 bg-[#07090e] overflow-hidden">
                 <div className="p-3 bg-slate-900/80 border-b border-slate-800 flex items-center justify-between">
-                  <span className="text-xs font-bold text-slate-200">
-                    Volume Audit Breakdown ({plan.volumeSafetyAudit.length} volumes)
-                  </span>
-                  <span className="text-[10px] text-emerald-400 font-bold flex items-center gap-1">
-                    <ShieldCheck className="w-3.5 h-3.5" />
-                    <span>100% Zero-Loss Guaranteed</span>
-                  </span>
-                </div>
-
-                <div className="divide-y divide-slate-800/80 max-h-48 overflow-y-auto text-xs">
-                  {plan.volumeSafetyAudit.map((vol, idx) => (
-                    <div key={idx} className="p-2.5 px-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="font-bold text-white">{vol.service}</span>
-                          <span className="text-slate-500 font-mono text-[11px] truncate max-w-xs">
-                            {vol.source} → {vol.destination}
-                          </span>
-                        </div>
-                        <p className="text-[10px] text-slate-400 mt-0.5">{vol.explanation}</p>
-                      </div>
-
-                      <span className="self-start sm:self-center px-2 py-0.5 rounded text-[10px] font-bold bg-slate-900 border border-slate-700 text-cyan-300 whitespace-nowrap">
-                        {vol.badgeText}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* YAML Editor & Viewer */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Terminal className="w-4 h-4 text-cyan-400" />
-                    <span className="text-xs font-bold text-white">
-                      Generated docker-compose.yml ({plan.targetDirectory}/docker-compose.yml)
-                    </span>
+                  <div className="flex items-center gap-2 text-xs font-bold text-slate-300">
+                    <Layers className="w-4 h-4 text-cyan-400" />
+                    <span>Synthesized docker-compose.yml</span>
                   </div>
-
                   <div className="flex items-center gap-2">
                     <button
-                      onClick={downloadYaml}
-                      className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs transition-colors flex items-center gap-1.5"
+                      onClick={(e) => copyToClipboard(plan.generatedComposeYaml, 'yaml', e)}
+                      className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs flex items-center gap-1.5 transition-colors"
+                    >
+                      {copiedType === 'yaml' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                      <span>{copiedType === 'yaml' ? 'Copied' : 'Copy'}</span>
+                    </button>
+                    <button
+                      onClick={(e) => downloadYaml(e)}
+                      className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs flex items-center gap-1.5 transition-colors"
                     >
                       <Download className="w-3.5 h-3.5" />
                       <span>Download</span>
                     </button>
-
-                    <button
-                      onClick={() => copyToClipboard(plan.generatedComposeYaml, 'yaml')}
-                      className="px-2.5 py-1 rounded-lg bg-cyan-950/80 hover:bg-cyan-900 border border-cyan-500/40 text-cyan-300 text-xs transition-colors flex items-center gap-1.5 font-bold"
-                    >
-                      {copiedType === 'yaml' ? (
-                        <>
-                          <Check className="w-3.5 h-3.5 text-emerald-400" />
-                          <span>Copied!</span>
-                        </>
-                      ) : (
-                        <>
-                          <Copy className="w-3.5 h-3.5" />
-                          <span>Copy YAML</span>
-                        </>
-                      )}
-                    </button>
                   </div>
                 </div>
 
-                <pre className="p-4 rounded-xl bg-slate-950 border border-slate-800 text-[11px] text-cyan-300/90 font-mono overflow-x-auto max-h-64 scrollbar-thin">
+                <pre className="p-4 text-[11px] font-mono text-cyan-300/90 overflow-x-auto max-h-72 leading-relaxed selection:bg-cyan-500/30">
                   {plan.generatedComposeYaml}
                 </pre>
-              </div>
-
-              {/* Automation Shell Script Option */}
-              <div className="p-4 rounded-xl bg-slate-900/60 border border-slate-800 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h4 className="text-xs font-bold text-white">Automated Safe Migration Script</h4>
-                    <p className="text-[11px] text-slate-400 mt-0.5">
-                      Backs up existing compose files, stops old containers (preserving all volumes), and brings up the merged stack.
-                    </p>
-                  </div>
-
-                  <button
-                    onClick={() => copyToClipboard(plan.migrationScript, 'script')}
-                    className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs transition-colors flex items-center gap-1.5"
-                  >
-                    {copiedType === 'script' ? (
-                      <>
-                        <Check className="w-3.5 h-3.5 text-emerald-400" />
-                        <span>Copied Script!</span>
-                      </>
-                    ) : (
-                      <>
-                        <Copy className="w-3.5 h-3.5" />
-                        <span>Copy Script (migrate.sh)</span>
-                      </>
-                    )}
-                  </button>
-                </div>
-
-                <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-800/80 text-[11px] text-slate-400 font-mono flex items-center justify-between">
-                  <code>curl -sSL ... or run in terminal on your host</code>
-                  <span className="text-[10px] text-purple-400">set -e safe failure prevention</span>
-                </div>
               </div>
             </div>
           )}
 
-          {/* STEP 4: GITHUB UPDATE GUIDE & VERIFICATION */}
+          {/* STEP 4: ROLLBACKS & STATE LEDGER */}
           {currentStep === 4 && (
-            <div className="space-y-6">
-              {/* Central Command Reconnection Status (When Manifexus is migrating into stack) */}
-              {isReconnecting && (
-                <div className="p-5 rounded-xl bg-gradient-to-r from-cyan-950/80 via-slate-900 to-purple-950/80 border border-cyan-500/50 text-xs space-y-3 shadow-xl">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="p-2.5 rounded-xl bg-cyan-500/20 border border-cyan-500/40 text-cyan-300">
-                        <RefreshCw className={`w-5 h-5 ${reconnectSuccess ? 'text-emerald-400' : 'animate-spin'}`} />
-                      </div>
-                      <div>
-                        <h4 className="text-sm font-bold text-white">
-                          {reconnectSuccess ? 'Central Command Reconnected!' : 'Migrating Manifexus to Unified Stack...'}
-                        </h4>
-                        <p className="text-xs text-slate-300">
-                          {reconnectSuccess
-                            ? 'Reloading dashboard to display unified stack view...'
-                            : `Central command container is restarting inside ${plan?.targetStackName || 'the new stack'} on port 3334.`}
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-slate-950 border border-cyan-500/30 text-cyan-300 font-mono">
-                        {reconnectSuccess ? 'ONLINE' : `Ping Attempt ${reconnectAttempt}/35`}
-                      </span>
-                      <button
-                        onClick={() => window.location.reload()}
-                        className="px-3 py-1.5 rounded-lg bg-cyan-500 text-slate-950 hover:bg-cyan-400 font-bold text-xs transition-colors"
-                      >
-                        Refresh Now
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="w-full bg-slate-950 rounded-full h-1.5 overflow-hidden border border-slate-800">
-                    <div
-                      className={`h-full transition-all duration-300 ${reconnectSuccess ? 'bg-emerald-400 w-full' : 'bg-cyan-400 animate-pulse w-3/4'}`}
-                    />
-                  </div>
-                </div>
-              )}
-
-              {/* Success Banner if Executed */}
-              {executionResult && (
-                <div className="p-4 rounded-xl bg-emerald-950/60 border border-emerald-500/40 text-emerald-200 text-xs space-y-2">
-                  <div className="flex items-center gap-2 font-bold text-emerald-300 text-sm">
-                    <CheckCircle2 className="w-5 h-5 text-emerald-400" />
-                    <span>{executionResult.isAutomated ? 'Automated Host Merge Executed!' : 'Merge Verification Ready!'}</span>
-                  </div>
-                  <p className="text-emerald-200/90 text-xs">
-                    {executionResult.message}
-                  </p>
-                </div>
-              )}
-
-              {/* Host Orchestration Logs Box */}
-              {executionResult?.logs && executionResult.logs.length > 0 && (
-                <div className="p-4 rounded-xl bg-slate-900/80 border border-slate-800 space-y-2">
-                  <div className="flex items-center gap-2 font-bold text-xs text-white">
-                    <Terminal className="w-4 h-4 text-cyan-400" />
-                    <span>Automated Host Orchestration Execution Logs</span>
-                  </div>
-                  <div className="p-3 rounded-lg bg-[#07090e] border border-slate-800 text-[11px] font-mono text-cyan-300 space-y-1 max-h-52 overflow-y-auto">
-                    {executionResult.logs.map((log, idx) => (
-                      <div key={idx} className="whitespace-pre-wrap">{log}</div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* CRITICAL ANSWER TO USER QUESTION: HOW TO UPDATE IMAGE FROM GITHUB */}
-              <div className="p-5 rounded-xl bg-gradient-to-br from-slate-900 via-slate-900 to-purple-950/40 border border-purple-500/40 space-y-4">
-                <div className="flex items-center gap-2.5">
-                  <div className="p-2 rounded-lg bg-purple-500/10 border border-purple-500/30 text-purple-400">
-                    <GitBranch className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <h3 className="text-sm font-bold text-white">
-                      How to Update Manifexus to the New Version from GitHub
-                    </h3>
-                    <p className="text-xs text-slate-400">
-                      Why `docker compose up -d` didn't update previously, and the exact commands to update.
-                    </p>
-                  </div>
-                </div>
-
-                <div className="p-3.5 rounded-xl bg-slate-950/80 border border-slate-800 text-xs text-slate-300 space-y-2.5 leading-relaxed">
-                  <p>
-                    <strong className="text-cyan-300">Why it didn't update before:</strong> When you run <code className="text-purple-300">docker compose up -d</code>, Docker checks if an image tagged <code className="text-cyan-300">:latest</code> already exists on your host disk. If it does, Docker reuses that cached local image and <strong>does not pull the new one from GitHub!</strong>
-                  </p>
-                  <p>
-                    <strong className="text-cyan-300">The 2-step solution:</strong> You must explicitly pull the new image digest first:
-                  </p>
-
-                  <div className="p-3 rounded-lg bg-[#07090e] border border-slate-800 text-xs font-mono text-cyan-300 space-y-1">
-                    <div className="text-slate-500"># Step 1: Pull the newly built GitHub image digest</div>
-                    <div>docker compose pull</div>
-                    <div className="text-slate-500 pt-1"># Step 2: Recreate container with the new image</div>
-                    <div>docker compose up -d</div>
-                  </div>
-
-                  <p className="text-[11px] text-slate-400">
-                    Or run both together in one line: <code className="text-white bg-slate-900 px-2 py-0.5 rounded border border-slate-800">docker compose pull && docker compose up -d</code>
-                  </p>
-                </div>
-              </div>
-
-              {/* POST-VERIFICATION & PRUNING DEPRECATED CONTAINERS */}
+            <div className="space-y-6 text-xs">
               <div className="p-4 rounded-xl bg-slate-900/60 border border-slate-800 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Trash2 className="w-4 h-4 text-rose-400" />
-                    <h4 className="text-xs font-bold text-white">
-                      Confirm & Clean Up Old Deprecated Stack Resources
-                    </h4>
-                  </div>
-                  <span className="text-[10px] text-slate-500 font-mono">Run ONLY after confirming healthy</span>
+                <div className="flex items-center gap-2 font-bold text-purple-300 text-sm">
+                  <GitBranch className="w-4 h-4 text-purple-400" />
+                  <span>State Ledger & Snapshot Storage</span>
                 </div>
-
-                <p className="text-xs text-slate-400 leading-relaxed">
-                  Only once you test that your combined services are responding normally and your data is verified 100% intact, you can run this script to prune obsolete orphan networks and archive the old compose folders.
+                <p className="text-slate-400 text-xs leading-relaxed">
+                  All merges are recorded immutably in the state ledger (<code className="text-purple-300">/app/backups/history.json</code>).
+                  You can trigger zero-loss rollbacks at any time from the Merge History viewer.
                 </p>
-
-                <div className="flex items-center gap-3 pt-1">
-                  <button
-                    onClick={() => {
-                      if (plan) copyToClipboard(plan.cleanupScript, 'cleanup');
-                    }}
-                    className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs transition-colors flex items-center gap-1.5"
-                  >
-                    {copiedType === 'cleanup' ? (
-                      <>
-                        <Check className="w-3.5 h-3.5 text-emerald-400" />
-                        <span>Copied Cleanup Script!</span>
-                      </>
-                    ) : (
-                      <>
-                        <Copy className="w-3.5 h-3.5" />
-                        <span>Copy Cleanup Script</span>
-                      </>
-                    )}
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      if (plan) copyToClipboard(plan.rollbackScript, 'rollback');
-                    }}
-                    className="px-3 py-1.5 rounded-lg bg-rose-950/60 hover:bg-rose-900/80 border border-rose-500/40 text-rose-300 text-xs transition-colors flex items-center gap-1.5"
-                  >
-                    {copiedType === 'rollback' ? (
-                      <>
-                        <Check className="w-3.5 h-3.5 text-emerald-400" />
-                        <span>Copied Rollback!</span>
-                      </>
-                    ) : (
-                      <span>Copy Emergency Rollback</span>
-                    )}
-                  </button>
+                <div className="p-3 rounded-lg bg-slate-950 border border-slate-800 text-[11px] text-slate-400 font-mono">
+                  Volume Path: <code className="text-cyan-300">/app/backups</code> (Mount to host <code className="text-cyan-300">./backups:/app/backups</code> for persistent host retention).
                 </div>
               </div>
             </div>
@@ -1288,12 +900,15 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
         </div>
 
         {/* Modal Footer Controls */}
-        <div className="px-6 py-4 bg-slate-950 border-t border-slate-800 flex items-center justify-between">
+        <div className="px-6 py-4 bg-[#07090e] border-t border-slate-800 flex items-center justify-between flex-shrink-0">
           <div>
-            {currentStep > 1 && currentStep < 4 && (
+            {currentStep > 1 && (
               <button
-                onClick={() => setCurrentStep((prev) => (prev - 1) as 1 | 2 | 3)}
-                className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-300 text-xs font-bold transition-colors"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setCurrentStep((prev) => (prev > 1 ? ((prev - 1) as 1 | 2 | 3 | 4) : 1));
+                }}
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-mono transition-colors"
               >
                 Back
               </button>
@@ -1302,222 +917,136 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
 
           <div className="flex items-center gap-3">
             <button
-              onClick={onClose}
-              className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-white text-xs font-bold transition-colors"
+              onClick={(e) => {
+                e.stopPropagation();
+                onClose();
+              }}
+              className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-white text-xs font-mono transition-colors border border-slate-800"
             >
-              Close
+              Cancel
             </button>
 
             {currentStep === 1 && (
               <button
-                onClick={() => setCurrentStep(2)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setCurrentStep(2);
+                }}
                 disabled={selectedIds.length === 0}
-                className={`px-5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
-                  selectedIds.length === 0
-                    ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
-                    : 'bg-cyan-500 text-slate-950 hover:bg-cyan-400 shadow-lg shadow-cyan-500/20'
+                className={`px-5 py-2.5 rounded-xl font-bold text-xs font-mono transition-all flex items-center gap-2 ${
+                  selectedIds.length > 0
+                    ? 'bg-cyan-500 hover:bg-cyan-400 text-slate-950 shadow-lg shadow-cyan-500/20'
+                    : 'bg-slate-800 text-slate-600 cursor-not-allowed'
                 }`}
               >
-                <span>Configure Target Stack</span>
+                <span>Continue to Target</span>
                 <ArrowRight className="w-4 h-4" />
               </button>
             )}
 
             {currentStep === 2 && (
               <button
-                onClick={generatePlan}
-                disabled={isGeneratingPlan || !targetStackName.trim()}
-                className="px-5 py-2 rounded-xl bg-cyan-500 text-slate-950 hover:bg-cyan-400 text-xs font-bold transition-all flex items-center gap-2 shadow-lg shadow-cyan-500/20"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  generatePlan();
+                }}
+                disabled={isGeneratingPlan || selectedIds.length === 0}
+                className="px-5 py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs font-mono transition-all flex items-center gap-2 shadow-lg shadow-cyan-500/20"
               >
                 {isGeneratingPlan ? (
-                  <>
-                    <RefreshCw className="w-4 h-4 animate-spin" />
-                    <span>Auditing Volumes & Generating YAML...</span>
-                  </>
+                  <RefreshCw className="w-4 h-4 animate-spin" />
                 ) : (
-                  <>
-                    <ShieldCheck className="w-4 h-4" />
-                    <span>Audit Volumes & Generate Plan</span>
-                    <ArrowRight className="w-4 h-4" />
-                  </>
+                  <Zap className="w-4 h-4" />
                 )}
+                <span>Generate Plan & Review</span>
               </button>
             )}
 
-            {currentStep === 3 && (
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setCurrentStep(4)}
-                  className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition-colors"
-                >
-                  GitHub Update Guide
-                </button>
-
-                {privileges?.canAutoExecute ? (
-                  <button
-                    onClick={() => setShowConfirmExecuteDialog(true)}
-                    disabled={isExecuting}
-                    className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold transition-all flex items-center gap-2 shadow-lg shadow-emerald-500/20"
-                  >
-                    {isExecuting ? (
-                      <>
-                        <RefreshCw className="w-4 h-4 animate-spin" />
-                        <span>Executing Live on Host...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Zap className="w-4 h-4" />
-                        <span>Execute Automated Merge</span>
-                      </>
-                    )}
-                  </button>
-                ) : (
-                  <button
-                    onClick={() => setShowConfirmExecuteDialog(true)}
-                    disabled={isExecuting}
-                    className="px-5 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-bold transition-all flex items-center gap-2 shadow-lg shadow-cyan-500/20"
-                  >
-                    {isExecuting ? (
-                      <>
-                        <RefreshCw className="w-4 h-4 animate-spin" />
-                        <span>Checking Fleet...</span>
-                      </>
-                    ) : (
-                      <>
-                        <CheckCircle2 className="w-4 h-4" />
-                        <span>Next: Verification & Guide</span>
-                      </>
-                    )}
-                  </button>
-                )}
-              </div>
-            )}
-
-            {currentStep === 4 && (
+            {currentStep === 3 && plan && (
               <button
-                onClick={onClose}
-                className="px-5 py-2 rounded-xl bg-cyan-500 text-slate-950 hover:bg-cyan-400 text-xs font-bold transition-all"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowConfirmExecuteDialog(true);
+                }}
+                className="px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs font-mono transition-all flex items-center gap-2 shadow-lg shadow-emerald-500/20"
               >
-                Done
+                <Zap className="w-4 h-4" />
+                <span>Execute Live Pipeline</span>
               </button>
             )}
           </div>
         </div>
+
+        {/* Confirmation Modal Overlay */}
+        {showConfirmExecuteDialog && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in"
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowConfirmExecuteDialog(false);
+            }}
+          >
+            <div
+              className="w-full max-w-md bg-[#0d121f] border border-cyan-500/40 rounded-2xl p-6 shadow-2xl space-y-4 font-mono text-slate-200"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-start gap-3">
+                <div className="p-3 rounded-xl bg-cyan-950 border border-cyan-500/40 text-cyan-400 flex-shrink-0">
+                  <Zap className="w-6 h-6" />
+                </div>
+                <div>
+                  <h4 className="text-base font-bold text-white">
+                    Start Execution Pipeline?
+                  </h4>
+                  <p className="text-xs text-slate-400 mt-1">
+                    This will run the live 7-step sequence to migrate {selectedContainersList.length} service(s) into <code className="text-cyan-300 font-bold">{targetDirectory}</code> with an automatic pre-merge backup in <code className="text-purple-300">/app/backups</code>.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-3 pt-2">
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowConfirmExecuteDialog(false);
+                  }}
+                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={(e) => triggerStreamingExecution(e)}
+                  className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold flex items-center gap-2 shadow-lg shadow-emerald-500/30"
+                >
+                  <Play className="w-3.5 h-3.5 fill-current" />
+                  <span>Start Pipeline</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
       </div>
 
-      {/* Confirmation & Warning Popup Modal for Host Automated Execution */}
-      {showConfirmExecuteDialog && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-150">
-          <div className="w-full max-w-xl bg-[#0b0f19] border border-cyan-500/40 rounded-2xl shadow-2xl overflow-hidden font-mono text-xs">
-            <div className="px-6 py-4 bg-gradient-to-r from-slate-900 to-purple-950/60 border-b border-slate-800 flex items-center justify-between">
-              <div className="flex items-center gap-2.5 font-bold text-white text-sm">
-                <AlertTriangle className="w-5 h-5 text-amber-400" />
-                <span>Confirm Automated Host Stack Merge</span>
-              </div>
-              <button
-                onClick={() => setShowConfirmExecuteDialog(false)}
-                className="text-slate-400 hover:text-white transition-colors"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="p-6 space-y-4 text-slate-300 leading-relaxed">
-              <div className="p-3 rounded-xl bg-amber-950/40 border border-amber-500/30 text-amber-200 text-xs flex items-start gap-2.5">
-                <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
-                <div>
-                  <strong className="block text-amber-300">Warning: Host System Orchestration</strong>
-                  This action will orchestrate Docker directly on your Ubuntu host filesystem to consolidate standalone containers into <code className="text-cyan-300 font-bold">{plan?.targetStackName}</code>.
-                </div>
-              </div>
-
-              <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800/80 space-y-2.5 text-[11px]">
-                <div className="font-bold text-slate-200 mb-1 border-b border-slate-800 pb-1 flex items-center justify-between">
-                  <span>Automated Execution Operations:</span>
-                  <span className="text-[10px] text-cyan-400 font-normal">Safe Atomic Operations</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-slate-400">1. Target Host Compose:</span>
-                  <span className="font-bold text-cyan-300 font-mono">{plan?.targetDirectory}/docker-compose.yml</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-slate-400">2. Pre-Merge Safety Backup:</span>
-                  <span className="font-bold text-emerald-400 font-mono">docker-compose.backup.yml</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-slate-400">3. Services in Final Stack:</span>
-                  <span className="font-bold text-cyan-300">
-                    {plan?.services?.map((s) => s.serviceName).join(', ') ||
-                      selectedContainersList.map((c) => c.cleanName).join(', ')}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-slate-400">4. Foreign Containers Replaced:</span>
-                  <span className="font-bold text-purple-300">
-                    {selectedContainersList
-                      .filter((c) => c.compose?.project !== plan?.targetStackName)
-                      .map((c) => c.cleanName)
-                      .join(', ') || 'None (all belong to target stack)'}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-slate-400">5. Target Stack Services:</span>
-                  <span className="font-bold text-emerald-400">
-                    Preserved & hot-reloaded smoothly
-                  </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-slate-400">6. Storage Volumes:</span>
-                  <span className="font-bold text-emerald-400">100% Retained and Preserved</span>
-                </div>
-              </div>
-
-              {isSelfMergeOnly && (
-                <div className="p-3 rounded-xl bg-amber-950/40 border border-amber-500/30 text-amber-200 text-xs flex items-start gap-2.5">
-                  <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
-                  <div>
-                    <strong className="block text-amber-300">Notice: No External Apps Selected</strong>
-                    You are consolidating "{plan?.targetStackName}" with its existing services. Manifexus and standalone containers are not being added.
-                  </div>
-                </div>
-              )}
-
-              {!privileges?.canAutoExecute && (
-                <div className="p-3 rounded-xl bg-purple-950/40 border border-purple-500/40 text-xs text-purple-200">
-                  <p className="font-bold text-purple-300 mb-1">Notice: Sandboxed Mode</p>
-                  Because Manifexus is currently running with a read-only Docker socket, automatic filesystem writing requires host elevation. If not elevated, Manifexus will advance you to the verified 3-step guide to run in 5 seconds on your host.
-                </div>
-              )}
-            </div>
-
-            <div className="px-6 py-4 bg-slate-900/90 border-t border-slate-800 flex items-center justify-end gap-3">
-              <button
-                onClick={() => setShowConfirmExecuteDialog(false)}
-                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={executeMerge}
-                disabled={isExecuting}
-                className="px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold transition-all flex items-center gap-2 shadow-lg shadow-emerald-500/20"
-              >
-                {isExecuting ? (
-                  <>
-                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                    <span>Executing Live on Host...</span>
-                  </>
-                ) : (
-                  <>
-                    <Zap className="w-3.5 h-3.5" />
-                    <span>Confirm & Execute Live Merge</span>
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Directive 3 & 4: GitHub Actions-Style Live Execution Pipeline Console */}
+      <ExecutionPipelineConsole
+        isOpen={isPipelineConsoleOpen}
+        onClose={() => setIsPipelineConsoleOpen(false)}
+        title={
+          pipelineMode === 'merge'
+            ? `Pipeline: Deploying Stack "${plan?.targetStackName || targetStackName}"`
+            : `Rollback: Reverting Stack to Pre-Merge State`
+        }
+        mode={pipelineMode}
+        mergeId={pipelineMergeId}
+        streamUrl={pipelineStreamUrl}
+        streamPayload={pipelineStreamPayload}
+        onKeepChanges={handleKeepChanges}
+        onTriggerRevert={handleTriggerRevert}
+        onSuccessDone={() => {
+          if (onMergeSuccess) onMergeSuccess();
+        }}
+      />
     </div>
   );
 };
