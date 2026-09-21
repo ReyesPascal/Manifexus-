@@ -92,3 +92,44 @@ export interface SystemStatus {
   stoppedContainers: number;
   composeStacksCount: number;
 }
+
+export interface VolumeSafetyAuditItem {
+  service: string;
+  type: 'bind' | 'named_volume';
+  source: string;
+  destination: string;
+  verdict: 'safe_absolute' | 'safe_external_volume' | 'safe_converted_absolute' | 'requires_migration';
+  badgeText: string;
+  explanation: string;
+}
+
+export interface PortConflictItem {
+  port: number;
+  services: string[];
+  conflict: boolean;
+  recommendation?: string;
+}
+
+export interface StackMergePlan {
+  targetStackName: string;
+  targetDirectory: string;
+  mode: 'existing-stack' | 'new-stack';
+  sourceStacks: string[];
+  sourceContainersCount: number;
+  services: {
+    serviceName: string;
+    containerName: string;
+    image: string;
+    ports: string[];
+    volumes: string[];
+    originalProject?: string;
+    originalWorkingDir?: string;
+  }[];
+  volumeSafetyAudit: VolumeSafetyAuditItem[];
+  portConflicts: PortConflictItem[];
+  generatedComposeYaml: string;
+  migrationScript: string;
+  rollbackScript: string;
+  cleanupScript: string;
+}
+

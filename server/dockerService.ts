@@ -93,6 +93,9 @@ const ICON_LOOKUP: Record<string, string> = {
   mealie: 'https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/mealie.png',
   adguard: 'https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/adguard-home.png',
   'adguard-home': 'https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/adguard-home.png',
+  nzbdav: 'https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/sabnzbd.png',
+  sabnzbd: 'https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/sabnzbd.png',
+  nzbget: 'https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/nzbget.png',
 };
 
 export function resolveAppIcon(appName: string, imageStr: string): string {
@@ -190,6 +193,9 @@ export function classifyPort(
   }
   if (norm.includes('deluge') && (priv === 8112 || pub === 8112)) {
     return { role: 'web', label: 'Web UI', score: score + 1000 };
+  }
+  if (norm.includes('nzbdav') && (priv === 3000 || pub === 3000)) {
+    return { role: 'web', label: 'NZBDAV Web', score: score + 1000 };
   }
   if (norm.includes('transmission') && (priv === 9091 || pub === 9091)) {
     return { role: 'web', label: 'Web UI', score: score + 1000 };
@@ -329,17 +335,45 @@ export function parseRawContainer(inspectData: any): DeepContainerMetadata {
     }
   }
 
+  // Deduplicate ports: Docker often returns both IPv4 (0.0.0.0) and IPv6 (::) for the same port binding
+  const dedupedPorts: ContainerPort[] = [];
+  const seenPortKeys = new Set<string>();
+
+  for (const p of ports) {
+    const key =
+      p.publicPort !== undefined
+        ? `${p.publicPort}->${p.privatePort}/${p.type}`
+        : `priv:${p.privatePort}/${p.type}`;
+
+    if (!seenPortKeys.has(key)) {
+      seenPortKeys.add(key);
+      dedupedPorts.push(p);
+    } else {
+      // If previous entry had IPv6 '::' and this one has IPv4 '0.0.0.0', prefer IPv4
+      const existing = dedupedPorts.find((item) => {
+        const itemKey =
+          item.publicPort !== undefined
+            ? `${item.publicPort}->${item.privatePort}/${item.type}`
+            : `priv:${item.privatePort}/${item.type}`;
+        return itemKey === key;
+      });
+      if (existing && existing.ip?.includes(':') && p.ip && !p.ip.includes(':')) {
+        existing.ip = p.ip;
+      }
+    }
+  }
+
   const containerImage = inspectData.Config?.Image || inspectData.Image || '';
 
   // Classify each port and assign suggested roles and labels
-  for (const port of ports) {
+  for (const port of dedupedPorts) {
     const classification = classifyPort(port, cleanName, containerImage);
     port.suggestedRole = classification.role;
     port.label = classification.label;
   }
 
   // Find primary web port using intelligent multi-port scoring
-  const scoredPorts = ports.map((p) => ({
+  const scoredPorts = dedupedPorts.map((p) => ({
     port: p,
     score: classifyPort(p, cleanName, containerImage).score,
   }));
@@ -412,7 +446,7 @@ export function parseRawContainer(inspectData: any): DeepContainerMetadata {
     created: createdTime,
     command: Array.isArray(inspectData.Config?.Cmd) ? inspectData.Config.Cmd.join(' ') : inspectData.Command,
     entrypoint: Array.isArray(inspectData.Config?.Entrypoint) ? inspectData.Config.Entrypoint.join(' ') : undefined,
-    ports,
+    ports: dedupedPorts,
     primaryPort,
     mounts,
     envVars,
@@ -664,86 +698,169 @@ let demoContainers: DeepContainerMetadata[] = [
     iconUrl: 'https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/portainer.png',
   },
   {
-    id: '4d156b829cc1',
-    name: '/nextcloud-hub',
-    cleanName: 'nextcloud-hub',
-    image: 'nextcloud:28-apache',
-    baseImage: 'nextcloud:28-apache',
+    id: '2af7fdd5b531',
+    name: '/utilities-stack-app-1',
+    cleanName: 'utilities-stack-app-1',
+    image: 'nextcloud',
+    baseImage: 'nextcloud',
     state: 'running',
-    status: 'Up 3 days',
-    created: Math.floor(Date.now() / 1000) - 259200,
+    status: 'Up 4 days (healthy)',
+    created: Math.floor(Date.now() / 1000) - 345600,
     ports: [
-      { ip: '0.0.0.0', privatePort: 80, publicPort: 8088, type: 'tcp' },
+      { ip: '0.0.0.0', privatePort: 80, publicPort: 8082, type: 'tcp', suggestedRole: 'web', label: 'HTTP' },
     ],
-    primaryPort: 8088,
+    primaryPort: 8082,
     mounts: [
-      { type: 'bind', source: '/mnt/storage/nextcloud_data', destination: '/var/www/html/data', rw: true },
-      { type: 'bind', source: '/home/ubuntu/appdata/nextcloud/config', destination: '/var/www/html/config', rw: true },
+      { type: 'bind', source: '/home/ryan/utilities-stack/nextcloud_data', destination: '/var/www/html', rw: true },
+      { type: 'volume', source: 'utilities-stack_nextcloud', destination: '/var/www/html/config', rw: true },
     ],
     envVars: [
-      { key: 'POSTGRES_HOST', value: 'db-postgres', isSensitive: false },
-      { key: 'POSTGRES_DB', value: 'nextcloud', isSensitive: false },
-      { key: 'POSTGRES_USER', value: 'oc_admin', isSensitive: false },
-      { key: 'POSTGRES_PASSWORD', value: 'db••••••••', isSensitive: true },
-      { key: 'NEXTCLOUD_ADMIN_USER', value: 'sysadmin', isSensitive: false },
-      { key: 'NEXTCLOUD_ADMIN_PASSWORD', value: 'ad••••••••', isSensitive: true },
+      { key: 'MYSQL_HOST', value: 'utilities-stack-db-1', isSensitive: false },
+      { key: 'MYSQL_DATABASE', value: 'nextcloud', isSensitive: false },
+      { key: 'MYSQL_USER', value: 'nextcloud', isSensitive: false },
+      { key: 'MYSQL_PASSWORD', value: 'db••••••••', isSensitive: true },
     ],
     labels: {
-      'com.docker.compose.project': 'cloud-suite',
+      'com.docker.compose.project': 'utilities-stack',
       'com.docker.compose.service': 'app',
-      'com.docker.compose.project.working_dir': '/home/ubuntu/docker/cloud-suite',
-      'com.docker.compose.project.config_files': '/home/ubuntu/docker/cloud-suite/docker-compose.yml',
+      'com.docker.compose.project.working_dir': '/home/ryan/utilities-stack',
+      'com.docker.compose.project.config_files': '/home/ryan/utilities-stack/docker-compose.yml',
+      'com.docker.compose.version': '2.27.0',
     },
     compose: {
       isCompose: true,
-      project: 'cloud-suite',
+      project: 'utilities-stack',
       service: 'app',
-      workingDir: '/home/ubuntu/docker/cloud-suite',
-      configFiles: '/home/ubuntu/docker/cloud-suite/docker-compose.yml',
+      workingDir: '/home/ryan/utilities-stack',
+      configFiles: '/home/ryan/utilities-stack/docker-compose.yml',
+      version: '2.27.0',
     },
-    networks: ['cloud-suite_internal'],
-    ipAddress: '172.19.0.3',
+    networks: ['utilities-stack_default'],
+    ipAddress: '172.20.0.3',
     restartPolicy: 'unless-stopped',
     iconUrl: 'https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/nextcloud.png',
   },
   {
-    id: '92e8ca4b11f3',
-    name: '/db-postgres',
-    cleanName: 'db-postgres',
-    image: 'postgres:16-alpine',
-    baseImage: 'postgres:16-alpine',
+    id: '7f96ddf5ee28',
+    name: '/utilities-stack-db-1',
+    cleanName: 'utilities-stack-db-1',
+    image: 'mariadb:10.11',
+    baseImage: 'mariadb:10.11',
     state: 'running',
-    status: 'Up 3 days (healthy)',
-    created: Math.floor(Date.now() / 1000) - 259200,
+    status: 'Up 4 days (healthy)',
+    created: Math.floor(Date.now() / 1000) - 345600,
     ports: [
-      { ip: '127.0.0.1', privatePort: 5432, publicPort: 5432, type: 'tcp' },
+      { ip: '0.0.0.0', privatePort: 3306, publicPort: 3306, type: 'tcp', suggestedRole: 'database', label: 'MySQL / MariaDB' },
     ],
-    primaryPort: 5432,
+    primaryPort: 3306,
     mounts: [
-      { type: 'bind', source: '/home/ubuntu/appdata/postgres/data', destination: '/var/lib/postgresql/data', rw: true },
+      { type: 'bind', source: '/home/ryan/utilities-stack/db_data', destination: '/var/lib/mysql', rw: true },
     ],
     envVars: [
-      { key: 'POSTGRES_DB', value: 'nextcloud', isSensitive: false },
-      { key: 'POSTGRES_USER', value: 'oc_admin', isSensitive: false },
-      { key: 'POSTGRES_PASSWORD', value: 'db••••••••', isSensitive: true },
+      { key: 'MYSQL_ROOT_PASSWORD', value: 'root••••••••', isSensitive: true },
+      { key: 'MYSQL_DATABASE', value: 'nextcloud', isSensitive: false },
+      { key: 'MYSQL_USER', value: 'nextcloud', isSensitive: false },
+      { key: 'MYSQL_PASSWORD', value: 'db••••••••', isSensitive: true },
     ],
     labels: {
-      'com.docker.compose.project': 'cloud-suite',
+      'com.docker.compose.project': 'utilities-stack',
       'com.docker.compose.service': 'db',
-      'com.docker.compose.project.working_dir': '/home/ubuntu/docker/cloud-suite',
-      'com.docker.compose.project.config_files': '/home/ubuntu/docker/cloud-suite/docker-compose.yml',
+      'com.docker.compose.project.working_dir': '/home/ryan/utilities-stack',
+      'com.docker.compose.project.config_files': '/home/ryan/utilities-stack/docker-compose.yml',
+      'com.docker.compose.version': '2.27.0',
     },
     compose: {
       isCompose: true,
-      project: 'cloud-suite',
+      project: 'utilities-stack',
       service: 'db',
-      workingDir: '/home/ubuntu/docker/cloud-suite',
-      configFiles: '/home/ubuntu/docker/cloud-suite/docker-compose.yml',
+      workingDir: '/home/ryan/utilities-stack',
+      configFiles: '/home/ryan/utilities-stack/docker-compose.yml',
+      version: '2.27.0',
     },
-    networks: ['cloud-suite_internal'],
-    ipAddress: '172.19.0.2',
+    networks: ['utilities-stack_default'],
+    ipAddress: '172.20.0.2',
     restartPolicy: 'unless-stopped',
-    iconUrl: 'https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/postgresql.png',
+  },
+  {
+    id: '5e37555da661',
+    name: '/manifexus',
+    cleanName: 'manifexus',
+    image: 'ghcr.io/reyespascal/manifexus:latest',
+    baseImage: 'ghcr.io/reyespascal/manifexus:latest',
+    state: 'running',
+    status: 'Up 1 day',
+    created: Math.floor(Date.now() / 1000) - 86400,
+    ports: [
+      { ip: '0.0.0.0', privatePort: 3334, publicPort: 3334, type: 'tcp', suggestedRole: 'web', label: 'WEB UI' },
+    ],
+    primaryPort: 3334,
+    mounts: [
+      { type: 'bind', source: '/var/run/docker.sock', destination: '/var/run/docker.sock', rw: false },
+      { type: 'bind', source: '/home/ryan/manifexus/data', destination: '/data', rw: true },
+    ],
+    envVars: [
+      { key: 'NODE_ENV', value: 'production', isSensitive: false },
+      { key: 'PORT', value: '3334', isSensitive: false },
+      { key: 'DOCKER_SOCKET_PATH', value: '/var/run/docker.sock', isSensitive: false },
+    ],
+    labels: {
+      'com.docker.compose.project': 'manifexus',
+      'com.docker.compose.service': 'manifexus',
+      'com.docker.compose.project.working_dir': '/home/ryan/manifexus',
+      'com.docker.compose.project.config_files': '/home/ryan/manifexus/docker-compose.yml',
+      'com.docker.compose.version': '2.27.0',
+    },
+    compose: {
+      isCompose: true,
+      project: 'manifexus',
+      service: 'manifexus',
+      workingDir: '/home/ryan/manifexus',
+      configFiles: '/home/ryan/manifexus/docker-compose.yml',
+      version: '2.27.0',
+    },
+    networks: ['manifexus_default'],
+    ipAddress: '172.21.0.2',
+    restartPolicy: 'unless-stopped',
+  },
+  {
+    id: 'a1b2c3d4e5f6',
+    name: '/nzbdav',
+    cleanName: 'nzbdav',
+    image: 'nzbdav/nzbdav:latest',
+    baseImage: 'nzbdav/nzbdav:latest',
+    state: 'running',
+    status: 'Up 3 days',
+    created: Math.floor(Date.now() / 1000) - 259200,
+    ports: [
+      { ip: '0.0.0.0', privatePort: 3000, publicPort: 3000, type: 'tcp', suggestedRole: 'web', label: 'Web UI' },
+    ],
+    primaryPort: 3000,
+    mounts: [
+      { type: 'bind', source: '/home/ryan/appdata/nzbdav/config', destination: '/config', rw: true },
+      { type: 'bind', source: '/mnt/media/downloads', destination: '/downloads', rw: true },
+    ],
+    envVars: [
+      { key: 'PORT', value: '3000', isSensitive: false },
+      { key: 'PUID', value: '1000', isSensitive: false },
+      { key: 'PGID', value: '1000', isSensitive: false },
+    ],
+    labels: {
+      'com.docker.compose.project': 'media-stack',
+      'com.docker.compose.service': 'nzbdav',
+      'com.docker.compose.project.working_dir': '/home/ryan/media-stack',
+      'com.docker.compose.project.config_files': '/home/ryan/media-stack/docker-compose.yml',
+    },
+    compose: {
+      isCompose: true,
+      project: 'media-stack',
+      service: 'nzbdav',
+      workingDir: '/home/ryan/media-stack',
+      configFiles: '/home/ryan/media-stack/docker-compose.yml',
+    },
+    networks: ['media-stack_default'],
+    ipAddress: '172.17.0.12',
+    restartPolicy: 'unless-stopped',
+    iconUrl: 'https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/sabnzbd.png',
   },
   {
     id: '6b110a789ef2',
@@ -966,3 +1083,28 @@ export async function executeContainerAction(
 export function addDemoContainer(newContainer: DeepContainerMetadata): void {
   demoContainers.unshift(newContainer);
 }
+
+// Helper to simulate combining apps into a stack in demo mode
+export function mergeDemoContainersIntoStack(
+  containerIds: string[],
+  targetStackName: string,
+  targetWorkingDir: string
+): boolean {
+  for (const c of demoContainers) {
+    if (containerIds.includes(c.id) || containerIds.includes(c.cleanName)) {
+      c.compose = {
+        isCompose: true,
+        project: targetStackName,
+        service: c.compose?.service || c.cleanName.replace(/[^a-zA-Z0-9_-]/g, '-'),
+        workingDir: targetWorkingDir,
+        configFiles: `${targetWorkingDir}/docker-compose.yml`,
+        version: '2.27.0',
+      };
+      c.labels['com.docker.compose.project'] = targetStackName;
+      c.labels['com.docker.compose.project.working_dir'] = targetWorkingDir;
+      c.labels['com.docker.compose.project.config_files'] = `${targetWorkingDir}/docker-compose.yml`;
+    }
+  }
+  return true;
+}
+

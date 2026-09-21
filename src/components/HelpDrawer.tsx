@@ -196,10 +196,33 @@ export const HelpDrawer: React.FC<HelpDrawerProps> = ({ isOpen, onClose }) => {
           <section className="space-y-2">
             <h3 className="text-sm font-bold text-cyan-400 flex items-center gap-2">
               <GitBranch className="w-4 h-4" />
-              5. Automated CI/CD with GHCR
+              5. How to Update Manifexus from GitHub (2 Steps)
             </h3>
             <p className="text-slate-400">
-              The included <code className="text-slate-200">.github/workflows/docker-publish.yml</code> automatically builds multi-arch (<code className="text-slate-300">amd64</code> and <code className="text-slate-300">arm64</code>) Docker images on every push to your repository and releases them to GitHub Container Registry.
+              When GitHub Actions builds your updated code, Docker on your server will not automatically download it unless you pull the new tag:
+            </p>
+            <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-2 text-[11px] font-mono">
+              <div className="text-slate-400"># 1. Download newest image build from GitHub:</div>
+              <div className="text-cyan-300 font-bold">docker compose pull</div>
+              <div className="text-slate-400 pt-1"># 2. Re-create container with new image:</div>
+              <div className="text-cyan-300 font-bold">docker compose up -d</div>
+            </div>
+            <p className="text-slate-400 text-[11px]">
+              Running <code className="text-purple-300">docker compose pull && docker compose up -d</code> takes ~5 seconds and preserves your persistent volumes.
+            </p>
+          </section>
+
+          {/* 6. Stack Merger & Migration Studio */}
+          <section className="space-y-2">
+            <h3 className="text-sm font-bold text-purple-400 flex items-center gap-2">
+              <Layers className="w-4 h-4" />
+              6. Stack Merger & Migration Studio
+            </h3>
+            <p className="text-slate-400">
+              Need to combine two separate apps (like adding Manifexus into your <code className="text-purple-300">utilities-stack</code> or creating a new stack like <code className="text-cyan-300">test-stack</code>)?
+            </p>
+            <p className="text-slate-400">
+              Click <strong className="text-white">Merge Stacks</strong> in the top navigation or on any app card. Manifexus inspects your bind mounts and named volumes, converts relative paths to host absolute paths, and marks named volumes with <code className="text-emerald-400 font-bold">external: true</code> so 100% of your data and configurations remain untouched.
             </p>
           </section>
         </div>

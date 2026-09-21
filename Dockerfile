@@ -20,6 +20,7 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 ENV PORT=3334
+ENV MANIFEXUS_DOCKER=true
 ENV DOCKER_SOCKET_PATH=/var/run/docker.sock
 
 # Create persistent storage directory

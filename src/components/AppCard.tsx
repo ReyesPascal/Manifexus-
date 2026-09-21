@@ -25,6 +25,7 @@ interface AppCardProps {
   onAssignGroup: (containerId: string, groupId: string) => void;
   onAction: (containerId: string, action: 'start' | 'stop' | 'restart') => Promise<void>;
   onSetPrimaryPort?: (containerId: string, port: number) => void;
+  onMergeToStack?: (container: DeepContainerMetadata) => void;
 }
 
 export const AppCard: React.FC<AppCardProps> = ({
@@ -35,6 +36,7 @@ export const AppCard: React.FC<AppCardProps> = ({
   onAssignGroup,
   onAction,
   onSetPrimaryPort,
+  onMergeToStack,
 }) => {
   const [imgError, setImgError] = useState(false);
   const [isActing, setIsActing] = useState(false);
@@ -150,6 +152,19 @@ export const AppCard: React.FC<AppCardProps> = ({
 
         {/* Info & Inspect trigger */}
         <div className="flex items-center gap-1">
+          {onMergeToStack && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onMergeToStack(container);
+              }}
+              className="p-1.5 rounded-lg bg-slate-900/90 text-slate-400 hover:text-purple-300 hover:bg-purple-950/40 border border-slate-800 hover:border-purple-500/40 transition-all"
+              title="Add to Stack or Combine with other apps"
+            >
+              <Layers className="w-3.5 h-3.5 text-purple-400" />
+            </button>
+          )}
+
           <button
             onClick={(e) => {
               e.stopPropagation();

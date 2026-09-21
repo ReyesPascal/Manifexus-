@@ -25,6 +25,7 @@ interface NavbarProps {
   onOpenSettings: () => void;
   onOpenGroupManager: () => void;
   onOpenSimulateModal: () => void;
+  onOpenStackMerger?: () => void;
   onRefresh: () => void;
   isRefreshing: boolean;
 }
@@ -41,6 +42,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenSettings,
   onOpenGroupManager,
   onOpenSimulateModal,
+  onOpenStackMerger,
   onRefresh,
   isRefreshing,
 }) => {
@@ -223,6 +225,18 @@ export const Navbar: React.FC<NavbarProps> = ({
 
           {/* Action buttons */}
           <div className="hidden md:flex items-center gap-1.5">
+            {/* Combine / Merge Stacks Studio */}
+            {onOpenStackMerger && (
+              <button
+                onClick={onOpenStackMerger}
+                className="px-2.5 py-1.5 rounded-lg bg-purple-950/80 border border-purple-500/40 text-xs font-mono text-purple-300 hover:bg-purple-900/60 transition-colors flex items-center gap-1.5 shadow-[0_0_12px_rgba(168,85,247,0.15)]"
+                title="Combine separate Docker Compose apps into a single stack"
+              >
+                <Layers className="w-3.5 h-3.5 text-purple-400" />
+                <span>Merge Stacks</span>
+              </button>
+            )}
+
             {/* Quick Simulate in Demo Mode */}
             {systemStatus?.isDemoMode && (
               <button

@@ -7,17 +7,26 @@ import {
   isDockerSocketAvailable,
   addDemoContainer,
   resolveAppIcon,
+  mergeDemoContainersIntoStack,
 } from './server/dockerService';
 import {
   getConfig,
   saveConfig,
   updateAppOverride,
 } from './server/storageService';
+import { generateStackMergePlan, MergePlanRequest } from './server/stackService';
 import { DeepContainerMetadata } from './src/types';
 
 async function startServer() {
   const app = express();
-  const PORT = process.env.NODE_ENV === 'production' ? Number(process.env.PORT || 3334) : 3000;
+  // In the production Docker container deployed on your host, it listens on PORT (3334),
+  // binding strictly to 3334:3334 on your host and leaving host port 3000 100% free for apps like nzbdav.
+  // In the AI Studio cloud sandbox dev preview, it binds to 3000 as required by the reverse proxy.
+  const PORT = process.env.MANIFEXUS_DOCKER === 'true'
+    ? parseInt(process.env.PORT || '3334', 10)
+    : (process.env.NODE_ENV === 'production' && process.env.PORT && process.env.PORT !== '8080')
+      ? parseInt(process.env.PORT, 10)
+      : 3000;
 
   app.use(express.json());
 
@@ -248,6 +257,64 @@ async function startServer() {
 
     addDemoContainer(mockContainer);
     res.json({ success: true, container: mockContainer });
+  });
+
+  // Generate safe Docker Compose stack merge plan
+  app.post('/api/stacks/plan-merge', async (req, res) => {
+    try {
+      const { sourceContainerIds, targetStackName, targetDirectory, mode, volumeHandling } = req.body as MergePlanRequest;
+
+      if (!Array.isArray(sourceContainerIds) || sourceContainerIds.length === 0) {
+        return res.status(400).json({ error: 'Please select at least one container or stack to merge.' });
+      }
+
+      const { containers } = await getContainersList();
+      const selectedContainers = containers.filter(
+        (c) => sourceContainerIds.includes(c.id) || sourceContainerIds.includes(c.cleanName)
+      );
+
+      if (selectedContainers.length === 0) {
+        return res.status(404).json({ error: 'None of the selected containers were found.' });
+      }
+
+      const plan = generateStackMergePlan(selectedContainers, {
+        sourceContainerIds,
+        targetStackName: targetStackName || 'combined-stack',
+        targetDirectory: targetDirectory || `/home/ryan/${targetStackName || 'combined-stack'}`,
+        mode: mode || 'new-stack',
+        volumeHandling: volumeHandling || 'preserve-absolute',
+      });
+
+      res.json(plan);
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // Execute / confirm stack merge
+  app.post('/api/stacks/execute-merge', async (req, res) => {
+    try {
+      const { sourceContainerIds, targetStackName, targetDirectory } = req.body;
+
+      if (!Array.isArray(sourceContainerIds) || sourceContainerIds.length === 0) {
+        return res.status(400).json({ error: 'Source container IDs required' });
+      }
+
+      const targetDir = targetDirectory || `/home/ryan/${targetStackName || 'combined-stack'}`;
+      const stackName = targetStackName || 'combined-stack';
+
+      // Update in-memory state for immediate reactive UI update
+      mergeDemoContainersIntoStack(sourceContainerIds, stackName, targetDir);
+
+      res.json({
+        success: true,
+        message: `Services successfully consolidated into '${stackName}' at ${targetDir}!`,
+        targetStackName: stackName,
+        targetDirectory: targetDir,
+      });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
   });
 
   // Mount Vite middleware in development or static files in production

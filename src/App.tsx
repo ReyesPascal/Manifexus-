@@ -27,6 +27,7 @@ import { HelpDrawer } from './components/HelpDrawer';
 import { GroupManagerModal } from './components/GroupManagerModal';
 import { SettingsModal } from './components/SettingsModal';
 import { SimulateContainerModal } from './components/SimulateContainerModal';
+import { StackMergeModal } from './components/StackMergeModal';
 
 export default function App() {
   const [containers, setContainers] = useState<DeepContainerMetadata[]>([]);
@@ -47,6 +48,9 @@ export default function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isGroupManagerOpen, setIsGroupManagerOpen] = useState(false);
   const [isSimulateOpen, setIsSimulateOpen] = useState(false);
+  const [isMergeModalOpen, setIsMergeModalOpen] = useState(false);
+  const [mergeModalInitialIds, setMergeModalInitialIds] = useState<string[]>([]);
+  const [mergeModalInitialStack, setMergeModalInitialStack] = useState<string | undefined>(undefined);
 
   // Fetch Container Telemetry & System Status
   const fetchData = useCallback(async (showRefreshingState = false) => {
@@ -329,6 +333,11 @@ export default function App() {
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenGroupManager={() => setIsGroupManagerOpen(true)}
         onOpenSimulateModal={() => setIsSimulateOpen(true)}
+        onOpenStackMerger={() => {
+          setMergeModalInitialIds([]);
+          setMergeModalInitialStack(undefined);
+          setIsMergeModalOpen(true);
+        }}
         onRefresh={() => fetchData(true)}
         isRefreshing={isRefreshing}
       />
@@ -459,6 +468,11 @@ export default function App() {
                           onAssignGroup={handleAssignGroup}
                           onAction={handleContainerAction}
                           onSetPrimaryPort={handleSetPrimaryPort}
+                          onMergeToStack={(c) => {
+                            setMergeModalInitialIds([c.id]);
+                            setMergeModalInitialStack(c.compose?.project);
+                            setIsMergeModalOpen(true);
+                          }}
                         />
                       ))}
                     </div>
@@ -500,6 +514,11 @@ export default function App() {
                       onAssignGroup={handleAssignGroup}
                       onAction={handleContainerAction}
                       onSetPrimaryPort={handleSetPrimaryPort}
+                      onMergeToStack={(c) => {
+                        setMergeModalInitialIds([c.id]);
+                        setMergeModalInitialStack(c.compose?.project);
+                        setIsMergeModalOpen(true);
+                      }}
                     />
                   ))}
                 </div>
@@ -541,11 +560,25 @@ export default function App() {
                     </div>
                   </div>
 
-                  {stackData.configFiles && (
-                    <div className="text-[11px] font-mono text-slate-500 truncate max-w-xs self-start sm:self-center bg-slate-950 px-2 py-1 rounded border border-slate-800">
-                      {stackData.configFiles}
-                    </div>
-                  )}
+                  <div className="flex items-center gap-2 self-start sm:self-center">
+                    {stackData.configFiles && (
+                      <div className="text-[11px] font-mono text-slate-500 truncate max-w-xs bg-slate-950 px-2 py-1 rounded border border-slate-800 hidden md:block">
+                        {stackData.configFiles}
+                      </div>
+                    )}
+                    <button
+                      onClick={() => {
+                        setMergeModalInitialStack(projectName);
+                        setMergeModalInitialIds(stackData.containers.map((c) => c.id));
+                        setIsMergeModalOpen(true);
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-purple-950/80 hover:bg-purple-900 border border-purple-500/40 text-purple-200 text-xs font-mono transition-colors flex items-center gap-1.5 shadow-[0_0_10px_rgba(168,85,247,0.15)]"
+                      title="Add app into this stack or combine with other stacks"
+                    >
+                      <Layers className="w-3.5 h-3.5 text-purple-400" />
+                      <span>Merge / Add Apps</span>
+                    </button>
+                  </div>
                 </div>
 
                 {/* Stack Service Grid */}
@@ -560,6 +593,11 @@ export default function App() {
                       onAssignGroup={handleAssignGroup}
                       onAction={handleContainerAction}
                       onSetPrimaryPort={handleSetPrimaryPort}
+                      onMergeToStack={(c) => {
+                        setMergeModalInitialIds([c.id]);
+                        setMergeModalInitialStack(projectName);
+                        setIsMergeModalOpen(true);
+                      }}
                     />
                   ))}
                 </div>
@@ -600,6 +638,11 @@ export default function App() {
                       onAssignGroup={handleAssignGroup}
                       onAction={handleContainerAction}
                       onSetPrimaryPort={handleSetPrimaryPort}
+                      onMergeToStack={(c) => {
+                        setMergeModalInitialIds([c.id]);
+                        setMergeModalInitialStack(undefined);
+                        setIsMergeModalOpen(true);
+                      }}
                     />
                   ))}
                 </div>
@@ -661,6 +704,18 @@ export default function App() {
         isOpen={isSimulateOpen}
         onClose={() => setIsSimulateOpen(false)}
         onSimulate={handleSimulateContainer}
+      />
+
+      {/* Stack Merger & Migration Studio Modal */}
+      <StackMergeModal
+        isOpen={isMergeModalOpen}
+        onClose={() => setIsMergeModalOpen(false)}
+        containers={containers}
+        initialSelectedIds={mergeModalInitialIds}
+        initialTargetStack={mergeModalInitialStack}
+        onMergeSuccess={() => {
+          fetchData(true);
+        }}
       />
     </div>
   );
