@@ -43,7 +43,7 @@ export const ComposeInstallModal: React.FC<ComposeInstallModalProps> = ({
   const [currentStep, setCurrentStep] = useState<1 | 2 | 3>(1);
 
   // Step 1: Remote URL & metadata
-  const [remoteUrl, setRemoteUrl] = useState<string>('https://github.com/ReyesPascal/Manifexus-');
+  const [remoteUrl, setRemoteUrl] = useState<string>('');
   const [isFetching, setIsFetching] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [remoteMetadata, setRemoteMetadata] = useState<RemoteComposeMetadata | null>(null);
@@ -51,9 +51,9 @@ export const ComposeInstallModal: React.FC<ComposeInstallModalProps> = ({
 
   // Step 2: Target Routing
   const [installMode, setInstallMode] = useState<'existing-stack' | 'new-stack'>('new-stack');
-  const [targetStackName, setTargetStackName] = useState<string>('remote-app');
-  const [targetDirectory, setTargetDirectory] = useState<string>('/home/ryan/remote-app');
-  const [defaultHome, setDefaultHome] = useState<string>('/home/ryan');
+  const [targetStackName, setTargetStackName] = useState<string>('');
+  const [targetDirectory, setTargetDirectory] = useState<string>('');
+  const [defaultHome, setDefaultHome] = useState<string>('');
 
   // Step 3: AST Port Collision Resolution & Final YAML
   const [isResolvingPorts, setIsResolvingPorts] = useState(false);
@@ -84,18 +84,45 @@ export const ComposeInstallModal: React.FC<ComposeInstallModalProps> = ({
     return Array.from(map.values());
   }, [containers]);
 
-  // Fetch host environment (default home dir) on open
+  // Directive 1: Input State Sanitization - Reset inputs strictly upon opening
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen) {
+      setCurrentStep(1);
+      setRemoteUrl('');
+      setIsFetching(false);
+      setFetchError(null);
+      setRemoteMetadata(null);
+      setShowRawYaml(false);
+      setTargetStackName('');
+      setTargetDirectory('');
+      setResolvedYaml('');
+      setRemappedPorts([]);
+      setHasCollisions(false);
+      setIsPipelineOpen(false);
+      setActiveInstallId('');
+      return;
+    }
+
+    // Clear defaults strictly on open
+    setCurrentStep(1);
+    setRemoteUrl('');
+    setIsFetching(false);
+    setFetchError(null);
+    setRemoteMetadata(null);
+    setShowRawYaml(false);
+    setTargetStackName('');
+    setTargetDirectory('');
+    setResolvedYaml('');
+    setRemappedPorts([]);
+    setHasCollisions(false);
+    setIsPipelineOpen(false);
+    setActiveInstallId('');
 
     fetch('/api/compose/host-environment')
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (data?.defaultHomeDir) {
           setDefaultHome(data.defaultHomeDir);
-          if (installMode === 'new-stack') {
-            setTargetDirectory(`${data.defaultHomeDir}/${targetStackName}`);
-          }
         }
       })
       .catch(() => {
@@ -108,7 +135,8 @@ export const ComposeInstallModal: React.FC<ComposeInstallModalProps> = ({
     const clean = name.toLowerCase().replace(/[^a-z0-9-_]/g, '-');
     setTargetStackName(clean);
     if (installMode === 'new-stack') {
-      setTargetDirectory(`${defaultHome}/${clean}`);
+      const base = defaultHome || '/opt/stacks';
+      setTargetDirectory(clean ? `${base}/${clean}` : '');
     }
   };
 
@@ -309,7 +337,7 @@ export const ComposeInstallModal: React.FC<ComposeInstallModalProps> = ({
                         value={remoteUrl}
                         onChange={(e) => setRemoteUrl(e.target.value)}
                         onKeyDown={(e) => e.key === 'Enter' && handleFetchRemote()}
-                        placeholder="e.g. https://github.com/ReyesPascal/Manifexus- or raw docker-compose.yml link"
+                        placeholder="https://github.com/organization/repository or docker-compose.yml link"
                         className="w-full pl-9 pr-3 py-2.5 text-xs rounded-xl bg-slate-900 border border-slate-700 text-slate-200 placeholder-slate-500 font-mono focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition-all"
                       />
                     </div>
@@ -337,17 +365,19 @@ export const ComposeInstallModal: React.FC<ComposeInstallModalProps> = ({
                     <span className="text-slate-500 text-[11px]">Quick presets:</span>
                     <button
                       onClick={() => {
-                        setRemoteUrl('https://github.com/ReyesPascal/Manifexus-');
-                        handleFetchRemote('https://github.com/ReyesPascal/Manifexus-');
+                        const url = 'https://raw.githubusercontent.com/jc21/nginx-proxy-manager/master/docker-compose.yml';
+                        setRemoteUrl(url);
+                        handleFetchRemote(url);
                       }}
                       className="px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-cyan-400 hover:border-cyan-500/40 transition-colors"
                     >
-                      ReyesPascal/Manifexus-
+                      Nginx Proxy Manager
                     </button>
                     <button
                       onClick={() => {
-                        setRemoteUrl('https://raw.githubusercontent.com/louislam/uptime-kuma/1/docker-compose.yml');
-                        handleFetchRemote('https://raw.githubusercontent.com/louislam/uptime-kuma/1/docker-compose.yml');
+                        const url = 'https://raw.githubusercontent.com/louislam/uptime-kuma/1/docker-compose.yml';
+                        setRemoteUrl(url);
+                        handleFetchRemote(url);
                       }}
                       className="px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200 transition-colors"
                     >
@@ -355,8 +385,9 @@ export const ComposeInstallModal: React.FC<ComposeInstallModalProps> = ({
                     </button>
                     <button
                       onClick={() => {
-                        setRemoteUrl('https://raw.githubusercontent.com/portainer/portainer-compose/master/docker-compose.yml');
-                        handleFetchRemote('https://raw.githubusercontent.com/portainer/portainer-compose/master/docker-compose.yml');
+                        const url = 'https://raw.githubusercontent.com/portainer/portainer-compose/master/docker-compose.yml';
+                        setRemoteUrl(url);
+                        handleFetchRemote(url);
                       }}
                       className="px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200 transition-colors"
                     >
@@ -591,7 +622,7 @@ export const ComposeInstallModal: React.FC<ComposeInstallModalProps> = ({
                           type="text"
                           value={targetStackName}
                           onChange={(e) => handleStackNameChange(e.target.value)}
-                          placeholder="e.g. kavita-stack"
+                          placeholder="my-new-app"
                           className="w-full px-3 py-2 text-xs rounded-xl bg-slate-950 border border-slate-700 text-white font-mono focus:border-cyan-500 focus:outline-none"
                         />
                       </div>
@@ -605,7 +636,7 @@ export const ComposeInstallModal: React.FC<ComposeInstallModalProps> = ({
                             type="text"
                             value={targetDirectory}
                             onChange={(e) => setTargetDirectory(e.target.value)}
-                            placeholder="/home/ryan/kavita-stack"
+                            placeholder="/path/to/new/directory"
                             className="w-full px-3 py-2 text-xs rounded-xl bg-slate-950 border border-slate-700 text-cyan-300 font-mono focus:border-cyan-500 focus:outline-none"
                           />
                         </div>
@@ -613,7 +644,7 @@ export const ComposeInstallModal: React.FC<ComposeInstallModalProps> = ({
                     </div>
 
                     <p className="text-[11px] font-mono text-slate-500">
-                      Standard home directory execution context: Manifexus will provision <code className="text-slate-300">{targetDirectory}</code> with elevated root permissions.
+                      Standard home directory execution context: Manifexus will provision <code className="text-slate-300">{targetDirectory || '/path/to/new/directory'}</code> with elevated root permissions.
                     </p>
                   </div>
                 )}

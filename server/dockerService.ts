@@ -14,7 +14,12 @@ export function isDockerSocketAvailable(): boolean {
 }
 
 // Low-level HTTP request over Unix Domain Socket
-export function queryDockerEngine<T>(path: string, method: string = 'GET', body?: unknown): Promise<T> {
+export function queryDockerEngine<T>(
+  path: string,
+  method: string = 'GET',
+  body?: unknown,
+  customTimeoutMs?: number
+): Promise<T> {
   return new Promise((resolve, reject) => {
     const payload = body !== undefined ? (typeof body === 'string' ? body : JSON.stringify(body)) : null;
 
@@ -28,12 +33,19 @@ export function queryDockerEngine<T>(path: string, method: string = 'GET', body?
       headers['Content-Length'] = Buffer.byteLength(payload);
     }
 
+    // Directive 3: Explicitly increase timeout limit for stop/down/wait commands to minimum of 120 seconds
+    let defaultTimeout = 120000;
+    if (path.includes('/wait') || path.includes('/stop') || path.includes('/images/create')) {
+      defaultTimeout = 180000; // 3 minutes for container teardown / waiting / image pulling
+    }
+    const effectiveTimeout = customTimeoutMs || defaultTimeout;
+
     const options: http.RequestOptions = {
       socketPath: DOCKER_SOCKET_PATH,
       path: path,
       method: method,
       headers: headers,
-      timeout: 10000,
+      timeout: effectiveTimeout,
     };
 
     const req = http.request(options, (res) => {

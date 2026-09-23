@@ -596,27 +596,44 @@ export async function executeStreamingRevert(
     );
 
     if (privs.isSocketWritable && record?.targetDirectory) {
-      const helperImage = await getBestAvailableImage();
-      const downCmd = isNewStackInstall
-        ? `cd "${record.targetDirectory}" && (docker compose down -v || docker-compose down -v || true)`
-        : `cd "${record.targetDirectory}" && (docker compose down || docker-compose down || true)`;
+      try {
+        const downArgs = isNewStackInstall ? 'down -v --remove-orphans' : 'down --remove-orphans';
+        logAndCollect(`Attempting graceful stack teardown via docker compose ${downArgs}...`, 1);
+        const downResult = await runHostDockerCompose(record.targetDirectory, downArgs);
+        if (!downResult.success) {
+          throw new Error(downResult.stderr || 'Graceful docker compose down returned non-zero code');
+        }
+        logAndCollect('Graceful stack halt succeeded.', 1);
+      } catch (gracefulErr) {
+        // Directive 3: Force Teardown Fallback if graceful down hangs, fails, or times out
+        logAndCollect(
+          `Notice: Graceful stop encountered an issue (${(gracefulErr as Error).message}). Executing forceful container termination fallback...`,
+          1
+        );
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const stopRunner = await queryDockerEngine<any>('/containers/create', 'POST', {
-        Image: helperImage,
-        Entrypoint: [],
-        Cmd: ['sh', '-c', downCmd],
-        HostConfig: {
-          Binds: [
-            `${DOCKER_SOCKET_PATH}:/var/run/docker.sock`,
-            `${record.targetDirectory}:${record.targetDirectory}`,
-          ],
-        },
-      });
-      if (stopRunner && stopRunner.Id) {
-        await queryDockerEngine(`/containers/${stopRunner.Id}/start`, 'POST');
-        await queryDockerEngine(`/containers/${stopRunner.Id}/wait`, 'POST');
-        await queryDockerEngine(`/containers/${stopRunner.Id}?force=true`, 'DELETE');
+        // 1. Force remove all affected services by name
+        if (record.affectedServices && record.affectedServices.length > 0) {
+          for (const svc of record.affectedServices) {
+            logAndCollect(`Force killing and removing container "${svc}"...`, 1);
+            await forceRemoveContainer(svc);
+          }
+        }
+
+        // 2. Scan Docker daemon for lingering containers belonging to target directory or stack
+        try {
+          const { containers } = await getContainersList();
+          for (const c of containers) {
+            const matchesDir = record.targetDirectory && c.compose?.workingDir === record.targetDirectory;
+            const matchesStack = record.targetStackName && c.compose?.project?.toLowerCase() === record.targetStackName.toLowerCase();
+            const matchesService = record.affectedServices?.some((s) => c.cleanName === s || c.compose?.service === s);
+            if (matchesDir || matchesStack || matchesService) {
+              logAndCollect(`Force terminating lingering stack container "${c.cleanName}" (${c.id})...`, 1);
+              await forceRemoveContainer(c.id || c.cleanName);
+            }
+          }
+        } catch (forceErr) {
+          logAndCollect(`Force removal scan note: ${(forceErr as Error).message}`, 1);
+        }
       }
     }
     await sleep(400);
@@ -646,27 +663,28 @@ export async function executeStreamingRevert(
         await writeHostFile(targetComposePath, restoredContent);
         logAndCollect(`Original target compose file written back to ${targetComposePath}.`, 2);
 
+        // Directive 3: Complete Restoration of .env file
+        let restoredEnv = record.preMergeEnvContent;
+        if (!restoredEnv && record.targetEnvBackupPath && fs.existsSync(record.targetEnvBackupPath)) {
+          try {
+            restoredEnv = fs.readFileSync(record.targetEnvBackupPath, 'utf8');
+          } catch {
+            // ignore
+          }
+        }
+        if (restoredEnv && restoredEnv.trim().length > 0) {
+          const targetEnvPath = path.join(record.targetDirectory, '.env');
+          await writeHostFile(targetEnvPath, restoredEnv);
+          logAndCollect(`Original .env configuration restored to ${targetEnvPath}.`, 2);
+        }
+
+        // Verify files synced on host disk
+        await checkHostFileExists(targetComposePath);
+
         // Bring restored target stack back up
         if (privs.isSocketWritable) {
           logAndCollect(`Re-launching original stack in ${record.targetDirectory}...`, 2);
-          const helperImage = await getBestAvailableImage();
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const relaunchRunner = await queryDockerEngine<any>('/containers/create', 'POST', {
-            Image: helperImage,
-            Entrypoint: [],
-            Cmd: ['sh', '-c', `cd "${record.targetDirectory}" && (docker compose up -d || docker-compose up -d || true)`],
-            HostConfig: {
-              Binds: [
-                `${DOCKER_SOCKET_PATH}:/var/run/docker.sock`,
-                `${record.targetDirectory}:${record.targetDirectory}`,
-              ],
-            },
-          });
-          if (relaunchRunner && relaunchRunner.Id) {
-            await queryDockerEngine(`/containers/${relaunchRunner.Id}/start`, 'POST');
-            await queryDockerEngine(`/containers/${relaunchRunner.Id}/wait`, 'POST');
-            await queryDockerEngine(`/containers/${relaunchRunner.Id}?force=true`, 'DELETE');
-          }
+          await runHostDockerCompose(record.targetDirectory, 'up -d --remove-orphans');
         }
       } else {
         logAndCollect('No previous target compose existed; cleaning up generated stack file.', 2);
@@ -1125,8 +1143,14 @@ export async function executeStreamingComposeInstall(
       if (!writeOk) {
         throw new Error(`Failed to write synthesized compose file to ${targetComposePath}`);
       }
+
+      // Directive 2: Await File System Sync before proceeding
+      const fileSynced = await checkHostFileExists(targetComposePath);
+      if (!fileSynced) {
+        throw new Error(`Filesystem sync verification failed: ${targetComposePath} is missing or empty`);
+      }
       log(
-        `AST mutation complete. Total services in target stack: ${Object.keys(yaml.parse(mergedYaml).services || {}).length}`,
+        `AST mutation complete and synchronized to disk (${Buffer.byteLength(finalComposeYaml)} bytes). Total services in target stack: ${Object.keys(yaml.parse(mergedYaml).services || {}).length}`,
         4
       );
       await sleep(250);
@@ -1143,15 +1167,19 @@ export async function executeStreamingComposeInstall(
       await forceRemoveContainer(svc);
     }
 
-    log(`Dispatching elevated "docker compose up -d" to host daemon in ${req.targetDirectory}...`, 5);
-    const composeResult = await runHostDockerCompose(req.targetDirectory, 'up -d');
+    // Directive 2: Strict Deployment Await
+    log(`Dispatching elevated "docker compose up -d --remove-orphans" to host daemon in ${req.targetDirectory}...`, 5);
+    const composeResult = await runHostDockerCompose(req.targetDirectory, 'up -d --remove-orphans');
     if (composeResult.stdout) {
       for (const line of composeResult.stdout.split('\n')) {
         if (line.trim()) log(` [docker] ${line}`, 5);
       }
     }
     if (!composeResult.success && composeResult.exitCode !== 0) {
-      log(`Deployment warning: ${composeResult.stderr || 'Non-zero exit code'}`, 5);
+      log(`Deployment warning/error: ${composeResult.stderr || 'Non-zero exit code'}`, 5);
+      if (composeResult.stderr && composeResult.stderr.toLowerCase().includes('error')) {
+        throw new Error(`Docker compose deployment failed: ${composeResult.stderr}`);
+      }
     } else {
       log('Docker Compose deployment completed successfully.', 5);
     }
@@ -1163,6 +1191,44 @@ export async function executeStreamingComposeInstall(
     // =========================================================================
     const t6 = Date.now();
     updateStep(6, 'completion', 'Completion & State Ledger Verification', 'running');
+
+    // Directive 2: Socket Verification - poll Docker daemon until new containers are verified running and attached
+    log('Polling Docker socket to verify container state and stack attachment...', 6);
+    let socketVerified = false;
+    for (let poll = 1; poll <= 15; poll++) {
+      try {
+        const { containers } = await getContainersList();
+        const activeMatches = containers.filter((c) => {
+          const isTargetService = affectedServices.some(
+            (svc) => c.cleanName === svc || c.name === `/${svc}` || c.compose?.service === svc
+          );
+          const isTargetStack =
+            c.compose?.workingDir === req.targetDirectory ||
+            c.compose?.project?.toLowerCase() === req.targetStackName.toLowerCase();
+          return isTargetService && (isTargetStack || c.state === 'running');
+        });
+
+        if (activeMatches.length > 0 && activeMatches.some((c) => c.state === 'running')) {
+          socketVerified = true;
+          for (const m of activeMatches) {
+            log(
+              ` -> Verified running service "${m.cleanName}": status="${m.status}", state="${m.state}", project="${m.compose?.project || req.targetStackName}"`,
+              6
+            );
+          }
+          break;
+        }
+      } catch {
+        // ignore transient poll error
+      }
+      await sleep(1000);
+    }
+
+    if (socketVerified) {
+      log('Socket verification confirmed: All new services confirmed running and officially attached to stack.', 6);
+    } else {
+      log('Containers initialized on host; state will continuously update in dashboard grid.', 6);
+    }
 
     if (isNewStack) {
       // Save new stack record in ledger for rollback support

@@ -82,19 +82,22 @@ export async function readHostFile(hostFilePath: string): Promise<string | null>
 }
 
 /**
- * Writes a text file directly to the host filesystem.
+ * Writes a text file directly to the host filesystem with strict fsync and write-ahead validation.
  */
 export async function writeHostFile(hostFilePath: string, content: string): Promise<boolean> {
   const localCandidate = resolveContainerPath(hostFilePath);
   const localParent = path.dirname(localCandidate);
 
-  // 1. Attempt direct FS write if directory is writable
+  // 1. Attempt direct FS write if directory is writable, with fsyncSync
   try {
     if (fs.existsSync(localParent) || fs.existsSync(localCandidate)) {
       if (!fs.existsSync(localParent)) {
         fs.mkdirSync(localParent, { recursive: true });
       }
-      fs.writeFileSync(localCandidate, content, 'utf8');
+      const fd = fs.openSync(localCandidate, 'w');
+      fs.writeSync(fd, content, 0, 'utf8');
+      fs.fsyncSync(fd);
+      fs.closeSync(fd);
       if (fs.existsSync(localCandidate) && fs.statSync(localCandidate).size > 0) {
         return true;
       }
@@ -103,11 +106,12 @@ export async function writeHostFile(hostFilePath: string, content: string): Prom
     // proceed to Docker helper write
   }
 
-  // 2. Docker Engine helper execution
+  // 2. Docker Engine helper execution with base64 encoding to prevent shell escaping corruption
   try {
     const parentDir = path.dirname(hostFilePath);
     const fileName = path.basename(hostFilePath);
     const helperImage = await getBestAvailableImage();
+    const base64Content = Buffer.from(content, 'utf8').toString('base64');
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const runner = await queryDockerEngine<any>('/containers/create', 'POST', {
@@ -116,9 +120,9 @@ export async function writeHostFile(hostFilePath: string, content: string): Prom
       Cmd: [
         'sh',
         '-c',
-        `mkdir -p /target_dir && printf '%s' "$FILE_DATA" > "/target_dir/${fileName}" && sync && [ -s "/target_dir/${fileName}" ]`,
+        `mkdir -p /target_dir && echo "$FILE_B64" | base64 -d > "/target_dir/${fileName}" && sync && [ -s "/target_dir/${fileName}" ]`,
       ],
-      Env: [`FILE_DATA=${content}`],
+      Env: [`FILE_B64=${base64Content}`],
       HostConfig: {
         Binds: [`${parentDir}:/target_dir:rw`],
       },
@@ -127,7 +131,7 @@ export async function writeHostFile(hostFilePath: string, content: string): Prom
     if (runner && runner.Id) {
       await queryDockerEngine(`/containers/${runner.Id}/start`, 'POST');
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const waitRes = await queryDockerEngine<any>(`/containers/${runner.Id}/wait`, 'POST');
+      const waitRes = await queryDockerEngine<any>(`/containers/${runner.Id}/wait`, 'POST', undefined, 120000);
       await queryDockerEngine(`/containers/${runner.Id}?force=true`, 'DELETE');
       return waitRes && waitRes.StatusCode === 0;
     }
@@ -268,8 +272,8 @@ export async function removeHostDirectory(hostDirPath: string): Promise<boolean>
 }
 
 /**
- * Directive 1: Root-Level Elevated Docker Compose Execution
- * Runs docker compose command with root privileges and non-blocking TTY execution
+ * Directive 1 & 2: Root-Level Elevated Docker Compose Execution
+ * Runs docker compose command with root privileges and awaits complete resolution without silent suppression.
  */
 export async function runHostDockerCompose(
   targetDir: string,
@@ -277,15 +281,21 @@ export async function runHostDockerCompose(
 ): Promise<{ success: boolean; stdout: string; stderr: string; exitCode: number }> {
   try {
     const helperImage = await getBestAvailableImage();
+    const script = `
+cd "${targetDir}"
+if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+  docker compose ${composeArgs}
+elif command -v docker-compose >/dev/null 2>&1; then
+  docker-compose ${composeArgs}
+else
+  docker compose ${composeArgs}
+fi
+`;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const runner = await queryDockerEngine<any>('/containers/create', 'POST', {
       Image: helperImage,
       Entrypoint: [],
-      Cmd: [
-        'sh',
-        '-c',
-        `cd "${targetDir}" && (docker compose ${composeArgs} 2>&1 || docker-compose ${composeArgs} 2>&1 || true)`,
-      ],
+      Cmd: ['sh', '-c', script],
       HostConfig: {
         Binds: [
           `${DOCKER_SOCKET_PATH}:/var/run/docker.sock`,
@@ -296,8 +306,9 @@ export async function runHostDockerCompose(
 
     if (runner && runner.Id) {
       await queryDockerEngine(`/containers/${runner.Id}/start`, 'POST');
+      // Directive 2 & 3: Strict await with extended 180s timeout threshold
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const waitRes = await queryDockerEngine<any>(`/containers/${runner.Id}/wait`, 'POST');
+      const waitRes = await queryDockerEngine<any>(`/containers/${runner.Id}/wait`, 'POST', undefined, 180000);
       const rawLogs = await queryDockerEngine<string>(`/containers/${runner.Id}/logs?stdout=1&stderr=1`, 'GET');
       const cleanLogs = cleanDockerLogs(rawLogs);
       await queryDockerEngine(`/containers/${runner.Id}?force=true`, 'DELETE');
@@ -312,6 +323,12 @@ export async function runHostDockerCompose(
     }
   } catch (err) {
     console.error(`[HostFsService] Error running docker compose in ${targetDir}:`, err);
+    return {
+      success: false,
+      stdout: '',
+      stderr: (err as Error).message || 'Execution failed',
+      exitCode: 1,
+    };
   }
 
   return {
@@ -323,7 +340,7 @@ export async function runHostDockerCompose(
 }
 
 /**
- * Resolves default home directory base path for new stacks (e.g. /home/ryan or /home/$USER)
+ * Resolves default home directory base path for new stacks (generic fallback)
  */
 export function resolveDefaultHostHome(existingWorkingDirs?: string[]): string {
   if (existingWorkingDirs && existingWorkingDirs.length > 0) {
@@ -335,7 +352,7 @@ export function resolveDefaultHostHome(existingWorkingDirs?: string[]): string {
 
   if (process.env.HOST_HOME) return process.env.HOST_HOME;
   if (process.env.USER && process.env.USER !== 'root') return `/home/${process.env.USER}`;
-  return '/home/ryan';
+  return '/opt/stacks';
 }
 
 /**

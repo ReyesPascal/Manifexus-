@@ -13,6 +13,8 @@ export interface MergeHistoryRecord {
   affectedServices: string[];
   preMergeComposeContent?: string;
   targetComposeBackupPath?: string;
+  preMergeEnvContent?: string;
+  targetEnvBackupPath?: string;
   sourceConfigs: {
     project: string;
     workingDir: string;
@@ -127,6 +129,21 @@ export async function createPreMergeSnapshot(params: {
     fs.writeFileSync(targetComposeBackupPath, preMergeTargetCompose, 'utf8');
   }
 
+  // Backup target .env file if it exists
+  let targetEnvBackupPath: string | undefined;
+  let preMergeEnvContent: string | undefined;
+  try {
+    const targetEnvCandidate = path.join(targetDirectory, '.env');
+    const readEnv = await readHostFile(targetEnvCandidate);
+    if (readEnv && readEnv.trim().length > 0) {
+      preMergeEnvContent = readEnv;
+      targetEnvBackupPath = path.join(backupArchiveDir, 'target-.env.pre-merge');
+      fs.writeFileSync(targetEnvBackupPath, readEnv, 'utf8');
+    }
+  } catch {
+    // ignore
+  }
+
   // Group source containers by stack/working directory
   const sourceStacksSet = new Set<string>();
   const sourceConfigsMap: Record<string, MergeHistoryRecord['sourceConfigs'][0]> = {};
@@ -191,6 +208,8 @@ export async function createPreMergeSnapshot(params: {
     affectedServices: selectedContainers.map((c) => c.cleanName),
     preMergeComposeContent: preMergeTargetCompose,
     targetComposeBackupPath,
+    preMergeEnvContent,
+    targetEnvBackupPath,
     sourceConfigs: Object.values(sourceConfigsMap),
     status: 'pending_decision',
     archiveSizeBytes,
@@ -271,6 +290,21 @@ export async function createComposeInstallSnapshot(params: {
     fs.writeFileSync(targetComposeBackupPath, preMergeComposeContent, 'utf8');
   }
 
+  // Backup target .env file if it exists for existing stack
+  let targetEnvBackupPath: string | undefined;
+  let preMergeEnvContent: string | undefined;
+  try {
+    const targetEnvCandidate = path.join(targetDirectory, '.env');
+    const readEnv = await readHostFile(targetEnvCandidate);
+    if (readEnv && readEnv.trim().length > 0) {
+      preMergeEnvContent = readEnv;
+      targetEnvBackupPath = path.join(backupArchiveDir, 'target-.env.pre-merge');
+      fs.writeFileSync(targetEnvBackupPath, readEnv, 'utf8');
+    }
+  } catch {
+    // ignore
+  }
+
   let archiveSizeBytes = 1024;
   try {
     const files = fs.readdirSync(backupArchiveDir);
@@ -289,6 +323,8 @@ export async function createComposeInstallSnapshot(params: {
     affectedServices,
     preMergeComposeContent,
     targetComposeBackupPath,
+    preMergeEnvContent,
+    targetEnvBackupPath,
     sourceConfigs: [],
     status: 'pending_decision',
     archiveSizeBytes,
