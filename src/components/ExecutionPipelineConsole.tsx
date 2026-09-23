@@ -204,6 +204,7 @@ export const ExecutionPipelineConsole: React.FC<ExecutionPipelineConsoleProps> =
           if (s.index === event.stepIndex) {
             return {
               ...s,
+              name: event.stepName || s.name,
               status: event.status || s.status,
               durationMs: event.durationMs !== undefined ? event.durationMs : s.durationMs,
             };
@@ -218,6 +219,8 @@ export const ExecutionPipelineConsole: React.FC<ExecutionPipelineConsoleProps> =
       }
     } else if (event.type === 'completed' || event.type === 'done') {
       setIsCompleted(true);
+      // Directive 4: Instantly refresh fleet telemetry
+      window.dispatchEvent(new CustomEvent('manifexus:refresh_fleet'));
       if (mode === 'merge' || mode === 'install') {
         // Trigger Directive 4 Post-Action Decision Prompt
         setShowDecisionPrompt(true);
@@ -228,14 +231,19 @@ export const ExecutionPipelineConsole: React.FC<ExecutionPipelineConsoleProps> =
     } else if (event.type === 'auto_reverted') {
       setIsFailed(true);
       setIsAutoReverted(true);
+      window.dispatchEvent(new CustomEvent('manifexus:refresh_fleet'));
       if (event.log) {
         setGlobalLogs((prev) => [...prev, `[Auto-Reverted] ${event.log}`]);
       }
     } else if (event.type === 'failed' || event.type === 'error') {
       setIsFailed(true);
+      window.dispatchEvent(new CustomEvent('manifexus:refresh_fleet'));
       const errMsg = event.log || (event as any).error;
       if (errMsg) {
         setGlobalLogs((prev) => [...prev, `[Failed] ${errMsg}`]);
+      }
+      if (event.stepIndex) {
+        setExpandedSteps((prev) => ({ ...prev, [event.stepIndex!]: true }));
       }
     }
   };

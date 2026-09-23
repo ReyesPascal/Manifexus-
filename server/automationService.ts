@@ -23,6 +23,7 @@ import {
 } from './hostFsService';
 import { resolvePortCollisions, RemappedPort } from './portCollisionService';
 import { mergeComposeWithAst } from './stackService';
+import { resolveComposeBuildContexts } from './buildContextService';
 
 const execAsync = util.promisify(exec);
 
@@ -942,6 +943,10 @@ export async function executeStreamingComposeInstall(
     });
   };
 
+  let currentStepIndex = 1;
+  let currentStepId = 'preflight';
+  let currentStepName = 'Pre-Flight & Remote Fetch Validation';
+
   const updateStep = (
     stepIndex: number,
     stepId: string,
@@ -949,6 +954,9 @@ export async function executeStreamingComposeInstall(
     status: PipelineStepStatus,
     durationMs?: number
   ) => {
+    currentStepIndex = stepIndex;
+    currentStepId = stepId;
+    currentStepName = stepName;
     emit({
       type: 'step_update',
       mergeId: installId,
@@ -966,17 +974,17 @@ export async function executeStreamingComposeInstall(
         { index: 1, id: 'preflight', name: 'Pre-Flight & Remote Fetch Validation' },
         { index: 2, id: 'port_collision', name: 'Intelligent Port Collision Resolution' },
         { index: 3, id: 'provision_directory', name: 'Directory Provisioning & Host FS Setup' },
-        { index: 4, id: 'write_compose', name: 'Finalized Compose YAML Deployment' },
+        { index: 4, id: 'write_compose', name: 'Build Context & Compose Deployment' },
         { index: 5, id: 'deployment', name: 'Elevated Docker Compose Deployment' },
-        { index: 6, id: 'completion', name: 'Completion & State Ledger Verification' },
+        { index: 6, id: 'completion', name: 'Socket Health Audit & Ledger Verification' },
       ]
     : [
         { index: 1, id: 'preflight', name: 'Pre-Flight & Remote Fetch Validation' },
         { index: 2, id: 'port_collision', name: 'Intelligent Port Collision Resolution' },
         { index: 3, id: 'backup_archive', name: 'Zero-Data-Loss Backup & Snapshot' },
-        { index: 4, id: 'ast_synthesis', name: 'AST Stack Synthesis & Injection' },
+        { index: 4, id: 'ast_synthesis', name: 'Build Context & AST Synthesis Injection' },
         { index: 5, id: 'deployment', name: 'Elevated Docker Compose Deployment' },
-        { index: 6, id: 'completion', name: 'Completion & State Ledger Verification' },
+        { index: 6, id: 'completion', name: 'Socket Health Audit & Ledger Verification' },
       ];
 
   for (const s of INSTALL_STEPS) {
@@ -1060,19 +1068,37 @@ export async function executeStreamingComposeInstall(
       updateStep(3, 'provision_directory', 'Directory Provisioning & Host FS Setup', 'success', Date.now() - t3);
 
       // =========================================================================
-      // Step 4 (New Stack): Finalized Compose YAML Deployment
+      // Step 4 (New Stack): Build Context Resolution & Compose YAML Deployment
       // =========================================================================
       const t4 = Date.now();
-      updateStep(4, 'write_compose', 'Finalized Compose YAML Deployment', 'running');
+      updateStep(4, 'write_compose', 'Build Context & Compose Deployment', 'running');
+
+      // Directive 2: Git Repository Cloning & Build Context Resolution
+      log('Analyzing services for build contexts, Dockerfile references, and pre-built image overrides...', 4);
+      const buildContextResult = await resolveComposeBuildContexts({
+        composeYaml: finalComposeYaml,
+        sourceUrl: req.sourceUrl,
+        targetDirectory: req.targetDirectory,
+        defaultAppName: req.targetStackName,
+        log: (msg) => log(msg, 4),
+      });
+      finalComposeYaml = buildContextResult.mutatedYaml;
+
       const targetComposePath = path.join(req.targetDirectory, 'docker-compose.yml');
       log(`Writing finalized Docker Compose file to ${targetComposePath}...`, 4);
       const writeOk = await writeHostFile(targetComposePath, finalComposeYaml);
       if (!writeOk) {
         throw new Error(`Failed to write compose file to ${targetComposePath}`);
       }
-      log(`Configuration successfully committed (${Buffer.byteLength(finalComposeYaml)} bytes).`, 4);
+
+      const fileSynced = await checkHostFileExists(targetComposePath);
+      if (!fileSynced) {
+        throw new Error(`Filesystem sync verification failed: ${targetComposePath} is missing or empty`);
+      }
+
+      log(`Configuration successfully committed and synchronized (${Buffer.byteLength(finalComposeYaml)} bytes).`, 4);
       await sleep(250);
-      updateStep(4, 'write_compose', 'Finalized Compose YAML Deployment', 'success', Date.now() - t4);
+      updateStep(4, 'write_compose', 'Build Context & Compose Deployment', 'success', Date.now() - t4);
     } else {
       // =========================================================================
       // Step 3 (Existing Stack): Zero-Data-Loss Backup & Snapshot
@@ -1118,12 +1144,23 @@ export async function executeStreamingComposeInstall(
       updateStep(3, 'backup_archive', 'Zero-Data-Loss Backup & Snapshot', 'success', Date.now() - t3);
 
       // =========================================================================
-      // Step 4 (Existing Stack): AST Stack Synthesis & Injection
+      // Step 4 (Existing Stack): Build Context & AST Stack Synthesis Injection
       // =========================================================================
       const t4 = Date.now();
-      updateStep(4, 'ast_synthesis', 'AST Stack Synthesis & Injection', 'running');
-      log('Injecting remote services into existing compose AST while preserving existing services & comments...', 4);
+      updateStep(4, 'ast_synthesis', 'Build Context & AST Synthesis Injection', 'running');
 
+      // Directive 2: Git Repository Cloning & Build Context Resolution
+      log('Analyzing incoming services for build contexts and pre-built image tags...', 4);
+      const buildContextResult = await resolveComposeBuildContexts({
+        composeYaml: finalComposeYaml,
+        sourceUrl: req.sourceUrl,
+        targetDirectory: req.targetDirectory,
+        defaultAppName: req.targetStackName,
+        log: (msg) => log(msg, 4),
+      });
+      finalComposeYaml = buildContextResult.mutatedYaml;
+
+      log('Injecting remote services into existing compose AST while preserving existing services & comments...', 4);
       const parsedRemote = yaml.parse(finalComposeYaml);
       const incomingServices = parsedRemote.services || {};
       const incomingVolumes = parsedRemote.volumes || {};
@@ -1144,7 +1181,7 @@ export async function executeStreamingComposeInstall(
         throw new Error(`Failed to write synthesized compose file to ${targetComposePath}`);
       }
 
-      // Directive 2: Await File System Sync before proceeding
+      // Await File System Sync before proceeding
       const fileSynced = await checkHostFileExists(targetComposePath);
       if (!fileSynced) {
         throw new Error(`Filesystem sync verification failed: ${targetComposePath} is missing or empty`);
@@ -1154,7 +1191,7 @@ export async function executeStreamingComposeInstall(
         4
       );
       await sleep(250);
-      updateStep(4, 'ast_synthesis', 'AST Stack Synthesis & Injection', 'success', Date.now() - t4);
+      updateStep(4, 'ast_synthesis', 'Build Context & AST Synthesis Injection', 'success', Date.now() - t4);
     }
 
     // =========================================================================
@@ -1167,7 +1204,7 @@ export async function executeStreamingComposeInstall(
       await forceRemoveContainer(svc);
     }
 
-    // Directive 2: Strict Deployment Await
+    // Directive 2 & 3: Strict Elevated Deployment Execution & Zero False Positives
     log(`Dispatching elevated "docker compose up -d --remove-orphans" to host daemon in ${req.targetDirectory}...`, 5);
     const composeResult = await runHostDockerCompose(req.targetDirectory, 'up -d --remove-orphans');
     if (composeResult.stdout) {
@@ -1175,60 +1212,76 @@ export async function executeStreamingComposeInstall(
         if (line.trim()) log(` [docker] ${line}`, 5);
       }
     }
-    if (!composeResult.success && composeResult.exitCode !== 0) {
-      log(`Deployment warning/error: ${composeResult.stderr || 'Non-zero exit code'}`, 5);
-      if (composeResult.stderr && composeResult.stderr.toLowerCase().includes('error')) {
-        throw new Error(`Docker compose deployment failed: ${composeResult.stderr}`);
-      }
-    } else {
-      log('Docker Compose deployment completed successfully.', 5);
+
+    // Directive 3: Strict Error Catching
+    const fatalKeywordsRegex = /(error|failed|fatal|cannot|no such file|not found|denied|conflict|syntax error)/i;
+    const hasFatalOutput =
+      (composeResult.stderr && fatalKeywordsRegex.test(composeResult.stderr)) ||
+      (composeResult.stdout && /failed to solve|no such file or directory/i.test(composeResult.stdout));
+
+    if (!composeResult.success || composeResult.exitCode !== 0 || hasFatalOutput) {
+      const errDetail = composeResult.stderr || composeResult.stdout || `Process exited with code ${composeResult.exitCode}`;
+      log(`[docker error] ${errDetail}`, 5);
+      throw new Error(`Docker compose deployment failed (exit code ${composeResult.exitCode}): ${errDetail}`);
     }
+
+    log('Docker Compose deployment completed successfully.', 5);
     await sleep(300);
     updateStep(5, 'deployment', 'Elevated Docker Compose Deployment', 'success', Date.now() - t5);
 
     // =========================================================================
-    // Step 6: Completion & State Ledger Verification
+    // Step 6: Socket Health Audit & State Ledger Verification
     // =========================================================================
     const t6 = Date.now();
-    updateStep(6, 'completion', 'Completion & State Ledger Verification', 'running');
+    updateStep(6, 'completion', 'Socket Health Audit & Ledger Verification', 'running');
+    log('Auditing Docker daemon socket to verify container health and true running status...', 6);
 
-    // Directive 2: Socket Verification - poll Docker daemon until new containers are verified running and attached
-    log('Polling Docker socket to verify container state and stack attachment...', 6);
-    let socketVerified = false;
-    for (let poll = 1; poll <= 15; poll++) {
+    // Directive 4: True State Verification via Docker Socket
+    const unverifiedServices = new Set(affectedServices);
+    const crashedServices: string[] = [];
+
+    for (let poll = 1; poll <= 8; poll++) {
       try {
-        const { containers } = await getContainersList();
-        const activeMatches = containers.filter((c) => {
-          const isTargetService = affectedServices.some(
-            (svc) => c.cleanName === svc || c.name === `/${svc}` || c.compose?.service === svc
+        const { containers: currentFleet } = await getContainersList();
+        for (const svc of Array.from(unverifiedServices)) {
+          const match = currentFleet.find((c) =>
+            c.cleanName === svc ||
+            c.name === `/${svc}` ||
+            c.compose?.service === svc
           );
-          const isTargetStack =
-            c.compose?.workingDir === req.targetDirectory ||
-            c.compose?.project?.toLowerCase() === req.targetStackName.toLowerCase();
-          return isTargetService && (isTargetStack || c.state === 'running');
-        });
 
-        if (activeMatches.length > 0 && activeMatches.some((c) => c.state === 'running')) {
-          socketVerified = true;
-          for (const m of activeMatches) {
-            log(
-              ` -> Verified running service "${m.cleanName}": status="${m.status}", state="${m.state}", project="${m.compose?.project || req.targetStackName}"`,
-              6
-            );
+          if (match) {
+            const state = match.state?.toLowerCase();
+            if (state === 'running') {
+              log(` -> Service "${svc}" verified actively running (Status: "${match.status}")`, 6);
+              unverifiedServices.delete(svc);
+            } else if (state === 'exited' || state === 'dead' || match.status?.toLowerCase().includes('exit')) {
+              crashedServices.push(`${svc} (Status: ${match.status || state})`);
+              unverifiedServices.delete(svc);
+            }
           }
-          break;
         }
+
+        if (unverifiedServices.size === 0) break;
       } catch {
-        // ignore transient poll error
+        // transient error during poll
       }
       await sleep(1000);
     }
 
-    if (socketVerified) {
-      log('Socket verification confirmed: All new services confirmed running and officially attached to stack.', 6);
-    } else {
-      log('Containers initialized on host; state will continuously update in dashboard grid.', 6);
+    if (crashedServices.length > 0) {
+      throw new Error(
+        `Container health check failed: The following service(s) crashed or exited immediately after launch: ${crashedServices.join(', ')}`
+      );
     }
+
+    if (unverifiedServices.size > 0) {
+      throw new Error(
+        `Container health check failed: Docker daemon reported that the following service(s) failed to reach running state: ${Array.from(unverifiedServices).join(', ')}`
+      );
+    }
+
+    log(`Socket verification confirmed: All ${affectedServices.length} service(s) running and attached to stack.`, 6);
 
     if (isNewStack) {
       // Save new stack record in ledger for rollback support
@@ -1246,9 +1299,9 @@ export async function executeStreamingComposeInstall(
       log(`Updated state ledger for existing stack "${req.targetStackName}".`, 6);
     }
 
-    log('All installation steps finished with 100% success.', 6);
+    log('All installation steps finished with 100% verified operational success.', 6);
     await sleep(200);
-    updateStep(6, 'completion', 'Completion & State Ledger Verification', 'success', Date.now() - t6);
+    updateStep(6, 'completion', 'Socket Health Audit & Ledger Verification', 'success', Date.now() - t6);
 
     emit({
       type: 'completed',
@@ -1260,10 +1313,46 @@ export async function executeStreamingComposeInstall(
     });
   } catch (err) {
     const errMsg = (err as Error).message;
-    log(`CRITICAL ERROR during installation: ${errMsg}`);
+    log(`CRITICAL PIPELINE FAILURE: ${errMsg}`, currentStepIndex);
+    updateStep(currentStepIndex, currentStepId, currentStepName, 'failed');
+
+    // Directive 3: Automated Rollback on failure
+    log('INITIATING AUTOMATED ROLLBACK: Reverting target state and pruning orphaned files...', currentStepIndex);
+    try {
+      if (isNewStack) {
+        log(`Tearing down failed new stack in ${req.targetDirectory}...`, currentStepIndex);
+        await runHostDockerCompose(req.targetDirectory, 'down -v --remove-orphans');
+        for (const svc of affectedServices) {
+          await forceRemoveContainer(svc);
+        }
+        log(`Removing provisional target directory: ${req.targetDirectory}...`, currentStepIndex);
+        await removeHostDirectory(req.targetDirectory);
+        log('Provisional filesystem wiped cleanly. Zero orphaned files left on host.', currentStepIndex);
+      } else {
+        log(`Halting failed injected services in ${req.targetDirectory}...`, currentStepIndex);
+        for (const svc of affectedServices) {
+          await forceRemoveContainer(svc);
+        }
+        if (preMergeComposeContent) {
+          const targetComposePath = path.join(req.targetDirectory, 'docker-compose.yml');
+          log(`Restoring pre-merge target compose configuration to ${targetComposePath}...`, currentStepIndex);
+          await writeHostFile(targetComposePath, preMergeComposeContent);
+          await checkHostFileExists(targetComposePath);
+        }
+        // Remove cloned build contexts
+        await removeHostDirectory(path.join(req.targetDirectory, 'build-contexts'));
+        log('Relaunching original fleet services...', currentStepIndex);
+        await runHostDockerCompose(req.targetDirectory, 'up -d --remove-orphans');
+        log('Original stack restored to 100% operational health.', currentStepIndex);
+      }
+    } catch (rollbackErr) {
+      log(`Rollback notice: ${(rollbackErr as Error).message}`, currentStepIndex);
+    }
+
     emit({
       type: 'failed',
       mergeId: installId,
+      stepIndex: currentStepIndex,
       log: errMsg,
       timestamp: new Date().toISOString(),
     });

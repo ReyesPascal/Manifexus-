@@ -118,7 +118,16 @@ export default function App() {
       fetchData(false);
     }, intervalSeconds * 1000);
 
-    return () => clearInterval(timer);
+    const handleRefreshFleet = () => {
+      fetchData(true);
+      fetchPrivileges();
+    };
+    window.addEventListener('manifexus:refresh_fleet', handleRefreshFleet);
+
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener('manifexus:refresh_fleet', handleRefreshFleet);
+    };
   }, [fetchData, fetchPrivileges, config?.refreshIntervalSeconds]);
 
   // Execute container lifecycle action

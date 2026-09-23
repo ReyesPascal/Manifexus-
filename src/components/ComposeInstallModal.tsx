@@ -49,8 +49,8 @@ export const ComposeInstallModal: React.FC<ComposeInstallModalProps> = ({
   const [remoteMetadata, setRemoteMetadata] = useState<RemoteComposeMetadata | null>(null);
   const [showRawYaml, setShowRawYaml] = useState(false);
 
-  // Step 2: Target Routing
-  const [installMode, setInstallMode] = useState<'existing-stack' | 'new-stack'>('new-stack');
+  // Step 2: Target Routing (Directive 1: initialized to null with zero pre-selections)
+  const [installMode, setInstallMode] = useState<'existing-stack' | 'new-stack' | null>(null);
   const [targetStackName, setTargetStackName] = useState<string>('');
   const [targetDirectory, setTargetDirectory] = useState<string>('');
   const [defaultHome, setDefaultHome] = useState<string>('');
@@ -93,6 +93,7 @@ export const ComposeInstallModal: React.FC<ComposeInstallModalProps> = ({
       setFetchError(null);
       setRemoteMetadata(null);
       setShowRawYaml(false);
+      setInstallMode(null);
       setTargetStackName('');
       setTargetDirectory('');
       setResolvedYaml('');
@@ -110,6 +111,7 @@ export const ComposeInstallModal: React.FC<ComposeInstallModalProps> = ({
     setFetchError(null);
     setRemoteMetadata(null);
     setShowRawYaml(false);
+    setInstallMode(null);
     setTargetStackName('');
     setTargetDirectory('');
     setResolvedYaml('');
@@ -178,9 +180,15 @@ export const ComposeInstallModal: React.FC<ComposeInstallModalProps> = ({
     }
   };
 
+  // Step 2 validation
+  const isStep2Valid =
+    installMode !== null &&
+    targetStackName.trim().length > 0 &&
+    targetDirectory.trim().length > 0;
+
   // Run AST Port Collision Engine before entering Step 3
   const handleProceedToReview = async () => {
-    if (!remoteMetadata?.rawYaml) return;
+    if (!isStep2Valid || !remoteMetadata?.rawYaml) return;
 
     setIsResolvingPorts(true);
     try {
@@ -359,41 +367,6 @@ export const ComposeInstallModal: React.FC<ComposeInstallModalProps> = ({
                       )}
                     </button>
                   </div>
-
-                  {/* Preset Quick Links */}
-                  <div className="flex flex-wrap items-center gap-2 mt-3 text-xs font-mono">
-                    <span className="text-slate-500 text-[11px]">Quick presets:</span>
-                    <button
-                      onClick={() => {
-                        const url = 'https://raw.githubusercontent.com/jc21/nginx-proxy-manager/master/docker-compose.yml';
-                        setRemoteUrl(url);
-                        handleFetchRemote(url);
-                      }}
-                      className="px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-cyan-400 hover:border-cyan-500/40 transition-colors"
-                    >
-                      Nginx Proxy Manager
-                    </button>
-                    <button
-                      onClick={() => {
-                        const url = 'https://raw.githubusercontent.com/louislam/uptime-kuma/1/docker-compose.yml';
-                        setRemoteUrl(url);
-                        handleFetchRemote(url);
-                      }}
-                      className="px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200 transition-colors"
-                    >
-                      Uptime Kuma
-                    </button>
-                    <button
-                      onClick={() => {
-                        const url = 'https://raw.githubusercontent.com/portainer/portainer-compose/master/docker-compose.yml';
-                        setRemoteUrl(url);
-                        handleFetchRemote(url);
-                      }}
-                      className="px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200 transition-colors"
-                    >
-                      Portainer CE
-                    </button>
-                  </div>
                 </div>
 
                 {/* Error Banner */}
@@ -506,27 +479,48 @@ export const ComposeInstallModal: React.FC<ComposeInstallModalProps> = ({
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     {/* Workflow A: Install to Existing Stack */}
                     <div
-                      onClick={() => setInstallMode('existing-stack')}
-                      className={`p-4 rounded-xl border cursor-pointer transition-all ${
+                      onClick={() => {
+                        setInstallMode('existing-stack');
+                        setTargetStackName('');
+                        setTargetDirectory('');
+                      }}
+                      className={`p-5 rounded-xl border cursor-pointer transition-all ${
                         installMode === 'existing-stack'
-                          ? 'bg-cyan-950/40 border-cyan-500/60 shadow-[0_0_15px_rgba(6,182,212,0.15)]'
-                          : 'bg-slate-900/60 border-slate-800 hover:border-slate-700'
+                          ? 'bg-cyan-950/40 border-cyan-500/60 shadow-[0_0_20px_rgba(6,182,212,0.18)] ring-1 ring-cyan-500/30'
+                          : 'bg-slate-900/40 border-slate-800/80 hover:border-cyan-500/50 hover:bg-slate-900/80 hover:shadow-[0_0_15px_rgba(6,182,212,0.1)]'
                       }`}
                     >
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center gap-2">
-                          <Layers className="w-4 h-4 text-cyan-400" />
-                          <span className="text-xs font-mono font-bold text-white">
-                            Install to Existing Stack
-                          </span>
+                      <div className="flex items-center justify-between mb-2.5">
+                        <div className="flex items-center gap-2.5">
+                          <div
+                            className={`p-2 rounded-lg transition-colors ${
+                              installMode === 'existing-stack'
+                                ? 'bg-cyan-500/20 text-cyan-300'
+                                : 'bg-slate-800/80 text-slate-400'
+                            }`}
+                          >
+                            <Layers className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <span className="text-xs font-mono font-bold text-white block">
+                              Install to Existing Stack
+                            </span>
+                            <span className="text-[10px] font-mono text-slate-500">
+                              Merge into active Docker project
+                            </span>
+                          </div>
                         </div>
-                        <input
-                          type="radio"
-                          name="install_mode"
-                          checked={installMode === 'existing-stack'}
-                          onChange={() => setInstallMode('existing-stack')}
-                          className="accent-cyan-400"
-                        />
+                        <div
+                          className={`w-4 h-4 rounded-full border flex items-center justify-center transition-colors ${
+                            installMode === 'existing-stack'
+                              ? 'border-cyan-400 bg-cyan-500/20'
+                              : 'border-slate-700 bg-slate-950'
+                          }`}
+                        >
+                          {installMode === 'existing-stack' && (
+                            <div className="w-2 h-2 rounded-full bg-cyan-400" />
+                          )}
+                        </div>
                       </div>
                       <p className="text-xs text-slate-400 leading-relaxed">
                         Merges services into an existing stack's <code className="text-cyan-300">docker-compose.yml</code> via AST synthesis without overwriting existing services.
@@ -535,27 +529,54 @@ export const ComposeInstallModal: React.FC<ComposeInstallModalProps> = ({
 
                     {/* Workflow B: Create New Stack */}
                     <div
-                      onClick={() => setInstallMode('new-stack')}
-                      className={`p-4 rounded-xl border cursor-pointer transition-all ${
+                      onClick={() => {
+                        setInstallMode('new-stack');
+                        const baseName =
+                          remoteMetadata?.repoName ||
+                          remoteMetadata?.serviceNames?.[0] ||
+                          'my-new-app';
+                        const clean = baseName.toLowerCase().replace(/[^a-z0-9-_]/g, '-');
+                        setTargetStackName(clean);
+                        const base = defaultHome || '/opt/stacks';
+                        setTargetDirectory(`${base}/${clean}`);
+                      }}
+                      className={`p-5 rounded-xl border cursor-pointer transition-all ${
                         installMode === 'new-stack'
-                          ? 'bg-cyan-950/40 border-cyan-500/60 shadow-[0_0_15px_rgba(6,182,212,0.15)]'
-                          : 'bg-slate-900/60 border-slate-800 hover:border-slate-700'
+                          ? 'bg-cyan-950/40 border-cyan-500/60 shadow-[0_0_20px_rgba(6,182,212,0.18)] ring-1 ring-cyan-500/30'
+                          : 'bg-slate-900/40 border-slate-800/80 hover:border-cyan-500/50 hover:bg-slate-900/80 hover:shadow-[0_0_15px_rgba(6,182,212,0.1)]'
                       }`}
                     >
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center gap-2">
-                          <FolderPlus className="w-4 h-4 text-cyan-400" />
-                          <span className="text-xs font-mono font-bold text-white">
-                            Create New Stack Directory
-                          </span>
+                      <div className="flex items-center justify-between mb-2.5">
+                        <div className="flex items-center gap-2.5">
+                          <div
+                            className={`p-2 rounded-lg transition-colors ${
+                              installMode === 'new-stack'
+                                ? 'bg-cyan-500/20 text-cyan-300'
+                                : 'bg-slate-800/80 text-slate-400'
+                            }`}
+                          >
+                            <FolderPlus className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <span className="text-xs font-mono font-bold text-white block">
+                              Create New Stack Directory
+                            </span>
+                            <span className="text-[10px] font-mono text-slate-500">
+                              Provision isolated directory on host
+                            </span>
+                          </div>
                         </div>
-                        <input
-                          type="radio"
-                          name="install_mode"
-                          checked={installMode === 'new-stack'}
-                          onChange={() => setInstallMode('new-stack')}
-                          className="accent-cyan-400"
-                        />
+                        <div
+                          className={`w-4 h-4 rounded-full border flex items-center justify-center transition-colors ${
+                            installMode === 'new-stack'
+                              ? 'border-cyan-400 bg-cyan-500/20'
+                              : 'border-slate-700 bg-slate-950'
+                          }`}
+                        >
+                          {installMode === 'new-stack' && (
+                            <div className="w-2 h-2 rounded-full bg-cyan-400" />
+                          )}
+                        </div>
                       </div>
                       <p className="text-xs text-slate-400 leading-relaxed">
                         Provisions a dedicated host directory (e.g. <code className="text-cyan-300">~/app-name</code>) with full permissions and deploys an isolated compose stack.
@@ -563,6 +584,21 @@ export const ComposeInstallModal: React.FC<ComposeInstallModalProps> = ({
                     </div>
                   </div>
                 </div>
+
+                {/* Directive 1: Unselected Guidance Panel */}
+                {installMode === null && (
+                  <div className="p-6 rounded-xl border border-dashed border-slate-800/80 bg-slate-950/40 text-center space-y-2.5 animate-in fade-in duration-200">
+                    <div className="inline-flex p-2.5 rounded-xl bg-slate-900 border border-slate-800 text-cyan-400">
+                      <Layers className="w-5 h-5" />
+                    </div>
+                    <p className="text-xs font-mono font-semibold text-slate-200">
+                      Select a Target Deployment Strategy Above
+                    </p>
+                    <p className="text-[11px] font-mono text-slate-400 max-w-md mx-auto leading-relaxed">
+                      Choose whether to merge these incoming services into an existing active Compose stack or provision an isolated new directory on the host filesystem.
+                    </p>
+                  </div>
+                )}
 
                 {/* Workflow A Configuration */}
                 {installMode === 'existing-stack' && (
@@ -783,8 +819,8 @@ export const ComposeInstallModal: React.FC<ComposeInstallModalProps> = ({
               {currentStep === 2 && (
                 <button
                   onClick={handleProceedToReview}
-                  disabled={isResolvingPorts}
-                  className="px-5 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-mono font-semibold flex items-center gap-2 transition-all disabled:opacity-40 shadow-[0_0_15px_rgba(6,182,212,0.2)]"
+                  disabled={isResolvingPorts || !isStep2Valid}
+                  className="px-5 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-mono font-semibold flex items-center gap-2 transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-cyan-600 shadow-[0_0_15px_rgba(6,182,212,0.2)] disabled:shadow-none"
                 >
                   {isResolvingPorts ? (
                     <>
