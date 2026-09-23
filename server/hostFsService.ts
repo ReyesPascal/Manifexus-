@@ -1,5 +1,7 @@
 import fs from 'fs';
 import path from 'path';
+import net from 'net';
+import yaml from 'yaml';
 import { queryDockerEngine, getBestAvailableImage } from './dockerService';
 
 const DOCKER_SOCKET_PATH = process.env.DOCKER_SOCKET_PATH || '/var/run/docker.sock';
@@ -372,7 +374,7 @@ export async function forceRemoveContainer(containerNameOrId: string): Promise<b
 /**
  * Cleans multiplexed Docker stream header bytes from stdout string
  */
-function cleanDockerLogs(raw: string | unknown): string {
+export function cleanDockerLogs(raw: string | unknown): string {
   if (typeof raw !== 'string') return '';
   // If the log starts with Docker multiplex header (header is 8 bytes per frame)
   // Check if character codes at index 0..7 contain control bytes
@@ -393,4 +395,252 @@ function cleanDockerLogs(raw: string | unknown): string {
     return cleaned || raw.substring(8);
   }
   return raw;
+}
+
+/**
+ * Actively tests whether a host network port is genuinely free and unallocated.
+ */
+export function isHostPortFree(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (port <= 0 || port > 65535) {
+      resolve(false);
+      return;
+    }
+    const server = net.createServer();
+    server.unref();
+    server.once('error', () => {
+      resolve(false);
+    });
+    server.once('listening', () => {
+      server.close(() => {
+        resolve(true);
+      });
+    });
+    server.listen(port, '0.0.0.0');
+  });
+}
+
+/**
+ * Creates a host directory and sets aggressive permissions (e.g. 777) so container non-root daemons cannot be denied access.
+ */
+export async function createHostDirectoryWithPermissions(
+  hostDirPath: string,
+  mode: string = '777'
+): Promise<boolean> {
+  const localCandidate = resolveContainerPath(hostDirPath);
+  try {
+    if (!fs.existsSync(localCandidate)) {
+      fs.mkdirSync(localCandidate, { recursive: true });
+    }
+    fs.chmodSync(localCandidate, 0o777);
+  } catch {
+    // proceed to root helper container
+  }
+
+  try {
+    const parentDir = path.dirname(hostDirPath);
+    const helperImage = await getBestAvailableImage();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const runner = await queryDockerEngine<any>('/containers/create', 'POST', {
+      Image: helperImage,
+      Entrypoint: [],
+      Cmd: ['sh', '-c', `mkdir -p "${hostDirPath}" && chmod -R ${mode} "${hostDirPath}"`],
+      HostConfig: {
+        Binds: [`${parentDir}:${parentDir}:rw`],
+      },
+    });
+
+    if (runner && runner.Id) {
+      await queryDockerEngine(`/containers/${runner.Id}/start`, 'POST');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const waitRes = await queryDockerEngine<any>(`/containers/${runner.Id}/wait`, 'POST');
+      await queryDockerEngine(`/containers/${runner.Id}?force=true`, 'DELETE');
+      return waitRes && waitRes.StatusCode === 0;
+    }
+  } catch (err) {
+    console.error(`[HostFsService] Error creating host volume directory ${hostDirPath}:`, err);
+  }
+
+  return true;
+}
+
+/**
+ * Module 1: Pre-Flight Environment Initialization
+ * Parses the Compose YAML, locates all host-bound volume directories, forcefully creates them via mkdir -p,
+ * and applies aggressive read/write permissions (chmod -R 777) so container daemons (e.g. utorrent UID 1000)
+ * cannot reject mounts or crash due to permission denial.
+ */
+export async function ensureHostVolumeDirectories(
+  targetDirectory: string,
+  composeYaml: string,
+  log?: (msg: string) => void
+): Promise<string[]> {
+  const ensuredDirs: string[] = [];
+  try {
+    const doc = yaml.parse(composeYaml);
+    if (!doc || !doc.services || typeof doc.services !== 'object') {
+      return [];
+    }
+
+    const hostPaths = new Set<string>();
+
+    for (const [, svcConfig] of Object.entries(doc.services)) {
+      if (!svcConfig || typeof svcConfig !== 'object') continue;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const volumes = (svcConfig as any).volumes;
+      if (!Array.isArray(volumes)) continue;
+
+      for (const vol of volumes) {
+        let hostSource: string | undefined;
+
+        if (typeof vol === 'string') {
+          // Short format: "source:target:opts" or "source:target"
+          const parts = vol.split(':');
+          if (parts.length >= 2) {
+            hostSource = parts[0].trim();
+          }
+        } else if (typeof vol === 'object' && vol !== null) {
+          // Long format: { type: 'bind', source: './data', target: '/data' }
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const vObj = vol as any;
+          if (vObj.type === 'bind' || vObj.source) {
+            hostSource = vObj.source;
+          }
+        }
+
+        if (!hostSource) continue;
+
+        // Skip named volumes without slashes or dots (e.g. "db_data")
+        if (
+          !hostSource.startsWith('/') &&
+          !hostSource.startsWith('.') &&
+          !hostSource.startsWith('~') &&
+          !hostSource.includes('/')
+        ) {
+          continue;
+        }
+
+        // Expand variables like ${PWD}
+        hostSource = hostSource.replace(/\$\{PWD\}/g, targetDirectory);
+        hostSource = hostSource.replace(/\$PWD\b/g, targetDirectory);
+
+        // Skip device mounts or well-known system files
+        const systemFiles = [
+          '/var/run/docker.sock',
+          '/etc/localtime',
+          '/etc/timezone',
+          '/dev/net/tun',
+        ];
+        if (systemFiles.includes(hostSource)) continue;
+
+        // Skip file extensions
+        const fileExts = ['.conf', '.cnf', '.ini', '.yaml', '.yml', '.json', '.xml', '.toml', '.txt', '.sock', '.db', '.sqlite'];
+        if (fileExts.some((ext) => hostSource!.toLowerCase().endsWith(ext))) {
+          continue;
+        }
+
+        // Resolve absolute host path
+        let absHostPath = hostSource;
+        if (absHostPath.startsWith('~')) {
+          absHostPath = path.join('/home/ubuntu', absHostPath.slice(1));
+        } else if (!path.isAbsolute(absHostPath)) {
+          absHostPath = path.resolve(targetDirectory, absHostPath);
+        }
+
+        hostPaths.add(absHostPath);
+      }
+    }
+
+    for (const hostDir of hostPaths) {
+      if (log) log(`Pre-Flight: Initializing host volume directory with 777 permissions: ${hostDir}`);
+      await createHostDirectoryWithPermissions(hostDir, '777');
+      ensuredDirs.push(hostDir);
+    }
+  } catch (err) {
+    if (log) log(`Pre-Flight volume directory scan note: ${(err as Error).message}`);
+  }
+
+  return ensuredDirs;
+}
+
+/**
+ * Module 1: Dynamic .env injection
+ * Parses required environment variables from remote Compose file and injects safe defaults into target .env
+ */
+export async function detectAndInjectEnvVariables(
+  targetDirectory: string,
+  composeYaml: string,
+  buildContextDir?: string,
+  log?: (msg: string) => void
+): Promise<Record<string, string>> {
+  const injected: Record<string, string> = {};
+  const envFilePath = path.join(targetDirectory, '.env');
+  const existingEnvContent = (await readHostFile(envFilePath)) || '';
+  const existingKeys = new Set<string>();
+
+  for (const line of existingEnvContent.split('\n')) {
+    const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)=/);
+    if (match) existingKeys.add(match[1]);
+  }
+
+  // Check if .env.example exists in buildContextDir or targetDirectory
+  let exampleContent = '';
+  if (buildContextDir) {
+    const examplePath = path.join(buildContextDir, '.env.example');
+    exampleContent = (await readHostFile(examplePath)) || '';
+  }
+  if (!exampleContent) {
+    const targetExamplePath = path.join(targetDirectory, '.env.example');
+    exampleContent = (await readHostFile(targetExamplePath)) || '';
+  }
+
+  if (exampleContent) {
+    for (const line of exampleContent.split('\n')) {
+      const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+      if (match) {
+        const key = match[1];
+        let val = match[2].trim().replace(/^['"]|['"]$/g, '');
+        if (!existingKeys.has(key)) {
+          if (key === 'PUID' || key === 'UID') val = val || '1000';
+          if (key === 'PGID' || key === 'GID') val = val || '1000';
+          if (key === 'TZ') val = val || 'Etc/UTC';
+          injected[key] = val;
+        }
+      }
+    }
+  }
+
+  // Parse any required variables from Compose YAML: ${VARIABLE} or ${VARIABLE:-default}
+  const varRegex = /\$\{([A-Za-z0-9_]+)(?::?[-?]([^}]*))?\}/g;
+  let m: RegExpExecArray | null;
+  while ((m = varRegex.exec(composeYaml)) !== null) {
+    const key = m[1];
+    const defaultVal = m[2] !== undefined ? m[2] : '';
+    if (!existingKeys.has(key) && !injected[key]) {
+      let resolvedVal = defaultVal;
+      if (!resolvedVal) {
+        if (key === 'PUID' || key === 'UID') resolvedVal = '1000';
+        else if (key === 'PGID' || key === 'GID') resolvedVal = '1000';
+        else if (key === 'TZ') resolvedVal = 'Etc/UTC';
+        else if (key.toLowerCase().includes('port')) resolvedVal = '8080';
+        else resolvedVal = 'default';
+      }
+      injected[key] = resolvedVal;
+    }
+  }
+
+  if (Object.keys(injected).length > 0) {
+    let newContent = existingEnvContent
+      ? `${existingEnvContent.trim()}\n\n# Automatically injected by Manifexus\n`
+      : '# Automatically injected by Manifexus\n';
+    for (const [k, v] of Object.entries(injected)) {
+      newContent += `${k}=${v}\n`;
+    }
+    await writeHostFile(envFilePath, newContent);
+    if (log) {
+      log(`Environment Injection: Configured ${Object.keys(injected).length} variable(s) in ${envFilePath} (${Object.keys(injected).join(', ')})`);
+    }
+  }
+
+  return injected;
 }

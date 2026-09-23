@@ -3,7 +3,14 @@ import path from 'path';
 import { exec } from 'child_process';
 import util from 'util';
 import yaml from 'yaml';
-import { isDockerSocketAvailable, queryDockerEngine, getBestAvailableImage, getContainersList } from './dockerService';
+import {
+  isDockerSocketAvailable,
+  queryDockerEngine,
+  getBestAvailableImage,
+  getContainersList,
+  getContainerLogsTail,
+  pruneOrphanedDockerResources,
+} from './dockerService';
 import {
   createPreMergeSnapshot,
   createComposeInstallSnapshot,
@@ -20,8 +27,11 @@ import {
   removeHostDirectory,
   runHostDockerCompose,
   resolveDefaultHostHome,
+  ensureHostVolumeDirectories,
+  detectAndInjectEnvVariables,
+  isHostPortFree,
 } from './hostFsService';
-import { resolvePortCollisions, RemappedPort } from './portCollisionService';
+import { resolvePortCollisions, extractPortsFromCompose, RemappedPort } from './portCollisionService';
 import { mergeComposeWithAst } from './stackService';
 import { resolveComposeBuildContexts } from './buildContextService';
 
@@ -1023,7 +1033,7 @@ export async function executeStreamingComposeInstall(
     // =========================================================================
     const t2 = Date.now();
     updateStep(2, 'port_collision', 'Intelligent Port Collision Resolution', 'running');
-    log('Scanning system-wide container host ports for collisions...', 2);
+    log('Scanning system-wide container host ports and OS network sockets for collisions...', 2);
 
     // Collect occupied host ports from all discovered containers
     const occupiedPorts = new Set<number>();
@@ -1032,7 +1042,19 @@ export async function executeStreamingComposeInstall(
         if (p.publicPort) occupiedPorts.add(p.publicPort);
       }
     }
-    log(`Identified ${occupiedPorts.size} currently bound host port(s) across fleet.`, 2);
+
+    // Actively scan ports requested in compose to check if host socket is already bound
+    const requestedPorts = extractPortsFromCompose(finalComposeYaml);
+    for (const rp of requestedPorts) {
+      if (rp.hostPort) {
+        const isFree = await isHostPortFree(rp.hostPort);
+        if (!isFree) {
+          log(`Host port ${rp.hostPort} is actively bound on the host system. Flagging as occupied.`, 2);
+          occupiedPorts.add(rp.hostPort);
+        }
+      }
+    }
+    log(`Identified ${occupiedPorts.size} currently bound host port(s) across fleet and host OS.`, 2);
 
     // Execute AST Port Collision Engine
     const portRes = resolvePortCollisions(finalComposeYaml, occupiedPorts);
@@ -1049,7 +1071,7 @@ export async function executeStreamingComposeInstall(
     } else {
       log('Zero port collisions detected. All requested host ports are free.', 2);
     }
-    await sleep(300);
+    await sleep(250);
     updateStep(2, 'port_collision', 'Intelligent Port Collision Resolution', 'success', Date.now() - t2);
 
     if (isNewStack) {
@@ -1083,6 +1105,14 @@ export async function executeStreamingComposeInstall(
         log: (msg) => log(msg, 4),
       });
       finalComposeYaml = buildContextResult.mutatedYaml;
+
+      // Module 1: Dynamic .env injection
+      await detectAndInjectEnvVariables(
+        req.targetDirectory,
+        finalComposeYaml,
+        buildContextResult.clonedContextPaths[0],
+        (msg) => log(msg, 4)
+      );
 
       const targetComposePath = path.join(req.targetDirectory, 'docker-compose.yml');
       log(`Writing finalized Docker Compose file to ${targetComposePath}...`, 4);
@@ -1160,6 +1190,14 @@ export async function executeStreamingComposeInstall(
       });
       finalComposeYaml = buildContextResult.mutatedYaml;
 
+      // Module 1: Dynamic .env injection
+      await detectAndInjectEnvVariables(
+        req.targetDirectory,
+        finalComposeYaml,
+        buildContextResult.clonedContextPaths[0],
+        (msg) => log(msg, 4)
+      );
+
       log('Injecting remote services into existing compose AST while preserving existing services & comments...', 4);
       const parsedRemote = yaml.parse(finalComposeYaml);
       const incomingServices = parsedRemote.services || {};
@@ -1199,6 +1237,14 @@ export async function executeStreamingComposeInstall(
     // =========================================================================
     const t5 = Date.now();
     updateStep(5, 'deployment', 'Elevated Docker Compose Deployment', 'running');
+
+    // Module 1: Pre-Flight Environment Initialization
+    log('Pre-Flight Environment Initialization: Scanning YAML for host volume mounts...', 5);
+    const volumeDirs = await ensureHostVolumeDirectories(req.targetDirectory, finalComposeYaml, (msg) => log(msg, 5));
+    if (volumeDirs.length > 0) {
+      log(`Pre-Flight: Verified ${volumeDirs.length} host volume directory/directories initialized with unrestricted 777 permissions.`, 5);
+    }
+
     log('De-conflicting container names to prevent daemon collisions...', 5);
     for (const svc of affectedServices) {
       await forceRemoveContainer(svc);
@@ -1234,50 +1280,84 @@ export async function executeStreamingComposeInstall(
     // =========================================================================
     const t6 = Date.now();
     updateStep(6, 'completion', 'Socket Health Audit & Ledger Verification', 'running');
-    log('Auditing Docker daemon socket to verify container health and true running status...', 6);
+    log('Auditing Docker daemon socket: Polling container health across 15-second stability window...', 6);
 
-    // Directive 4: True State Verification via Docker Socket
-    const unverifiedServices = new Set(affectedServices);
-    const crashedServices: string[] = [];
+    // Module 1: 15-second Socket Health Polling with Fail-Safe Diagnostics
+    const crashedServices: { name: string; status: string; logs: string }[] = [];
+    const verifiedServices = new Set<string>();
 
-    for (let poll = 1; poll <= 8; poll++) {
+    for (let poll = 1; poll <= 15; poll++) {
       try {
         const { containers: currentFleet } = await getContainersList();
-        for (const svc of Array.from(unverifiedServices)) {
-          const match = currentFleet.find((c) =>
-            c.cleanName === svc ||
-            c.name === `/${svc}` ||
-            c.compose?.service === svc
+        for (const svc of affectedServices) {
+          const match = currentFleet.find(
+            (c) => c.cleanName === svc || c.name === `/${svc}` || c.compose?.service === svc
           );
 
           if (match) {
             const state = match.state?.toLowerCase();
-            if (state === 'running') {
-              log(` -> Service "${svc}" verified actively running (Status: "${match.status}")`, 6);
-              unverifiedServices.delete(svc);
-            } else if (state === 'exited' || state === 'dead' || match.status?.toLowerCase().includes('exit')) {
-              crashedServices.push(`${svc} (Status: ${match.status || state})`);
-              unverifiedServices.delete(svc);
+            const statusLower = (match.status || '').toLowerCase();
+
+            if (state === 'exited' || state === 'dead' || statusLower.includes('exit') || statusLower.includes('dead')) {
+              // Immediately fetch crash logs before proceeding
+              log(`🚨 Service "${svc}" died or exited with status: "${match.status || state}". Fetching diagnostic logs...`, 6);
+              const diagnosticLogs = await getContainerLogsTail(match.id || svc, 100);
+              crashedServices.push({
+                name: svc,
+                status: match.status || state,
+                logs: diagnosticLogs,
+              });
+              verifiedServices.delete(svc);
+            } else if (state === 'running') {
+              if (!verifiedServices.has(svc)) {
+                log(` -> Service "${svc}" verified running (Up: "${match.status}") [Poll ${poll}/15]`, 6);
+                verifiedServices.add(svc);
+              }
             }
           }
         }
 
-        if (unverifiedServices.size === 0) break;
+        // If any service crashed during polling, break early to capture diagnostics and rollback
+        if (crashedServices.length > 0) {
+          break;
+        }
       } catch {
         // transient error during poll
       }
       await sleep(1000);
     }
 
+    // Fail-Safe Diagnostics Stream to UI
     if (crashedServices.length > 0) {
+      for (const crash of crashedServices) {
+        log(`\n===============================================================`, 6);
+        log(`DIAGNOSTIC CRASH STREAM FOR [${crash.name}] (Status: ${crash.status})`, 6);
+        log(`Command: docker logs ${crash.name} --tail 100`, 6);
+        log(`---------------------------------------------------------------`, 6);
+        const logLines = crash.logs.split('\n');
+        for (const line of logLines) {
+          if (line.trim()) log(` [stderr/stdout] ${line}`, 6);
+        }
+        log(`===============================================================\n`, 6);
+      }
+
       throw new Error(
-        `Container health check failed: The following service(s) crashed or exited immediately after launch: ${crashedServices.join(', ')}`
+        `Container startup failure: ${crashedServices.map((c) => `${c.name} (${c.status})`).join(', ')}. Live logs streamed above.`
       );
     }
 
-    if (unverifiedServices.size > 0) {
+    // Verify all affected services are confirmed running
+    const missingServices = affectedServices.filter((svc) => !verifiedServices.has(svc));
+    if (missingServices.length > 0) {
+      for (const missing of missingServices) {
+        log(`Fetching diagnostic logs for unverified service "${missing}"...`, 6);
+        const diag = await getContainerLogsTail(missing, 100);
+        for (const line of diag.split('\n')) {
+          if (line.trim()) log(` [${missing}] ${line}`, 6);
+        }
+      }
       throw new Error(
-        `Container health check failed: Docker daemon reported that the following service(s) failed to reach running state: ${Array.from(unverifiedServices).join(', ')}`
+        `Container health check failed: The following service(s) failed to achieve continuous running state: ${missingServices.join(', ')}`
       );
     }
 
@@ -1316,7 +1396,7 @@ export async function executeStreamingComposeInstall(
     log(`CRITICAL PIPELINE FAILURE: ${errMsg}`, currentStepIndex);
     updateStep(currentStepIndex, currentStepId, currentStepName, 'failed');
 
-    // Directive 3: Automated Rollback on failure
+    // Directive 3 & Module 1: Automated Rollback & Resource Pruning on failure
     log('INITIATING AUTOMATED ROLLBACK: Reverting target state and pruning orphaned files...', currentStepIndex);
     try {
       if (isNewStack) {
@@ -1325,14 +1405,18 @@ export async function executeStreamingComposeInstall(
         for (const svc of affectedServices) {
           await forceRemoveContainer(svc);
         }
+        // Prune orphaned networks and untagged images created during failed run
+        await pruneOrphanedDockerResources(`${req.targetStackName}_default`);
         log(`Removing provisional target directory: ${req.targetDirectory}...`, currentStepIndex);
         await removeHostDirectory(req.targetDirectory);
-        log('Provisional filesystem wiped cleanly. Zero orphaned files left on host.', currentStepIndex);
+        log('Provisional filesystem wiped cleanly. Zero orphaned containers, networks, or dangling images left on host.', currentStepIndex);
       } else {
         log(`Halting failed injected services in ${req.targetDirectory}...`, currentStepIndex);
         for (const svc of affectedServices) {
           await forceRemoveContainer(svc);
         }
+        // Prune orphaned networks and untagged dangling images
+        await pruneOrphanedDockerResources();
         if (preMergeComposeContent) {
           const targetComposePath = path.join(req.targetDirectory, 'docker-compose.yml');
           log(`Restoring pre-merge target compose configuration to ${targetComposePath}...`, currentStepIndex);

@@ -300,24 +300,24 @@ export async function resolveComposeBuildContexts(params: {
 
     clonedContextPaths.push(cloneResult.hostContextAbsPath);
 
-    // Mutate AST build context to point to the cloned subfolder
+    // Mutate AST build context to strictly map the absolute host path to the newly cloned repository directory
     if (typeof svc.build === 'string') {
       const origBuild = svc.build.trim();
       if (origBuild === '.' || origBuild === './' || origBuild === '') {
-        svc.build = cloneResult.hostContextRelPath;
+        svc.build = cloneResult.hostContextAbsPath;
       } else if (origBuild.startsWith('./')) {
-        svc.build = `${cloneResult.hostContextRelPath}/${origBuild.slice(2)}`;
+        svc.build = path.join(cloneResult.hostContextAbsPath, origBuild.slice(2));
       } else if (!origBuild.startsWith('/')) {
-        svc.build = `${cloneResult.hostContextRelPath}/${origBuild}`;
+        svc.build = path.join(cloneResult.hostContextAbsPath, origBuild);
       }
     } else if (typeof svc.build === 'object' && svc.build !== null) {
       const origContext = (svc.build.context || '.').trim();
       if (origContext === '.' || origContext === './' || origContext === '') {
-        svc.build.context = cloneResult.hostContextRelPath;
+        svc.build.context = cloneResult.hostContextAbsPath;
       } else if (origContext.startsWith('./')) {
-        svc.build.context = `${cloneResult.hostContextRelPath}/${origContext.slice(2)}`;
+        svc.build.context = path.join(cloneResult.hostContextAbsPath, origContext.slice(2));
       } else if (!origContext.startsWith('/')) {
-        svc.build.context = `${cloneResult.hostContextRelPath}/${origContext}`;
+        svc.build.context = path.join(cloneResult.hostContextAbsPath, origContext);
       }
     }
 

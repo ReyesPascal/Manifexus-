@@ -301,13 +301,13 @@ export const ComposeInstallModal: React.FC<ComposeInstallModalProps> = ({
               <div className="h-px w-6 bg-slate-800 hidden sm:block" />
 
               <button
-                disabled={!remoteMetadata}
+                disabled={!remoteMetadata || !isStep2Valid}
                 onClick={handleProceedToReview}
                 className={`flex items-center gap-1.5 px-3 py-1 rounded-md transition-all ${
                   currentStep === 3
                     ? 'bg-cyan-950/80 border border-cyan-500/40 text-cyan-300'
-                    : remoteMetadata
-                    ? 'text-slate-400 hover:text-slate-200'
+                    : isStep2Valid
+                    ? 'text-slate-400 hover:text-slate-200 cursor-pointer'
                     : 'text-slate-600 cursor-not-allowed'
                 }`}
               >

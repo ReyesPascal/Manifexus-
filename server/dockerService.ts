@@ -1217,3 +1217,94 @@ export function mergeDemoContainersIntoStack(
   return true;
 }
 
+/**
+ * Strips Docker multiplexed log frame headers from string
+ */
+function cleanDockerLogsInternal(raw: string | unknown): string {
+  if (typeof raw !== 'string') return '';
+  if (raw.length > 8 && raw.charCodeAt(0) <= 2 && raw.charCodeAt(1) === 0 && raw.charCodeAt(2) === 0) {
+    let cleaned = '';
+    let pos = 0;
+    while (pos < raw.length) {
+      if (pos + 8 > raw.length) break;
+      const size = (raw.charCodeAt(pos + 4) << 24) |
+                   (raw.charCodeAt(pos + 5) << 16) |
+                   (raw.charCodeAt(pos + 6) << 8) |
+                   raw.charCodeAt(pos + 7);
+      pos += 8;
+      cleaned += raw.substring(pos, pos + size);
+      pos += size;
+    }
+    return cleaned || raw.substring(8);
+  }
+  return raw;
+}
+
+/**
+ * Module 1: Fail-Safe Diagnostics
+ * Retrieves the last N lines of stdout and stderr for a container, exposing the exact crash reason.
+ */
+export async function getContainerLogsTail(containerNameOrId: string, tail: number = 100): Promise<string> {
+  const cleanName = containerNameOrId.replace(/^\//, '');
+  if (isDockerSocketAvailable()) {
+    try {
+      const raw = await queryDockerEngine<string>(
+        `/containers/${encodeURIComponent(cleanName)}/logs?stdout=1&stderr=1&tail=${tail}`,
+        'GET'
+      );
+      const cleaned = cleanDockerLogsInternal(raw);
+      if (cleaned && cleaned.trim()) {
+        return cleaned.trim();
+      }
+    } catch {
+      // fallback to helper container
+    }
+
+    try {
+      const helperImage = await getBestAvailableImage();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const runner = await queryDockerEngine<any>('/containers/create', 'POST', {
+        Image: helperImage,
+        Entrypoint: [],
+        Cmd: ['docker', 'logs', cleanName, '--tail', String(tail)],
+        HostConfig: {
+          Binds: [`${DOCKER_SOCKET_PATH}:/var/run/docker.sock`],
+        },
+      });
+
+      if (runner && runner.Id) {
+        await queryDockerEngine(`/containers/${runner.Id}/start`, 'POST');
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await queryDockerEngine<any>(`/containers/${runner.Id}/wait`, 'POST', undefined, 10000);
+        const logs = await queryDockerEngine<string>(`/containers/${runner.Id}/logs?stdout=1&stderr=1`, 'GET');
+        await queryDockerEngine(`/containers/${runner.Id}?force=true`, 'DELETE');
+        const cleaned = cleanDockerLogsInternal(logs);
+        if (cleaned && cleaned.trim()) {
+          return cleaned.trim();
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  return `[Container "${cleanName}" exited before runtime logs could be flushed. Verify volume permissions and port bindings.]`;
+}
+
+/**
+ * Module 1: Rollback Resource Pruning
+ * Completely prunes orphaned networks and untagged dangling images created during failed runs.
+ */
+export async function pruneOrphanedDockerResources(networkName?: string): Promise<void> {
+  if (isDockerSocketAvailable()) {
+    try {
+      await queryDockerEngine('/networks/prune', 'POST').catch(() => null);
+      await queryDockerEngine('/images/prune?filters={"dangling":["true"]}', 'POST').catch(() => null);
+      if (networkName) {
+        await queryDockerEngine(`/networks/${encodeURIComponent(networkName)}`, 'DELETE').catch(() => null);
+      }
+    } catch {
+      // ignore
+    }
+  }
+}
