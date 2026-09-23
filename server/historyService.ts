@@ -23,6 +23,10 @@ export interface MergeHistoryRecord {
   archiveSizeBytes: number;
   summary: string;
   logs?: string[];
+  type?: 'MERGE' | 'COMPOSE_INSTALL';
+  installMode?: 'existing-stack' | 'new-stack';
+  sourceUrl?: string;
+  remappedPorts?: { service: string; originalHostPort: number; allocatedHostPort: number }[];
 }
 
 // Backup paths: Prefer /app/backups as required by Directive 6, fallback to ./data/backups or ./backups
@@ -228,3 +232,78 @@ export function markMergeAsReverted(id: string, logs: string[]): boolean {
   saveMergeHistoryRecord(record);
   return true;
 }
+
+/**
+ * Directives 4 & 5: Create state ledger entry & zero-data-loss backup snapshot for COMPOSE_INSTALL
+ */
+export async function createComposeInstallSnapshot(params: {
+  installId: string;
+  targetStackName: string;
+  targetDirectory: string;
+  installMode: 'existing-stack' | 'new-stack';
+  sourceUrl: string;
+  affectedServices: string[];
+  preMergeComposeContent?: string;
+  remappedPorts?: { service: string; originalHostPort: number; allocatedHostPort: number }[];
+}): Promise<{ backupArchiveDir: string; record: MergeHistoryRecord }> {
+  const {
+    installId,
+    targetStackName,
+    targetDirectory,
+    installMode,
+    sourceUrl,
+    affectedServices,
+    preMergeComposeContent,
+    remappedPorts,
+  } = params;
+
+  const backupRoot = resolveBackupDir();
+  const archiveDirName = `snapshot_${installId}`;
+  const backupArchiveDir = path.join(backupRoot, archiveDirName);
+
+  if (!fs.existsSync(backupArchiveDir)) {
+    fs.mkdirSync(backupArchiveDir, { recursive: true });
+  }
+
+  let targetComposeBackupPath: string | undefined;
+  if (preMergeComposeContent) {
+    targetComposeBackupPath = path.join(backupArchiveDir, 'target-docker-compose.pre-merge.yml');
+    fs.writeFileSync(targetComposeBackupPath, preMergeComposeContent, 'utf8');
+  }
+
+  let archiveSizeBytes = 1024;
+  try {
+    const files = fs.readdirSync(backupArchiveDir);
+    archiveSizeBytes = files.reduce((acc, f) => acc + fs.statSync(path.join(backupArchiveDir, f)).size, 0);
+  } catch {
+    // ignore
+  }
+
+  const record: MergeHistoryRecord = {
+    id: installId,
+    timestamp: new Date().toISOString(),
+    targetStackName,
+    targetDirectory,
+    backupArchiveDir,
+    sourceStacks: [sourceUrl],
+    affectedServices,
+    preMergeComposeContent,
+    targetComposeBackupPath,
+    sourceConfigs: [],
+    status: 'pending_decision',
+    archiveSizeBytes,
+    type: 'COMPOSE_INSTALL',
+    installMode,
+    sourceUrl,
+    remappedPorts,
+    summary:
+      installMode === 'new-stack'
+        ? `Provisioned new stack "${targetStackName}" with ${affectedServices.length} service(s) from remote Compose`
+        : `Installed ${affectedServices.length} service(s) into existing stack "${targetStackName}" from remote Compose`,
+  };
+
+  saveMergeHistoryRecord(record);
+
+  return { backupArchiveDir, record };
+}
+

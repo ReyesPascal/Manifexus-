@@ -28,6 +28,7 @@ import { GroupManagerModal } from './components/GroupManagerModal';
 import { SettingsModal } from './components/SettingsModal';
 import { SimulateContainerModal } from './components/SimulateContainerModal';
 import { StackMergeModal } from './components/StackMergeModal';
+import { ComposeInstallModal } from './components/ComposeInstallModal';
 import { HostAutomationModal } from './components/HostAutomationModal';
 import { ManifexusHeroHeader } from './components/ManifexusHeroHeader';
 import { MergeHistoryModal } from './components/MergeHistoryModal';
@@ -40,6 +41,7 @@ export default function App() {
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
   const [privileges, setPrivileges] = useState<AutomationPrivileges | null>(null);
   const [isAutomationModalOpen, setIsAutomationModalOpen] = useState(false);
+  const [isComposeInstallOpen, setIsComposeInstallOpen] = useState(false);
   const [config, setConfig] = useState<ManifexusConfig | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -374,6 +376,7 @@ export default function App() {
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenGroupManager={() => setIsGroupManagerOpen(true)}
         onOpenSimulateModal={() => setIsSimulateOpen(true)}
+        onOpenComposeInstall={() => setIsComposeInstallOpen(true)}
         onOpenStackMerger={() => {
           setMergeModalInitialIds([]);
           setMergeModalInitialStack(undefined);
@@ -771,6 +774,18 @@ export default function App() {
         onOpenAutomationModal={() => setIsAutomationModalOpen(true)}
         onRefreshPrivileges={fetchPrivileges}
         onMergeSuccess={() => {
+          fetchData(true);
+          fetchPrivileges();
+        }}
+      />
+
+      {/* Remote Compose Installation Studio Modal */}
+      <ComposeInstallModal
+        isOpen={isComposeInstallOpen}
+        onClose={() => setIsComposeInstallOpen(false)}
+        containers={containers}
+        privileges={privileges}
+        onInstallSuccess={() => {
           fetchData(true);
           fetchPrivileges();
         }}

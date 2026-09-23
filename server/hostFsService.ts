@@ -177,7 +177,170 @@ export async function checkHostFileExists(hostFilePath: string): Promise<boolean
 }
 
 /**
+ * Creates a directory on the host with elevated privileges.
+ */
+export async function createHostDirectory(hostDirPath: string): Promise<boolean> {
+  const localCandidate = resolveContainerPath(hostDirPath);
+  try {
+    if (fs.existsSync(localCandidate)) {
+      return true;
+    }
+    fs.mkdirSync(localCandidate, { recursive: true });
+    return true;
+  } catch {
+    // Proceed to root helper container
+  }
+
+  try {
+    const parentDir = path.dirname(hostDirPath);
+    const helperImage = await getBestAvailableImage();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const runner = await queryDockerEngine<any>('/containers/create', 'POST', {
+      Image: helperImage,
+      Entrypoint: [],
+      Cmd: ['sh', '-c', `mkdir -p "${hostDirPath}" && chmod 755 "${hostDirPath}"`],
+      HostConfig: {
+        Binds: [`${parentDir}:${parentDir}:rw`],
+      },
+    });
+
+    if (runner && runner.Id) {
+      await queryDockerEngine(`/containers/${runner.Id}/start`, 'POST');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const waitRes = await queryDockerEngine<any>(`/containers/${runner.Id}/wait`, 'POST');
+      await queryDockerEngine(`/containers/${runner.Id}?force=true`, 'DELETE');
+      return waitRes && waitRes.StatusCode === 0;
+    }
+  } catch (err) {
+    console.error(`[HostFsService] Error creating host directory ${hostDirPath}:`, err);
+  }
+
+  return false;
+}
+
+/**
+ * Recursively removes a directory on the host (used for clean rollback of provisioned new stacks)
+ */
+export async function removeHostDirectory(hostDirPath: string): Promise<boolean> {
+  // Safety guard: NEVER allow deleting critical root or top-level system folders
+  const forbidden = ['/', '/home', '/etc', '/var', '/usr', '/bin', '/root', '/app', '/home/ryan', '/home/ubuntu'];
+  const normalized = path.resolve(hostDirPath);
+  if (forbidden.includes(normalized) || normalized.split(path.sep).filter(Boolean).length < 2) {
+    console.warn(`[HostFsService] Refusing to delete protected system path: ${normalized}`);
+    return false;
+  }
+
+  const localCandidate = resolveContainerPath(hostDirPath);
+  try {
+    if (fs.existsSync(localCandidate)) {
+      fs.rmSync(localCandidate, { recursive: true, force: true });
+      return true;
+    }
+  } catch {
+    // proceed to helper container
+  }
+
+  try {
+    const parentDir = path.dirname(hostDirPath);
+    const helperImage = await getBestAvailableImage();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const runner = await queryDockerEngine<any>('/containers/create', 'POST', {
+      Image: helperImage,
+      Entrypoint: [],
+      Cmd: ['sh', '-c', `rm -rf "${hostDirPath}"`],
+      HostConfig: {
+        Binds: [`${parentDir}:${parentDir}:rw`],
+      },
+    });
+
+    if (runner && runner.Id) {
+      await queryDockerEngine(`/containers/${runner.Id}/start`, 'POST');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const waitRes = await queryDockerEngine<any>(`/containers/${runner.Id}/wait`, 'POST');
+      await queryDockerEngine(`/containers/${runner.Id}?force=true`, 'DELETE');
+      return waitRes && waitRes.StatusCode === 0;
+    }
+  } catch (err) {
+    console.error(`[HostFsService] Error removing host directory ${hostDirPath}:`, err);
+  }
+
+  return false;
+}
+
+/**
+ * Directive 1: Root-Level Elevated Docker Compose Execution
+ * Runs docker compose command with root privileges and non-blocking TTY execution
+ */
+export async function runHostDockerCompose(
+  targetDir: string,
+  composeArgs: string
+): Promise<{ success: boolean; stdout: string; stderr: string; exitCode: number }> {
+  try {
+    const helperImage = await getBestAvailableImage();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const runner = await queryDockerEngine<any>('/containers/create', 'POST', {
+      Image: helperImage,
+      Entrypoint: [],
+      Cmd: [
+        'sh',
+        '-c',
+        `cd "${targetDir}" && (docker compose ${composeArgs} 2>&1 || docker-compose ${composeArgs} 2>&1 || true)`,
+      ],
+      HostConfig: {
+        Binds: [
+          `${DOCKER_SOCKET_PATH}:/var/run/docker.sock`,
+          `${targetDir}:${targetDir}:rw`,
+        ],
+      },
+    });
+
+    if (runner && runner.Id) {
+      await queryDockerEngine(`/containers/${runner.Id}/start`, 'POST');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const waitRes = await queryDockerEngine<any>(`/containers/${runner.Id}/wait`, 'POST');
+      const rawLogs = await queryDockerEngine<string>(`/containers/${runner.Id}/logs?stdout=1&stderr=1`, 'GET');
+      const cleanLogs = cleanDockerLogs(rawLogs);
+      await queryDockerEngine(`/containers/${runner.Id}?force=true`, 'DELETE');
+
+      const exitCode = waitRes ? waitRes.StatusCode : 0;
+      return {
+        success: exitCode === 0,
+        stdout: cleanLogs,
+        stderr: exitCode !== 0 ? cleanLogs : '',
+        exitCode,
+      };
+    }
+  } catch (err) {
+    console.error(`[HostFsService] Error running docker compose in ${targetDir}:`, err);
+  }
+
+  return {
+    success: false,
+    stdout: '',
+    stderr: 'Failed to dispatch command to Docker daemon',
+    exitCode: 1,
+  };
+}
+
+/**
+ * Resolves default home directory base path for new stacks (e.g. /home/ryan or /home/$USER)
+ */
+export function resolveDefaultHostHome(existingWorkingDirs?: string[]): string {
+  if (existingWorkingDirs && existingWorkingDirs.length > 0) {
+    for (const d of existingWorkingDirs) {
+      const match = d.match(/^(\/home\/[^/]+)/);
+      if (match) return match[1];
+    }
+  }
+
+  if (process.env.HOST_HOME) return process.env.HOST_HOME;
+  if (process.env.USER && process.env.USER !== 'root') return `/home/${process.env.USER}`;
+  return '/home/ryan';
+}
+
+/**
  * Removes lingering conflicting containers by name or ID directly via Docker socket
+
  */
 export async function forceRemoveContainer(containerNameOrId: string): Promise<boolean> {
   try {

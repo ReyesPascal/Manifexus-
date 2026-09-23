@@ -21,10 +21,13 @@ import {
   generateElevateScript,
   executeStreamingPipeline,
   executeStreamingRevert,
+  executeStreamingComposeInstall,
   resolveHostPathToContainer,
   repairTargetStack,
 } from './server/automationService';
-import { readHostFile } from './server/hostFsService';
+import { readHostFile, resolveDefaultHostHome } from './server/hostFsService';
+import { fetchRemoteCompose } from './server/remoteComposeService';
+import { resolvePortCollisions } from './server/portCollisionService';
 import {
   getMergeHistory,
   finalizeMergeRecord,
@@ -435,6 +438,122 @@ async function startServer() {
       sendEvent({ type: 'failed', log: (err as Error).message });
     } finally {
       res.end();
+    }
+  });
+
+  // Directive 2: Fetch and inspect remote Compose URL
+  app.post('/api/compose/fetch-remote', async (req, res) => {
+    try {
+      const { url } = req.body;
+      if (!url || typeof url !== 'string' || url.trim().length === 0) {
+        return res
+          .status(400)
+          .json({ error: 'A remote URL (e.g. GitHub repository link or raw compose file URL) is required.' });
+      }
+
+      const metadata = await fetchRemoteCompose(url);
+
+      // Get current occupied host ports across fleet
+      const { containers } = await getContainersList();
+      const occupiedPorts: number[] = [];
+      for (const c of containers) {
+        for (const p of c.ports) {
+          if (p.publicPort && !occupiedPorts.includes(p.publicPort)) {
+            occupiedPorts.push(p.publicPort);
+          }
+        }
+      }
+
+      res.json({
+        ...metadata,
+        occupiedPorts,
+      });
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  // Directive 3: AST Port Collision Analysis & Resolution
+  app.post('/api/compose/resolve-ports', async (req, res) => {
+    try {
+      const { yaml: yamlContent } = req.body;
+      if (!yamlContent) {
+        return res.status(400).json({ error: 'YAML content is required' });
+      }
+
+      const { containers } = await getContainersList();
+      const occupiedPorts = new Set<number>();
+      for (const c of containers) {
+        for (const p of c.ports) {
+          if (p.publicPort) occupiedPorts.add(p.publicPort);
+        }
+      }
+
+      const result = resolvePortCollisions(yamlContent, occupiedPorts);
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // Directives 4 & 5: Live Streaming Remote Compose Installation (SSE)
+  app.post('/api/compose/install-stream', async (req, res) => {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    // @ts-ignore
+    if (res.flushHeaders) res.flushHeaders();
+
+    const sendEvent = (data: any) => {
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+
+    try {
+      const { installId, sourceUrl, targetStackName, targetDirectory, installMode, composeYaml } = req.body;
+      if (!composeYaml || !targetDirectory || !targetStackName) {
+        sendEvent({
+          type: 'error',
+          error: 'Missing required install parameters (composeYaml, targetDirectory, targetStackName).',
+        });
+        res.end();
+        return;
+      }
+
+      await executeStreamingComposeInstall(
+        {
+          installId,
+          sourceUrl: sourceUrl || 'remote-compose',
+          targetStackName,
+          targetDirectory,
+          installMode: installMode || 'new-stack',
+          composeYaml,
+        },
+        sendEvent
+      );
+    } catch (err) {
+      sendEvent({ type: 'error', error: (err as Error).message });
+    } finally {
+      res.end();
+    }
+  });
+
+  // Host environment detection (default home directory, existing stack directories)
+  app.get('/api/compose/host-environment', async (req, res) => {
+    try {
+      const { containers } = await getContainersList();
+      const existingWorkingDirs: string[] = [];
+      for (const c of containers) {
+        if (c.compose?.workingDir && !existingWorkingDirs.includes(c.compose.workingDir)) {
+          existingWorkingDirs.push(c.compose.workingDir);
+        }
+      }
+      const defaultHomeDir = resolveDefaultHostHome(existingWorkingDirs);
+      res.json({
+        defaultHomeDir,
+        existingWorkingDirs,
+      });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 

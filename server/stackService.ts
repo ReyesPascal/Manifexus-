@@ -79,7 +79,9 @@ export function mergeComposeWithAst(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   newServices: Record<string, any>,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  newVolumes?: Record<string, any>
+  newVolumes?: Record<string, any>,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  newNetworks?: Record<string, any>
 ): string {
   try {
     const doc = parseDocument(existingYaml);
@@ -101,6 +103,17 @@ export function mergeComposeWithAst(
       }
       for (const [vName, vDef] of Object.entries(newVolumes)) {
         volumes.set(vName, vDef);
+      }
+    }
+
+    if (newNetworks && Object.keys(newNetworks).length > 0) {
+      let networks = doc.get('networks') as YAMLMap;
+      if (!networks) {
+        doc.set('networks', new YAMLMap());
+        networks = doc.get('networks') as YAMLMap;
+      }
+      for (const [nName, nDef] of Object.entries(newNetworks)) {
+        networks.set(nName, nDef);
       }
     }
 

@@ -151,3 +151,38 @@ export interface AutomationPrivileges {
   };
 }
 
+export interface RemappedPort {
+  service: string;
+  originalHostPort: number;
+  allocatedHostPort: number;
+  containerPort: number;
+  protocol: 'tcp' | 'udp';
+  hostIp?: string;
+  reason: string;
+}
+
+export interface RemoteComposeMetadata {
+  url: string;
+  resolvedSourceUrl: string;
+  rawYaml: string;
+  serviceNames: string[];
+  serviceDetails: {
+    name: string;
+    image?: string;
+    containerName?: string;
+    ports: {
+      service: string;
+      hostPort?: number;
+      containerPort: number;
+      protocol: 'tcp' | 'udp';
+      hostIp?: string;
+    }[];
+    volumeCount: number;
+    networkCount: number;
+  }[];
+  isGitHubRepo: boolean;
+  repoOwner?: string;
+  repoName?: string;
+  occupiedPorts?: number[];
+}
+

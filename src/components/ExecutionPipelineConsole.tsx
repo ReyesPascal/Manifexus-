@@ -28,7 +28,7 @@ interface ExecutionPipelineConsoleProps {
   isOpen: boolean;
   onClose: () => void;
   title: string;
-  mode: 'merge' | 'revert';
+  mode: 'merge' | 'revert' | 'install';
   mergeId?: string;
   streamUrl: string;
   streamPayload: Record<string, unknown>;
@@ -82,6 +82,15 @@ export const ExecutionPipelineConsole: React.FC<ExecutionPipelineConsoleProps> =
       { index: 7, id: 'completion', name: 'Pipeline Completion', status: 'pending', logs: [] },
     ];
 
+    const defaultInstallSteps: PipelineStep[] = [
+      { index: 1, id: 'preflight', name: 'Pre-Flight & Remote Fetch Validation', status: 'pending', logs: [] },
+      { index: 2, id: 'port_collision', name: 'Intelligent Port Collision Resolution', status: 'pending', logs: [] },
+      { index: 3, id: 'provision_directory', name: 'Directory / Snapshot Setup', status: 'pending', logs: [] },
+      { index: 4, id: 'ast_synthesis', name: 'AST Synthesis & Compose Deployment', status: 'pending', logs: [] },
+      { index: 5, id: 'deployment', name: 'Elevated Docker Compose Deployment', status: 'pending', logs: [] },
+      { index: 6, id: 'completion', name: 'Completion & State Ledger Verification', status: 'pending', logs: [] },
+    ];
+
     const defaultRevertSteps: PipelineStep[] = [
       { index: 1, id: 'stop_merged', name: 'Halting Merged Services', status: 'pending', logs: [] },
       { index: 2, id: 'restore_compose', name: 'Restoring Target Compose Backup', status: 'pending', logs: [] },
@@ -90,7 +99,10 @@ export const ExecutionPipelineConsole: React.FC<ExecutionPipelineConsoleProps> =
       { index: 5, id: 'revert_complete', name: 'Rollback Complete & Ledger Verified', status: 'pending', logs: [] },
     ];
 
-    const initialSteps = mode === 'merge' ? defaultMergeSteps : defaultRevertSteps;
+    let initialSteps: PipelineStep[];
+    if (mode === 'merge') initialSteps = defaultMergeSteps;
+    else if (mode === 'install') initialSteps = defaultInstallSteps;
+    else initialSteps = defaultRevertSteps;
     setSteps(initialSteps);
     setGlobalLogs([]);
     setIsCompleted(false);
@@ -204,10 +216,10 @@ export const ExecutionPipelineConsole: React.FC<ExecutionPipelineConsoleProps> =
       if (event.status === 'running') {
         setExpandedSteps((prev) => ({ ...prev, [event.stepIndex!]: true }));
       }
-    } else if (event.type === 'completed') {
+    } else if (event.type === 'completed' || event.type === 'done') {
       setIsCompleted(true);
-      if (mode === 'merge') {
-        // Trigger Directive 4 Post-Merge Decision Prompt
+      if (mode === 'merge' || mode === 'install') {
+        // Trigger Directive 4 Post-Action Decision Prompt
         setShowDecisionPrompt(true);
       } else {
         // Revert completed
@@ -219,10 +231,11 @@ export const ExecutionPipelineConsole: React.FC<ExecutionPipelineConsoleProps> =
       if (event.log) {
         setGlobalLogs((prev) => [...prev, `[Auto-Reverted] ${event.log}`]);
       }
-    } else if (event.type === 'failed') {
+    } else if (event.type === 'failed' || event.type === 'error') {
       setIsFailed(true);
-      if (event.log) {
-        setGlobalLogs((prev) => [...prev, `[Failed] ${event.log}`]);
+      const errMsg = event.log || (event as any).error;
+      if (errMsg) {
+        setGlobalLogs((prev) => [...prev, `[Failed] ${errMsg}`]);
       }
     }
   };

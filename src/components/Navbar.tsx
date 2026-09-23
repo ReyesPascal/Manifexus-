@@ -11,6 +11,7 @@ import {
   AlertTriangle,
   Server,
   History,
+  CloudDownload,
 } from 'lucide-react';
 import { SystemStatus, AutomationPrivileges } from '../types';
 import { Zap, ShieldAlert } from 'lucide-react';
@@ -29,6 +30,7 @@ interface NavbarProps {
   onOpenSettings: () => void;
   onOpenGroupManager: () => void;
   onOpenSimulateModal: () => void;
+  onOpenComposeInstall?: () => void;
   onOpenStackMerger?: () => void;
   onOpenHistory?: () => void;
   onRefresh: () => void;
@@ -49,6 +51,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenSettings,
   onOpenGroupManager,
   onOpenSimulateModal,
+  onOpenComposeInstall,
   onOpenStackMerger,
   onOpenHistory,
   onRefresh,
@@ -262,6 +265,18 @@ export const Navbar: React.FC<NavbarProps> = ({
 
           {/* Action buttons */}
           <div className="hidden md:flex items-center gap-1.5">
+            {/* Directive 2: Remote Compose Installation Engine */}
+            {onOpenComposeInstall && (
+              <button
+                onClick={onOpenComposeInstall}
+                className="px-2.5 py-1.5 rounded-lg bg-cyan-950/80 border border-cyan-500/40 text-xs font-mono text-cyan-300 hover:bg-cyan-900/60 transition-colors flex items-center gap-1.5 shadow-[0_0_12px_rgba(6,182,212,0.15)]"
+                title="Fetch & deploy remote Docker Compose stack (GitHub, URL, etc.)"
+              >
+                <CloudDownload className="w-3.5 h-3.5 text-cyan-400" />
+                <span>Install New Compose</span>
+              </button>
+            )}
+
             {/* Combine / Merge Stacks Studio */}
             {onOpenStackMerger && (
               <button
