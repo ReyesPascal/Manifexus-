@@ -33,6 +33,7 @@ import { HostAutomationModal } from './components/HostAutomationModal';
 import { ManifexusHeroHeader } from './components/ManifexusHeroHeader';
 import { MergeHistoryModal } from './components/MergeHistoryModal';
 import { ExecutionPipelineConsole } from './components/ExecutionPipelineConsole';
+import { SystemLogsModal } from './components/SystemLogsModal';
 import { AutomationPrivileges } from './types';
 import { History } from 'lucide-react';
 
@@ -60,6 +61,7 @@ export default function App() {
   const [isSimulateOpen, setIsSimulateOpen] = useState(false);
   const [isMergeModalOpen, setIsMergeModalOpen] = useState(false);
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
+  const [isSystemLogsOpen, setIsSystemLogsOpen] = useState(false);
   const [revertRecordToStream, setRevertRecordToStream] = useState<any | null>(null);
   const [mergeModalInitialIds, setMergeModalInitialIds] = useState<string[]>([]);
   const [mergeModalInitialStack, setMergeModalInitialStack] = useState<string | undefined>(undefined);
@@ -392,6 +394,7 @@ export default function App() {
           setIsMergeModalOpen(true);
         }}
         onOpenHistory={() => setIsHistoryModalOpen(true)}
+        onOpenSystemLogs={() => setIsSystemLogsOpen(true)}
         onRefresh={() => {
           fetchData(true);
           fetchPrivileges();
@@ -834,6 +837,12 @@ export default function App() {
           }}
         />
       )}
+
+      {/* Module 3: Centralized System Logs Modal */}
+      <SystemLogsModal
+        isOpen={isSystemLogsOpen}
+        onClose={() => setIsSystemLogsOpen(false)}
+      />
     </div>
   );
 }

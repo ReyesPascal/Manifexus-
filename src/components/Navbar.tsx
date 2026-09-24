@@ -12,6 +12,7 @@ import {
   Server,
   History,
   CloudDownload,
+  ScrollText,
 } from 'lucide-react';
 import { SystemStatus, AutomationPrivileges } from '../types';
 import { Zap, ShieldAlert } from 'lucide-react';
@@ -33,6 +34,7 @@ interface NavbarProps {
   onOpenComposeInstall?: () => void;
   onOpenStackMerger?: () => void;
   onOpenHistory?: () => void;
+  onOpenSystemLogs?: () => void;
   onRefresh: () => void;
   isRefreshing: boolean;
 }
@@ -54,6 +56,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenComposeInstall,
   onOpenStackMerger,
   onOpenHistory,
+  onOpenSystemLogs,
   onRefresh,
   isRefreshing,
 }) => {
@@ -297,7 +300,19 @@ export const Navbar: React.FC<NavbarProps> = ({
                 title="Open Merge State Ledger & Snapshots"
               >
                 <History className="w-3.5 h-3.5 text-purple-400" />
-                <span className="hidden lg:inline">Ledger</span>
+                <span className="hidden lg:inline">Backups</span>
+              </button>
+            )}
+
+            {/* Centralized System Logs */}
+            {onOpenSystemLogs && (
+              <button
+                onClick={onOpenSystemLogs}
+                className="px-2.5 py-1.5 rounded-lg bg-slate-900 border border-cyan-500/40 text-xs font-mono text-cyan-300 hover:border-cyan-400 hover:bg-cyan-950/40 transition-all flex items-center gap-1.5 shadow-[0_0_10px_rgba(6,182,212,0.15)]"
+                title="Open Centralized System Audit Logs"
+              >
+                <ScrollText className="w-3.5 h-3.5 text-cyan-400" />
+                <span className="hidden lg:inline">System Logs</span>
               </button>
             )}
 

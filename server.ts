@@ -35,6 +35,12 @@ import {
 } from './server/historyService';
 import fs from 'fs';
 import { DeepContainerMetadata } from './src/types';
+import {
+  getSystemLogs,
+  pruneSystemLogs,
+  logEvent,
+  sysLog,
+} from './server/systemLogService';
 
 async function startServer() {
   const app = express();
@@ -61,8 +67,22 @@ async function startServer() {
       const available = isDockerSocketAvailable();
       const { containers, isDemo, dockerVersion, os } = await getContainersList();
 
+      // Module 4: Metric Calculation Audit
+      // FLEET RUNNING strictly counts 'running' state
       const runningCount = containers.filter((c) => c.state === 'running').length;
-      const stoppedCount = containers.length - runningCount;
+      // EXITED / STOPPED strictly counts 'exited', 'stopped', or 'dead' states across all stacks
+      const stoppedCount = containers.filter((c) => {
+        const s = (c.state || '').toLowerCase();
+        const st = (c.status || '').toLowerCase();
+        return (
+          s === 'exited' ||
+          s === 'stopped' ||
+          s === 'dead' ||
+          st.startsWith('exited') ||
+          st.includes('dead') ||
+          st.includes('stopped')
+        );
+      }).length;
       const stacks = new Set(containers.filter((c) => c.compose?.isCompose && c.compose.project).map((c) => c.compose.project)).size;
 
       res.json({
@@ -129,8 +149,18 @@ async function startServer() {
 
     try {
       const result = await executeContainerAction(id, action);
+      sysLog.info('docker', `Container action executed: "${action}" on container ${id}`, {
+        containerId: id,
+        action,
+        success: result.success,
+      });
       res.json(result);
     } catch (err) {
+      sysLog.error('docker', `Container action failed: "${action}" on container ${id}: ${(err as Error).message}`, {
+        containerId: id,
+        action,
+        error: (err as Error).message,
+      });
       res.status(500).json({ error: (err as Error).message });
     }
   });
@@ -629,6 +659,51 @@ async function startServer() {
         targetStackName: stackName,
         targetDirectory: targetDir,
       });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // =========================================================================
+  // Module 3: Centralized System Logs API (Query, Filter, Prune, Audit)
+  // =========================================================================
+  app.get('/api/system/logs', (req, res) => {
+    try {
+      const { level, category, search, range, limit } = req.query;
+      const result = getSystemLogs({
+        level: level ? String(level) : undefined,
+        category: category ? String(category) : undefined,
+        search: search ? String(search) : undefined,
+        range: range ? String(range) : undefined,
+        limit: limit ? parseInt(String(limit), 10) : 500,
+      });
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post('/api/system/logs/prune', (req, res) => {
+    try {
+      const { range } = req.body;
+      if (!range || !['24h', '7d', '30d', 'all'].includes(range)) {
+        return res.status(400).json({ error: 'Valid range required: 24h, 7d, 30d, all' });
+      }
+      const result = pruneSystemLogs(range);
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post('/api/system/logs', (req, res) => {
+    try {
+      const { level, category, message, details } = req.body;
+      if (!level || !category || !message) {
+        return res.status(400).json({ error: 'level, category, and message are required' });
+      }
+      const entry = logEvent(level, category, message, details);
+      res.json({ success: true, entry });
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
     }

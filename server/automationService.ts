@@ -10,6 +10,7 @@ import {
   getContainersList,
   getContainerLogsTail,
   pruneOrphanedDockerResources,
+  getContainerByComposeService,
 } from './dockerService';
 import {
   createPreMergeSnapshot,
@@ -32,8 +33,9 @@ import {
   isHostPortFree,
 } from './hostFsService';
 import { resolvePortCollisions, extractPortsFromCompose, RemappedPort } from './portCollisionService';
-import { mergeComposeWithAst } from './stackService';
+import { mergeComposeWithAst, enforceDeterministicContainerNames } from './stackService';
 import { resolveComposeBuildContexts } from './buildContextService';
+import { sysLog } from './systemLogService';
 
 const execAsync = util.promisify(exec);
 
@@ -1114,6 +1116,9 @@ export async function executeStreamingComposeInstall(
         (msg) => log(msg, 4)
       );
 
+      // Module 5: Enforce deterministic container_name for all services
+      finalComposeYaml = enforceDeterministicContainerNames(finalComposeYaml);
+
       const targetComposePath = path.join(req.targetDirectory, 'docker-compose.yml');
       log(`Writing finalized Docker Compose file to ${targetComposePath}...`, 4);
       const writeOk = await writeHostFile(targetComposePath, finalComposeYaml);
@@ -1125,6 +1130,11 @@ export async function executeStreamingComposeInstall(
       if (!fileSynced) {
         throw new Error(`Filesystem sync verification failed: ${targetComposePath} is missing or empty`);
       }
+
+      sysLog.pipeline('ast', `Synthesized new Compose stack "${req.targetStackName}" with deterministic container_name mappings`, {
+        targetStackName: req.targetStackName,
+        targetDirectory: req.targetDirectory,
+      });
 
       log(`Configuration successfully committed and synchronized (${Buffer.byteLength(finalComposeYaml)} bytes).`, 4);
       await sleep(250);
@@ -1211,7 +1221,8 @@ export async function executeStreamingComposeInstall(
         incomingNetworks
       );
 
-      finalComposeYaml = mergedYaml;
+      // Module 5: Enforce deterministic container_name on synthesized YAML
+      finalComposeYaml = enforceDeterministicContainerNames(mergedYaml);
       const targetComposePath = path.join(req.targetDirectory, 'docker-compose.yml');
       log(`Committing synthesized compose file to ${targetComposePath}...`, 4);
       const writeOk = await writeHostFile(targetComposePath, finalComposeYaml);
@@ -1228,6 +1239,12 @@ export async function executeStreamingComposeInstall(
         `AST mutation complete and synchronized to disk (${Buffer.byteLength(finalComposeYaml)} bytes). Total services in target stack: ${Object.keys(yaml.parse(mergedYaml).services || {}).length}`,
         4
       );
+
+      sysLog.pipeline('ast', `Injected remote services into stack "${req.targetStackName}" via AST synthesis`, {
+        targetStackName: req.targetStackName,
+        services: affectedServices,
+      });
+
       await sleep(250);
       updateStep(4, 'ast_synthesis', 'Build Context & AST Synthesis Injection', 'success', Date.now() - t4);
     }
@@ -1282,35 +1299,35 @@ export async function executeStreamingComposeInstall(
     updateStep(6, 'completion', 'Socket Health Audit & Ledger Verification', 'running');
     log('Auditing Docker daemon socket: Polling container health across 15-second stability window...', 6);
 
-    // Module 1: 15-second Socket Health Polling with Fail-Safe Diagnostics
-    const crashedServices: { name: string; status: string; logs: string }[] = [];
+    // Module 1 & 5: 15-second Socket Health Polling via Label-Based Audit & Fail-Safe Diagnostics
+    const crashedServices: { name: string; resolvedId: string; status: string; logs: string }[] = [];
     const verifiedServices = new Set<string>();
 
     for (let poll = 1; poll <= 15; poll++) {
       try {
-        const { containers: currentFleet } = await getContainersList();
         for (const svc of affectedServices) {
-          const match = currentFleet.find(
-            (c) => c.cleanName === svc || c.name === `/${svc}` || c.compose?.service === svc
-          );
+          // Module 5: Label-Based Health Check (com.docker.compose.project & com.docker.compose.service)
+          const match = await getContainerByComposeService(req.targetStackName, svc);
 
           if (match) {
             const state = match.state?.toLowerCase();
             const statusLower = (match.status || '').toLowerCase();
+            const resolvedId = match.id || svc;
 
             if (state === 'exited' || state === 'dead' || statusLower.includes('exit') || statusLower.includes('dead')) {
-              // Immediately fetch crash logs before proceeding
-              log(`🚨 Service "${svc}" died or exited with status: "${match.status || state}". Fetching diagnostic logs...`, 6);
-              const diagnosticLogs = await getContainerLogsTail(match.id || svc, 100);
+              // Immediately fetch crash logs using resolved container ID
+              log(`🚨 Service "${svc}" (Resolved ID: ${resolvedId}) died or exited with status: "${match.status || state}". Fetching diagnostic logs...`, 6);
+              const diagnosticLogs = await getContainerLogsTail(resolvedId, 100);
               crashedServices.push({
                 name: svc,
+                resolvedId,
                 status: match.status || state,
                 logs: diagnosticLogs,
               });
               verifiedServices.delete(svc);
             } else if (state === 'running') {
               if (!verifiedServices.has(svc)) {
-                log(` -> Service "${svc}" verified running (Up: "${match.status}") [Poll ${poll}/15]`, 6);
+                log(` -> Service "${svc}" [ID: ${resolvedId}] verified healthy via label audit (Up: "${match.status}") [Poll ${poll}/15]`, 6);
                 verifiedServices.add(svc);
               }
             }
@@ -1331,8 +1348,8 @@ export async function executeStreamingComposeInstall(
     if (crashedServices.length > 0) {
       for (const crash of crashedServices) {
         log(`\n===============================================================`, 6);
-        log(`DIAGNOSTIC CRASH STREAM FOR [${crash.name}] (Status: ${crash.status})`, 6);
-        log(`Command: docker logs ${crash.name} --tail 100`, 6);
+        log(`DIAGNOSTIC CRASH STREAM FOR [${crash.name}] (Resolved Container ID: ${crash.resolvedId}) (Status: ${crash.status})`, 6);
+        log(`Command: docker logs ${crash.resolvedId} --tail 100`, 6);
         log(`---------------------------------------------------------------`, 6);
         const logLines = crash.logs.split('\n');
         for (const line of logLines) {

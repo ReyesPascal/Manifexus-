@@ -70,6 +70,50 @@ export function isManifexusContainer(c: {
 }
 
 /**
+ * Module 5: Deterministic AST Injection
+ * Inspects all services in a Compose YAML document. If container_name is missing,
+ * explicitly injects container_name: <service_key> directly beneath image/build properties.
+ */
+export function enforceDeterministicContainerNames(composeYaml: string): string {
+  try {
+    const doc = parseDocument(composeYaml);
+    const services = doc.get('services') as YAMLMap;
+    if (services && typeof services.toJSON === 'function') {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const entries = (services as any).items || [];
+      for (const item of entries) {
+        const sKey = String(item.key?.value || item.key);
+        const sVal = item.value;
+        if (sVal && typeof sVal.get === 'function') {
+          if (!sVal.get('container_name')) {
+            // Find index of image or build to insert right after
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const subItems = (sVal as any).items || [];
+            let insertIdx = -1;
+            for (let i = 0; i < subItems.length; i++) {
+              const k = String(subItems[i].key?.value || subItems[i].key);
+              if (k === 'image' || k === 'build') {
+                insertIdx = i + 1;
+              }
+            }
+            if (insertIdx !== -1 && insertIdx <= subItems.length) {
+              const pair = doc.createPair('container_name', sKey);
+              subItems.splice(insertIdx, 0, pair);
+            } else {
+              sVal.set('container_name', sKey);
+            }
+          }
+        }
+      }
+      return doc.toString();
+    }
+  } catch (err) {
+    console.warn('[AST] Could not enforce deterministic container_name via AST:', err);
+  }
+  return composeYaml;
+}
+
+/**
  * Directive 5: AST-Based Intelligent Stack Merging
  * Merges new services, volumes, and networks into an existing compose file while preserving
  * comments, directives, styling, and existing formatting.
@@ -92,6 +136,9 @@ export function mergeComposeWithAst(
     }
 
     for (const [sName, sDef] of Object.entries(newServices)) {
+      if (sDef && typeof sDef === 'object' && !sDef.container_name) {
+        sDef.container_name = sName;
+      }
       services.set(sName, sDef);
     }
 

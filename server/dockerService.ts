@@ -1292,6 +1292,70 @@ export async function getContainerLogsTail(containerNameOrId: string, tail: numb
 }
 
 /**
+ * Module 5: Label-Based Health Checks
+ * Looks up a container strictly via Docker Compose labels (com.docker.compose.project and com.docker.compose.service)
+ */
+export async function getContainerByComposeService(
+  projectName: string,
+  serviceName: string
+): Promise<{ id: string; name: string; state: string; status: string } | null> {
+  if (isDockerSocketAvailable()) {
+    try {
+      // 1. Direct label filter query on Docker Engine
+      const filters = JSON.stringify({
+        label: [
+          `com.docker.compose.project=${projectName}`,
+          `com.docker.compose.service=${serviceName}`,
+        ],
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const results = await queryDockerEngine<any[]>(
+        `/containers/json?all=1&filters=${encodeURIComponent(filters)}`
+      );
+
+      if (Array.isArray(results) && results.length > 0) {
+        const c = results[0];
+        const id = c.Id ? c.Id.substring(0, 12) : '';
+        const rawName = (c.Names && c.Names[0]) ? c.Names[0].replace(/^\//, '') : serviceName;
+        return {
+          id: id || c.Id,
+          name: rawName,
+          state: (c.State || '').toLowerCase(),
+          status: c.Status || '',
+        };
+      }
+    } catch {
+      // fallback to inspecting fleet
+    }
+  }
+
+  // Fallback: search getContainersList() by compose metadata
+  try {
+    const { containers } = await getContainersList();
+    const match = containers.find(
+      (c) =>
+        c.compose?.project?.toLowerCase() === projectName.toLowerCase() &&
+        c.compose?.service?.toLowerCase() === serviceName.toLowerCase()
+    ) || containers.find(
+      (c) => c.cleanName === serviceName || c.name === `/${serviceName}`
+    );
+
+    if (match) {
+      return {
+        id: match.id,
+        name: match.cleanName,
+        state: match.state?.toLowerCase() || '',
+        status: match.status || '',
+      };
+    }
+  } catch {
+    // ignore
+  }
+
+  return null;
+}
+
+/**
  * Module 1: Rollback Resource Pruning
  * Completely prunes orphaned networks and untagged dangling images created during failed runs.
  */
