@@ -9,6 +9,7 @@ const HOST_ROOT = process.env.HOST_ROOT || '/host';
 
 /**
  * Resolves a host path inside the container if HOST_ROOT is mounted
+ * (Retained for backwards compatibility if other modules rely on it)
  */
 export function resolveContainerPath(hostPath: string): string {
   if (fs.existsSync(HOST_ROOT)) {
@@ -26,24 +27,11 @@ export function resolveContainerPath(hostPath: string): string {
 
 /**
  * Reads a text file from the host filesystem.
- * If Manifexus does not have the host mounted directly, it uses the Docker socket helper container
- * to read the exact host file with zero container filesystem barriers.
+ * Strictly uses the Docker socket helper container to read the exact host file 
+ * with zero container filesystem barriers.
  */
 export async function readHostFile(hostFilePath: string): Promise<string | null> {
-  // 1. Direct filesystem check
-  const localCandidate = resolveContainerPath(hostFilePath);
-  if (fs.existsSync(localCandidate)) {
-    try {
-      const stats = fs.statSync(localCandidate);
-      if (stats.isFile()) {
-        return fs.readFileSync(localCandidate, 'utf8');
-      }
-    } catch {
-      // fallback
-    }
-  }
-
-  // 2. Docker Engine helper execution (mounts target host folder read-only)
+  // Explicitly bypass local Node fs to enforce physical host execution
   try {
     const parentDir = path.dirname(hostFilePath);
     const fileName = path.basename(hostFilePath);
@@ -61,6 +49,7 @@ export async function readHostFile(hostFilePath: string): Promise<string | null>
 
     if (runner && runner.Id) {
       await queryDockerEngine(`/containers/${runner.Id}/start`, 'POST');
+      
       // Wait for execution
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const waitRes = await queryDockerEngine<any>(`/containers/${runner.Id}/wait`, 'POST');
@@ -84,35 +73,16 @@ export async function readHostFile(hostFilePath: string): Promise<string | null>
 }
 
 /**
- * Writes a text file directly to the host filesystem with strict fsync and write-ahead validation.
+ * Writes a text file directly to the physical host filesystem via a privileged Docker helper.
  */
 export async function writeHostFile(hostFilePath: string, content: string): Promise<boolean> {
-  const localCandidate = resolveContainerPath(hostFilePath);
-  const localParent = path.dirname(localCandidate);
-
-  // 1. Attempt direct FS write if directory is writable, with fsyncSync
-  try {
-    if (fs.existsSync(localParent) || fs.existsSync(localCandidate)) {
-      if (!fs.existsSync(localParent)) {
-        fs.mkdirSync(localParent, { recursive: true });
-      }
-      const fd = fs.openSync(localCandidate, 'w');
-      fs.writeSync(fd, content, 0, 'utf8');
-      fs.fsyncSync(fd);
-      fs.closeSync(fd);
-      if (fs.existsSync(localCandidate) && fs.statSync(localCandidate).size > 0) {
-        return true;
-      }
-    }
-  } catch {
-    // proceed to Docker helper write
-  }
-
-  // 2. Docker Engine helper execution with base64 encoding to prevent shell escaping corruption
+  // Explicitly bypass local Node fs to prevent writing inside the isolated container
   try {
     const parentDir = path.dirname(hostFilePath);
     const fileName = path.basename(hostFilePath);
     const helperImage = await getBestAvailableImage();
+    
+    // Base64 encode to prevent shell escaping corruption across the Docker boundary
     const base64Content = Buffer.from(content, 'utf8').toString('base64');
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -138,21 +108,16 @@ export async function writeHostFile(hostFilePath: string, content: string): Prom
       return waitRes && waitRes.StatusCode === 0;
     }
   } catch (err) {
-    console.error(`[HostFsService] Error writing host file ${hostFilePath}:`, err);
+    console.error(`[HostFsService] Error writing physical host file ${hostFilePath}:`, err);
   }
 
   return false;
 }
 
 /**
- * Checks if a file exists on the host.
+ * Checks if a file exists specifically on the physical host machine.
  */
 export async function checkHostFileExists(hostFilePath: string): Promise<boolean> {
-  const localCandidate = resolveContainerPath(hostFilePath);
-  if (fs.existsSync(localCandidate)) {
-    return true;
-  }
-
   try {
     const parentDir = path.dirname(hostFilePath);
     const fileName = path.basename(hostFilePath);
@@ -183,23 +148,13 @@ export async function checkHostFileExists(hostFilePath: string): Promise<boolean
 }
 
 /**
- * Creates a directory on the host with elevated privileges.
+ * Creates a directory strictly on the physical host machine.
  */
 export async function createHostDirectory(hostDirPath: string): Promise<boolean> {
-  const localCandidate = resolveContainerPath(hostDirPath);
-  try {
-    if (fs.existsSync(localCandidate)) {
-      return true;
-    }
-    fs.mkdirSync(localCandidate, { recursive: true });
-    return true;
-  } catch {
-    // Proceed to root helper container
-  }
-
   try {
     const parentDir = path.dirname(hostDirPath);
     const helperImage = await getBestAvailableImage();
+    
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const runner = await queryDockerEngine<any>('/containers/create', 'POST', {
       Image: helperImage,
@@ -234,16 +189,6 @@ export async function removeHostDirectory(hostDirPath: string): Promise<boolean>
   if (forbidden.includes(normalized) || normalized.split(path.sep).filter(Boolean).length < 2) {
     console.warn(`[HostFsService] Refusing to delete protected system path: ${normalized}`);
     return false;
-  }
-
-  const localCandidate = resolveContainerPath(hostDirPath);
-  try {
-    if (fs.existsSync(localCandidate)) {
-      fs.rmSync(localCandidate, { recursive: true, force: true });
-      return true;
-    }
-  } catch {
-    // proceed to helper container
   }
 
   try {
@@ -383,7 +328,6 @@ export function resolveDefaultHostHome(existingWorkingDirs?: string[]): string {
 
 /**
  * Removes lingering conflicting containers by name or ID directly via Docker socket
-
  */
 export async function forceRemoveContainer(containerNameOrId: string): Promise<boolean> {
   try {
@@ -445,25 +389,16 @@ export function isHostPortFree(port: number): Promise<boolean> {
 }
 
 /**
- * Creates a host directory and sets aggressive permissions (e.g. 777) so container non-root daemons cannot be denied access.
+ * Creates a host directory directly on the physical machine and sets aggressive permissions.
  */
 export async function createHostDirectoryWithPermissions(
   hostDirPath: string,
   mode: string = '777'
 ): Promise<boolean> {
-  const localCandidate = resolveContainerPath(hostDirPath);
-  try {
-    if (!fs.existsSync(localCandidate)) {
-      fs.mkdirSync(localCandidate, { recursive: true });
-    }
-    fs.chmodSync(localCandidate, 0o777);
-  } catch {
-    // proceed to root helper container
-  }
-
   try {
     const parentDir = path.dirname(hostDirPath);
     const helperImage = await getBestAvailableImage();
+    
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const runner = await queryDockerEngine<any>('/containers/create', 'POST', {
       Image: helperImage,

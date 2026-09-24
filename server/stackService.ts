@@ -1,4 +1,4 @@
-import * as jsyaml from 'js-yaml';
+import { dump } from 'js-yaml';
 import yaml, { parseDocument, YAMLMap } from 'yaml';
 import path from 'path';
 import { DeepContainerMetadata } from '../src/types';
@@ -51,7 +51,7 @@ export function validateComposeAstObject(ast: unknown): ComposeAstObject {
 }
 
 /**
- * Directive 3: Strict Stringification using js-yaml (jsyaml.dump).
+ * Directive 3: Strict Stringification using js-yaml (yaml.dump).
  * Validates AST first, dumps to YAML, and guarantees output is never null, empty, blank, or 0-bytes.
  * Throws a critical error and stops execution if stringification produces empty string.
  */
@@ -62,7 +62,7 @@ export function strictlyDumpComposeAst(ast: unknown): string {
     validated.version = '3.8';
   }
 
-  const dumped = jsyaml.dump(validated, {
+  const dumped = dump(validated, {
     indent: 2,
     lineWidth: -1,
     noRefs: true,
@@ -70,7 +70,7 @@ export function strictlyDumpComposeAst(ast: unknown): string {
 
   if (!dumped || dumped.trim().length === 0) {
     throw new Error(
-      'Critical Stringification Failure: jsyaml.dump produced an empty or blank output string. Execution stopped to prevent 0-byte file write.'
+      'Critical Stringification Failure: yaml.dump produced an empty or blank output string. Execution stopped to prevent 0-byte file write.'
     );
   }
 
@@ -189,7 +189,7 @@ export function enforceDeterministicContainerNames(composeYaml: string): string 
       return doc.toString();
     }
   } catch (err) {
-    console.warn('[AST] Could not enforce deterministic container_name via AST:', (err as Error).message);
+    console.warn('[AST] Could not enforce deterministic container_name via AST:', err);
   }
   return composeYaml;
 }
@@ -224,7 +224,7 @@ export function mergeComposeWithAst(
       }
     }
   } catch (parseErr) {
-    console.warn('[AST Merge] Failed to parse existing yaml, falling back to base AST { version: "3.8", services: {} }:', (parseErr as Error).message);
+    console.warn('[AST Merge] Failed to parse existing yaml, falling back to base AST { version: "3.8", services: {} }:', parseErr);
     baseObj = { version: '3.8', services: {} };
   }
 
@@ -300,7 +300,7 @@ export function mergeComposeWithAst(
       }
     }
   } catch (err) {
-    console.warn('[AST Merge] Document-level AST merge fallback triggered:', (err as Error).message);
+    console.warn('[AST Merge] Document-level AST merge fallback triggered:', err);
   }
 
   // Strict Stringification & Validation via strictlyDumpComposeAst
@@ -596,7 +596,7 @@ export function generateStackMergePlan(
 # - Named volumes mapped using 'external: true' to preserve existing databases
 # =========================================================================
 
-${jsyaml.dump(fullComposeDoc, { indent: 2, lineWidth: -1 })}`;
+${dump(fullComposeDoc, { indent: 2, lineWidth: -1 })}`;
   }
 
   // Generate Step-by-Step Shell Migration Script
@@ -645,7 +645,7 @@ ${originalWorkingDirs.length > 0
       .map(
         (dir) => `if [ -d "${dir}" ]; then
   echo "Stopping standalone instances in ${dir}..."
-  (cd "${dir}" && docker compose -f "${dir}/docker-compose.yml" down || docker-compose -f "${dir}/docker-compose.yml" down || true)
+  (cd "${dir}" && docker compose down || docker-compose down || true)
 fi`
       )
       .join('\n')
@@ -653,10 +653,10 @@ fi`
 
 echo "=== [Step 4/6] Launching Unified Compose Stack ==="
 cd "${targetDirClean}"
-docker compose -f "${targetDirClean}/docker-compose.yml" up -d || docker-compose -f "${targetDirClean}/docker-compose.yml" up -d
+docker compose up -d || docker-compose up -d
 
 echo "=== [Step 5/6] Health & Port Verification ==="
-docker compose -f "${targetDirClean}/docker-compose.yml" ps || docker-compose -f "${targetDirClean}/docker-compose.yml" ps
+docker compose ps || docker-compose ps
 
 echo "=== [Step 6/6] Zero-Data-Loss Migration Complete ==="
 echo "All ${servicesList.length} services are now running unified in ${targetDirClean}!"
@@ -671,7 +671,7 @@ set -e
 
 echo "=== [Rollback 1/3] Stopping Merged Stack ==="
 if [ -d "${targetDirClean}" ]; then
-  (cd "${targetDirClean}" && docker compose -f "${targetDirClean}/docker-compose.yml" down || docker-compose -f "${targetDirClean}/docker-compose.yml" down || true)
+  (cd "${targetDirClean}" && docker compose down || docker-compose down || true)
 fi
 
 echo "=== [Rollback 2/3] Restoring Original Standalone Stacks ==="
@@ -679,7 +679,7 @@ ${originalWorkingDirs
   .map(
     (dir) => `if [ -d "${dir}" ]; then
   echo "Spinning original containers back up in ${dir}..."
-  (cd "${dir}" && docker compose -f "${dir}/docker-compose.yml" up -d || docker-compose -f "${dir}/docker-compose.yml" up -d || true)
+  (cd "${dir}" && docker compose up -d || docker-compose up -d || true)
 fi`
   )
   .join('\n')}
@@ -689,7 +689,7 @@ LATEST_BACKUP=$(ls -t "${targetDirClean}"/docker-compose.backup.*.yml 2>/dev/nul
 if [ -n "$LATEST_BACKUP" ] && [ -f "$LATEST_BACKUP" ]; then
   echo "Restoring previous compose file from $LATEST_BACKUP..."
   cp "$LATEST_BACKUP" "${targetDirClean}/docker-compose.yml"
-  (cd "${targetDirClean}" && docker compose -f "${targetDirClean}/docker-compose.yml" up -d || docker-compose -f "${targetDirClean}/docker-compose.yml" up -d || true)
+  (cd "${targetDirClean}" && docker compose up -d || docker-compose up -d || true)
 fi
 
 echo "Rollback successfully completed!"
@@ -704,10 +704,10 @@ set -e
 
 echo "Checking health of new stack in ${targetDirClean}..."
 cd "${targetDirClean}"
-docker compose -f "${targetDirClean}/docker-compose.yml" ps
+docker compose ps
 
 echo "Pruning dangling stopped containers and orphaned networks..."
-docker compose -f "${targetDirClean}/docker-compose.yml" down -v --remove-orphans 2>/dev/null || true
+docker compose down -v --remove-orphans 2>/dev/null || true
 docker container prune -f
 docker network prune -f
 

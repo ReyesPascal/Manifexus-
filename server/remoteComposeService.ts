@@ -122,8 +122,8 @@ export async function fetchRemoteCompose(inputUrl: string): Promise<RemoteCompos
             successfulUrl = candidate;
             break;
           }
-        } catch (err) {
-          console.warn(`[fetchRemoteCompose] Candidate YAML parse error on ${candidate}:`, (err as Error).message);
+        } catch {
+          // not valid yaml
           continue;
         }
       }
@@ -332,8 +332,8 @@ export async function synthesizeRemoteComposeAST(
           existingContent = content;
           break;
         }
-      } catch (err) {
-        console.warn(`[synthesizeRemoteComposeAST] File read fail on ${cp}:`, (err as Error).message);
+      } catch {
+        // ignore and check next
       }
     }
   }
@@ -346,8 +346,8 @@ export async function synthesizeRemoteComposeAST(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const existingDoc = yaml.parse(existingContent) as any;
       existingServiceCount = Object.keys(existingDoc?.services || {}).length;
-    } catch (err) {
-      console.warn(`[synthesizeRemoteComposeAST] existing compose count parse failed:`, (err as Error).message);
+    } catch {
+      // fallback count 0
     }
 
     // Deep merge incoming services, volumes, and networks into existing AST

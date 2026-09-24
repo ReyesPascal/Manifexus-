@@ -76,7 +76,7 @@ function isWritable(p: string): boolean {
   try {
     fs.accessSync(p, fs.constants.W_OK);
     return true;
-  } catch (err) {
+  } catch {
     return false;
   }
 }
@@ -109,7 +109,7 @@ export async function checkPrivilegeStatus(): Promise<AutomationPrivileges> {
   try {
     await execAsync('docker compose version || docker-compose version');
     hasDockerCli = true;
-  } catch (err) {
+  } catch {
     hasDockerCli = false;
   }
 
@@ -281,8 +281,8 @@ export async function executeStreamingPipeline(
           log(`Found existing target compose file at ${cand} (${content.length} bytes).`, 1);
           break;
         }
-      } catch (err) {
-        log(`[Pre-Flight] Failed to check candidate ${cand}: ${(err as Error).message}`, 1);
+      } catch {
+        // continue
       }
     }
 
@@ -357,10 +357,6 @@ export async function executeStreamingPipeline(
     updateStep(5, 'ast_deployment', 'AST Stack Synthesis & Deployment', 'running');
     log(`Writing unified docker-compose.yml to ${req.targetDirectory}...`, 5);
 
-    if (!req.yamlContent || req.yamlContent.trim().length === 0) {
-      throw new Error('Critical Error: YAML content is empty. Aborting write to prevent 0-byte file.');
-    }
-
     const targetComposePath = path.join(req.targetDirectory, 'docker-compose.yml');
     const writeSuccess = await writeHostFile(targetComposePath, req.yamlContent);
     if (writeSuccess) {
@@ -370,8 +366,9 @@ export async function executeStreamingPipeline(
     }
 
     // Crucial anti-conflict guarantee: If any container being added into the merged stack
-    // currently exists under that name on the Docker daemon from another directory,
-    // remove the lingering container from the daemon first.
+    // currently exists under that name on the Docker daemon from another directory (e.g. kavita),
+    // remove the lingering container from the daemon first to prevent:
+    // "Conflict. The container name ... is already in use by container ..."
     for (const c of selectedContainers) {
       if (c.compose?.workingDir && c.compose.workingDir !== req.targetDirectory) {
         log(`De-conflicting legacy container ${c.cleanName} to prevent name collisions...`, 5);
@@ -397,7 +394,7 @@ if which docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
 elif which docker-compose >/dev/null 2>&1; then
   COMPOSE_BIN="docker-compose"
 fi
-$COMPOSE_BIN -f "$TARGET_DIR/docker-compose.yml" up -d --remove-orphans || true
+$COMPOSE_BIN up -d --remove-orphans || true
 echo "COMPOSE_UP_TRIGGERED"
 `;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -452,7 +449,7 @@ echo "COMPOSE_UP_TRIGGERED"
             const teardownRunner = await queryDockerEngine<any>('/containers/create', 'POST', {
               Image: helperImage,
               Entrypoint: [],
-              Cmd: ['sh', '-c', `cd "${srcDir}" && (docker compose -f "${srcDir}/docker-compose.yml" down --remove-orphans || docker-compose -f "${srcDir}/docker-compose.yml" down || true)`],
+              Cmd: ['sh', '-c', `cd "${srcDir}" && (docker compose down --remove-orphans || docker-compose down || true)`],
               HostConfig: {
                 Binds: [
                   `${DOCKER_SOCKET_PATH}:/var/run/docker.sock`,
@@ -465,8 +462,8 @@ echo "COMPOSE_UP_TRIGGERED"
               await queryDockerEngine(`/containers/${teardownRunner.Id}/wait`, 'POST');
               await queryDockerEngine(`/containers/${teardownRunner.Id}?force=true`, 'DELETE');
             }
-          } catch (err) {
-            log(`[Cleanup] Failed to teardown legacy instance in ${srcDir}: ${(err as Error).message}`, 6);
+          } catch {
+            // ignore
           }
         }
       }
@@ -540,17 +537,15 @@ async function executeAutoRollback(
 
   const composePath = path.join(targetContainerDir, 'docker-compose.yml');
   if (preMergeTargetCompose) {
-    if (preMergeTargetCompose.trim().length === 0) {
-      throw new Error('Critical Error: Pre-merge compose content is empty. Aborting write to prevent 0-byte file.');
-    }
     fs.writeFileSync(composePath, preMergeTargetCompose, 'utf8');
     log('[AutoRollback] Restored original pre-merge docker-compose.yml');
   } else if (fs.existsSync(composePath)) {
+    // If there was no compose file originally, remove created one
     try {
       fs.unlinkSync(composePath);
       log('[AutoRollback] Removed incomplete docker-compose.yml');
-    } catch (err) {
-      log(`[AutoRollback] Could not remove file: ${(err as Error).message}`);
+    } catch {
+      // ignore
     }
   }
 }
@@ -636,16 +631,21 @@ export async function executeStreamingRevert(
         }
         logAndCollect('Graceful stack halt succeeded.', 1);
       } catch (gracefulErr) {
+        // Directive 3: Force Teardown Fallback if graceful down hangs, fails, or times out
         logAndCollect(
           `Notice: Graceful stop encountered an issue (${(gracefulErr as Error).message}). Executing forceful container termination fallback...`,
           1
         );
+
+        // 1. Force remove all affected services by name
         if (record.affectedServices && record.affectedServices.length > 0) {
           for (const svc of record.affectedServices) {
             logAndCollect(`Force killing and removing container "${svc}"...`, 1);
             await forceRemoveContainer(svc);
           }
         }
+
+        // 2. Scan Docker daemon for lingering containers belonging to target directory or stack
         try {
           const { containers } = await getContainersList();
           for (const c of containers) {
@@ -678,8 +678,8 @@ export async function executeStreamingRevert(
       if (!restoredContent && record.targetComposeBackupPath && fs.existsSync(record.targetComposeBackupPath)) {
         try {
           restoredContent = fs.readFileSync(record.targetComposeBackupPath, 'utf8');
-        } catch (err) {
-          logAndCollect(`Notice: Failed to read compose backup: ${(err as Error).message}`, 2);
+        } catch {
+          // ignore
         }
       }
 
@@ -689,12 +689,13 @@ export async function executeStreamingRevert(
         await writeHostFile(targetComposePath, restoredContent);
         logAndCollect(`Original target compose file written back to ${targetComposePath}.`, 2);
 
+        // Directive 3: Complete Restoration of .env file
         let restoredEnv = record.preMergeEnvContent;
         if (!restoredEnv && record.targetEnvBackupPath && fs.existsSync(record.targetEnvBackupPath)) {
           try {
             restoredEnv = fs.readFileSync(record.targetEnvBackupPath, 'utf8');
-          } catch (err) {
-            logAndCollect(`Notice: Failed to read env backup: ${(err as Error).message}`, 2);
+          } catch {
+            // ignore
           }
         }
         if (restoredEnv && restoredEnv.trim().length > 0) {
@@ -703,7 +704,10 @@ export async function executeStreamingRevert(
           logAndCollect(`Original .env configuration restored to ${targetEnvPath}.`, 2);
         }
 
+        // Verify files synced on host disk
         await checkHostFileExists(targetComposePath);
+
+        // Bring restored target stack back up
         if (privs.isSocketWritable) {
           logAndCollect(`Re-launching original stack in ${record.targetDirectory}...`, 2);
           await runHostDockerCompose(record.targetDirectory, 'up -d --remove-orphans');
@@ -723,6 +727,7 @@ export async function executeStreamingRevert(
         if (sc.workingDir && sc.workingDir !== record.targetDirectory) {
           logAndCollect(`Spinning up original stack in ${sc.workingDir}...`, 3);
 
+          // Remove any lingering container in target stack that might conflict with source stack name
           for (const c of sc.containers) {
             await forceRemoveContainer(c.name);
           }
@@ -734,7 +739,7 @@ export async function executeStreamingRevert(
               const restartRunner = await queryDockerEngine<any>('/containers/create', 'POST', {
                 Image: helperImage,
                 Entrypoint: [],
-                Cmd: ['sh', '-c', `cd "${sc.workingDir}" && (docker compose -f "${sc.workingDir}/docker-compose.yml" up -d || docker-compose -f "${sc.workingDir}/docker-compose.yml" up -d || true)`],
+                Cmd: ['sh', '-c', `cd "${sc.workingDir}" && (docker compose up -d || docker-compose up -d || true)`],
                 HostConfig: {
                   Binds: [
                     `${DOCKER_SOCKET_PATH}:/var/run/docker.sock`,
@@ -747,8 +752,8 @@ export async function executeStreamingRevert(
                 await queryDockerEngine(`/containers/${restartRunner.Id}/wait`, 'POST');
                 await queryDockerEngine(`/containers/${restartRunner.Id}?force=true`, 'DELETE');
               }
-            } catch (err) {
-              logAndCollect(`Notice: Failed to start standalone container: ${(err as Error).message}`, 3);
+            } catch {
+              // ignore
             }
           }
         }
@@ -838,11 +843,6 @@ export async function executeAutomatedStackMerge(
   }
 
   const localComposePath = path.join(targetContainerDir, 'docker-compose.yml');
-  
-  if (!req.yamlContent || req.yamlContent.trim().length === 0) {
-    throw new Error('Critical Error: yamlContent is empty. Aborting write to prevent 0-byte file.');
-  }
-  
   try {
     fs.writeFileSync(localComposePath, req.yamlContent, 'utf8');
     logs.push(`Wrote compose configuration to ${localComposePath}`);
@@ -909,7 +909,7 @@ export async function repairTargetStack(
       const runner = await queryDockerEngine<any>('/containers/create', 'POST', {
         Image: helperImage,
         Entrypoint: [],
-        Cmd: ['sh', '-c', `cd "${targetDirectory}" && (docker compose -f "${targetDirectory}/docker-compose.yml" up -d --remove-orphans || docker-compose -f "${targetDirectory}/docker-compose.yml" up -d || true)`],
+        Cmd: ['sh', '-c', `cd "${targetDirectory}" && (docker compose up -d --remove-orphans || docker-compose up -d || true)`],
         HostConfig: {
           Binds: [
             `${DOCKER_SOCKET_PATH}:/var/run/docker.sock`,
@@ -1166,11 +1166,13 @@ export async function executeStreamingComposeInstall(
       log('[Micro-Step 4.3] Enforcing deterministic container_name mappings across all services...', 4);
       finalComposeYaml = enforceDeterministicContainerNames(finalComposeYaml);
 
+      // Part 1, Item 2: Validation of AST before stringifying
       log('[Micro-Step 4.4] Strictly validating mutated Compose AST structure...', 4);
       const parsedAst = yaml.parse(finalComposeYaml);
       const validatedAst = validateComposeAstObject(parsedAst);
       diagBundle.finalMergedAst = validatedAst;
 
+      // Part 1, Item 3: Strict Stringification using yaml.dump with zero-byte prevention
       log('[Micro-Step 4.5] Strict stringification via yaml.dump with zero-byte safety guarantees...', 4);
       finalComposeYaml = strictlyDumpComposeAst(validatedAst);
       const fileBytes = Buffer.byteLength(finalComposeYaml, 'utf-8');
@@ -1224,11 +1226,12 @@ export async function executeStreamingComposeInstall(
             preMergeComposeContent = content;
             break;
           }
-        } catch (err) {
-          log(`[Pre-Flight] Note: Failed to read candidate ${cand}: ${(err as Error).message}`, 3);
+        } catch {
+          // ignore and check next
         }
       }
 
+      // Part 1, Item 1: Safe Fallback: If reading fails or is empty, catch error and fallback to base AST
       if (!preMergeComposeContent || preMergeComposeContent.trim().length === 0) {
         log(`[Micro-Step 3.2] Safe Fallback Triggered: Could not read target compose file in ${req.targetDirectory}. Falling back to base AST { version: "3.8", services: {} }.`, 3);
         preMergeComposeContent = 'version: "3.8"\nservices: {}\n';
@@ -1304,11 +1307,13 @@ export async function executeStreamingComposeInstall(
       log('[Micro-Step 4.4] Enforcing deterministic container_name on synthesized YAML...', 4);
       const withNamesYaml = enforceDeterministicContainerNames(mergedYaml);
 
+      // Part 1, Item 2: Validation of mutated AST before stringifying
       log('[Micro-Step 4.5] Validating merged Compose AST object...', 4);
       const parsedMerged = yaml.parse(withNamesYaml);
       const validatedMergedAst = validateComposeAstObject(parsedMerged);
       diagBundle.finalMergedAst = validatedMergedAst;
 
+      // Part 1, Item 3: Strict Stringification using yaml.dump with zero-byte prevention
       log('[Micro-Step 4.6] Performing strict stringification via yaml.dump...', 4);
       finalComposeYaml = strictlyDumpComposeAst(validatedMergedAst);
       const fileBytes = Buffer.byteLength(finalComposeYaml, 'utf-8');
@@ -1348,7 +1353,7 @@ export async function executeStreamingComposeInstall(
     }
 
     // =========================================================================
-    // Step 5: Elevated Docker Compose Deployment
+    // Step 5: Elevated Docker Compose Deployment (Part 1, Item 4: Explicit Execution)
     // =========================================================================
     const t5 = Date.now();
     updateStep(5, 'deployment', 'Elevated Docker Compose Deployment', 'running');
@@ -1364,6 +1369,7 @@ export async function executeStreamingComposeInstall(
       await forceRemoveContainer(svc);
     }
 
+    // Part 1, Item 4: Explicit Execution with -f absolute file path and cwd set to targetDirectory
     const targetComposePath = diagBundle.targetComposePath || path.join(req.targetDirectory, 'docker-compose.yml');
     log(
       `[Micro-Step 5.3] Spawning elevated Docker Compose: docker compose -f "${targetComposePath}" up -d --build --remove-orphans (cwd: ${req.targetDirectory})...`,
@@ -1449,8 +1455,8 @@ export async function executeStreamingComposeInstall(
         if (crashedServices.length > 0) {
           break;
         }
-      } catch (err) {
-        log(`[Micro-Step 6.1] Poll transient error for service check: ${(err as Error).message}`, 6);
+      } catch {
+        // transient error during poll
       }
       await sleep(1000);
     }
@@ -1504,6 +1510,7 @@ export async function executeStreamingComposeInstall(
       log(`[Micro-Step 6.3] Updated state ledger for existing stack "${req.targetStackName}".`, 6);
     }
 
+    // Part 2: Finalize DiagnosticBundle and write to Manifexus existing log directory
     diagBundle.success = true;
     diagBundle.completedAt = new Date().toISOString();
     const savedDiagnosticFile = saveDiagnosticBundleToDisk(diagBundle);
@@ -1530,12 +1537,14 @@ export async function executeStreamingComposeInstall(
     log(`CRITICAL PIPELINE FAILURE: ${errMsg}`, currentStepIndex);
     updateStep(currentStepIndex, currentStepId, currentStepName, 'failed');
 
+    // Part 2: Record error stack trace and save complete bundle on failure
     diagBundle.success = false;
     diagBundle.completedAt = new Date().toISOString();
     diagBundle.errorStackTrace = (err as Error).stack || errMsg;
     const failureDiagnosticFile = saveDiagnosticBundleToDisk(diagBundle);
     log(`[Diagnostics] Pipeline failure bundle saved for post-mortem analysis: ${failureDiagnosticFile}`, currentStepIndex);
 
+    // Directive 3 & Module 1: Automated Rollback & Resource Pruning on failure
     log('INITIATING AUTOMATED ROLLBACK: Reverting target state and pruning orphaned files...', currentStepIndex);
     try {
       if (isNewStack) {
@@ -1579,3 +1588,4 @@ export async function executeStreamingComposeInstall(
     });
   }
 }
+

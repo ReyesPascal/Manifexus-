@@ -1,8 +1,6 @@
 import path from 'path';
-import fs from 'fs';
 import yaml from 'yaml';
-import * as tar from 'tar';
-import { resolveContainerPath, createHostDirectory, checkHostFileExists } from './hostFsService';
+import { createHostDirectory, checkHostFileExists } from './hostFsService';
 import { queryDockerEngine, getBestAvailableImage } from './dockerService';
 
 export interface GitRepoInfo {
@@ -84,7 +82,8 @@ export function resolveGitRepoInfo(sourceUrl: string): GitRepoInfo {
 
 /**
  * Downloads and extracts the git repository into the target stack build-contexts directory.
- * Uses native Node tar extraction if local filesystem is writable, and falls back to elevated helper container.
+ * Strictly uses the elevated helper container to ensure files are written to the physical host filesystem,
+ * preventing container isolation barriers from hiding the build context from the Docker Daemon.
  */
 export async function cloneOrDownloadRepoContext(
   repoInfo: GitRepoInfo,
@@ -105,12 +104,10 @@ export async function cloneOrDownloadRepoContext(
     };
   }
 
-  if (log) log(`Provisioning build context directory on host: ${absPath}`);
+  if (log) log(`Provisioning physical host build context directory: ${absPath}`);
+  
+  // createHostDirectory has been updated to enforce physical host execution
   await createHostDirectory(absPath);
-
-  // Method 1: Node.js direct fetch of repository tarball
-  const localTargetSubdir = resolveContainerPath(absPath);
-  let nodeExtractSuccess = false;
 
   const candidateTarballUrls = [
     repoInfo.tarballUrl,
@@ -119,72 +116,26 @@ export async function cloneOrDownloadRepoContext(
     `https://github.com/${repoInfo.owner}/${repoInfo.repo}/archive/refs/heads/main.tar.gz`,
   ].filter(Boolean) as string[];
 
-  for (const tarUrl of candidateTarballUrls) {
-    try {
-      if (log) log(`Attempting repository archive download from ${tarUrl}...`);
-      const response = await fetch(tarUrl, {
-        headers: { 'User-Agent': 'Manifexus-Engine/1.0' },
-        redirect: 'follow',
-      });
-
-      if (response.ok && response.body) {
-        fs.mkdirSync(localTargetSubdir, { recursive: true });
-        const tempTarPath = path.join(localTargetSubdir, '_archive_temp.tar.gz');
-        const arrayBuf = await response.arrayBuffer();
-        fs.writeFileSync(tempTarPath, Buffer.from(arrayBuf));
-
-        try {
-          await tar.x({
-            file: tempTarPath,
-            cwd: localTargetSubdir,
-            strip: 1,
-          });
-          if (fs.existsSync(tempTarPath)) {
-            fs.unlinkSync(tempTarPath);
-          }
-          // Verify files were extracted
-          const extractedFiles = fs.readdirSync(localTargetSubdir);
-          if (extractedFiles.length > 0) {
-            nodeExtractSuccess = true;
-            if (log) log(`Repository extracted successfully (${extractedFiles.length} files/dirs unpacked).`);
-            break;
-          }
-        } catch (tarErr) {
-          if (fs.existsSync(tempTarPath)) fs.unlinkSync(tempTarPath);
-          if (log) log(`Local tar extraction note: ${(tarErr as Error).message}`);
-        }
-      }
-    } catch {
-      // try next candidate
-    }
-  }
-
-  if (nodeExtractSuccess) {
-    return {
-      success: true,
-      hostContextRelPath: relPath,
-      hostContextAbsPath: absPath,
-    };
-  }
-
-  // Method 2: Elevated Docker container execution with git / curl / wget
-  if (log) log('Executing elevated helper container to clone repository source files...');
+  // Explicitly execute elevated Docker container with git / curl / wget to write directly to host
+  if (log) log('Executing elevated helper container to clone repository source files to physical host...');
   try {
     const helperImage = await getBestAvailableImage();
     const cloneUrl = repoInfo.cloneUrl || `https://github.com/${repoInfo.owner}/${repoInfo.repo}.git`;
-    const tarUrl = candidateTarballUrls[0];
+    const tarUrl = candidateTarballUrls[0]; // Try primary tarball URL if git clone fails
 
     const script = `
 DEST="${absPath}"
 mkdir -p "$DEST"
 cd "$DEST"
 
+# Attempt 1: Git clone
 if command -v git >/dev/null 2>&1; then
   TMP_GIT="/tmp/clone_${cleanServiceName}_$$"
   rm -rf "$TMP_GIT"
   git clone --depth 1 "${cloneUrl}" "$TMP_GIT" 2>&1 && cp -r "$TMP_GIT/." "$DEST/" && rm -rf "$TMP_GIT" || true
 fi
 
+# Attempt 2: Fallback to curl/wget archive extraction if Dockerfile still missing
 if [ ! -f "$DEST/Dockerfile" ] && [ ! -f "$DEST/dockerfile" ]; then
   if command -v curl >/dev/null 2>&1 && command -v tar >/dev/null 2>&1; then
     curl -fsSL "${tarUrl}" | tar -xz -C "$DEST" --strip-components=1 2>&1 || true
@@ -214,7 +165,7 @@ chmod -R 755 "$DEST"
       await queryDockerEngine(`/containers/${runner.Id}?force=true`, 'DELETE');
 
       if (waitRes && waitRes.StatusCode === 0) {
-        if (log) log('Elevated clone/extraction succeeded in helper container.');
+        if (log) log('Host-level clone/extraction succeeded via helper container.');
         return {
           success: true,
           hostContextRelPath: relPath,
@@ -226,7 +177,7 @@ chmod -R 755 "$DEST"
     if (log) log(`Helper container clone error: ${(err as Error).message}`);
   }
 
-  // Check if Dockerfile exists despite warning
+  // Check if Dockerfile exists on the physical host despite a non-zero exit code
   const dockerfileExists =
     (await checkHostFileExists(path.join(absPath, 'Dockerfile'))) ||
     (await checkHostFileExists(path.join(absPath, 'dockerfile')));
@@ -243,7 +194,7 @@ chmod -R 755 "$DEST"
     success: false,
     hostContextRelPath: relPath,
     hostContextAbsPath: absPath,
-    error: `Failed to download or clone repository build context from "${repoInfo.cloneUrl || repoInfo.tarballUrl}".`,
+    error: `Failed to download or clone repository build context from "${repoInfo.cloneUrl || repoInfo.tarballUrl}" to host filesystem.`,
   };
 }
 
