@@ -273,24 +273,41 @@ export async function removeHostDirectory(hostDirPath: string): Promise<boolean>
   return false;
 }
 
+export interface HostDockerComposeResult {
+  success: boolean;
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+  commandExecuted: string;
+  cwd: string;
+}
+
 /**
  * Directive 1 & 2: Root-Level Elevated Docker Compose Execution
- * Runs docker compose command with root privileges and awaits complete resolution without silent suppression.
+ * Runs docker compose command with explicit -f compose file path, cwd explicitly set to targetDir,
+ * root privileges, and awaits complete resolution without silent suppression.
  */
 export async function runHostDockerCompose(
   targetDir: string,
-  composeArgs: string
-): Promise<{ success: boolean; stdout: string; stderr: string; exitCode: number }> {
+  composeArgs: string,
+  composeFilePath?: string
+): Promise<HostDockerComposeResult> {
+  const explicitComposeFile = composeFilePath || path.join(targetDir, 'docker-compose.yml');
+  const executedCommand = `docker compose -f "${explicitComposeFile}" ${composeArgs}`;
+
   try {
     const helperImage = await getBestAvailableImage();
     const script = `
+set -e
 cd "${targetDir}"
+export COMPOSE_FILE="${explicitComposeFile}"
+
 if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
-  docker compose ${composeArgs}
+  docker compose -f "${explicitComposeFile}" ${composeArgs}
 elif command -v docker-compose >/dev/null 2>&1; then
-  docker-compose ${composeArgs}
+  docker-compose -f "${explicitComposeFile}" ${composeArgs}
 else
-  docker compose ${composeArgs}
+  docker compose -f "${explicitComposeFile}" ${composeArgs}
 fi
 `;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -298,6 +315,7 @@ fi
       Image: helperImage,
       Entrypoint: [],
       Cmd: ['sh', '-c', script],
+      WorkingDir: targetDir,
       HostConfig: {
         Binds: [
           `${DOCKER_SOCKET_PATH}:/var/run/docker.sock`,
@@ -321,6 +339,8 @@ fi
         stdout: cleanLogs,
         stderr: exitCode !== 0 ? cleanLogs : '',
         exitCode,
+        commandExecuted: executedCommand,
+        cwd: targetDir,
       };
     }
   } catch (err) {
@@ -330,6 +350,8 @@ fi
       stdout: '',
       stderr: (err as Error).message || 'Execution failed',
       exitCode: 1,
+      commandExecuted: executedCommand,
+      cwd: targetDir,
     };
   }
 
@@ -338,6 +360,8 @@ fi
     stdout: '',
     stderr: 'Failed to dispatch command to Docker daemon',
     exitCode: 1,
+    commandExecuted: executedCommand,
+    cwd: targetDir,
   };
 }
 

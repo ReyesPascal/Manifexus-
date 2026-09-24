@@ -41,6 +41,10 @@ import {
   logEvent,
   sysLog,
 } from './server/systemLogService';
+import {
+  getDiagnosticBundle,
+  listRecentDiagnosticBundles,
+} from './server/diagnosticLogService';
 
 async function startServer() {
   const app = express();
@@ -578,6 +582,29 @@ async function startServer() {
       sendEvent({ type: 'error', error: (err as Error).message });
     } finally {
       res.end();
+    }
+  });
+
+  // Diagnostic Background Logging Endpoints (Part 2)
+  app.get('/api/compose/diagnostics/:installId', async (req, res) => {
+    try {
+      const bundle = getDiagnosticBundle(req.params.installId);
+      if (!bundle) {
+        res.status(404).json({ error: `Diagnostic bundle not found for install ID "${req.params.installId}"` });
+        return;
+      }
+      res.json(bundle);
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.get('/api/compose/diagnostics', async (_req, res) => {
+    try {
+      const bundles = listRecentDiagnosticBundles();
+      res.json({ bundles });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 

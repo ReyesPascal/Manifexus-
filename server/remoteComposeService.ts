@@ -2,7 +2,12 @@ import path from 'path';
 import yaml from 'yaml';
 import { extractPortsFromCompose, resolvePortCollisions, ExtractedPort, RemappedPort } from './portCollisionService';
 import { readHostFile } from './hostFsService';
-import { mergeComposeWithAst, enforceDeterministicContainerNames } from './stackService';
+import {
+  mergeComposeWithAst,
+  enforceDeterministicContainerNames,
+  validateComposeAstObject,
+  strictlyDumpComposeAst,
+} from './stackService';
 
 export interface RemoteComposeMetadata {
   url: string;
@@ -117,8 +122,8 @@ export async function fetchRemoteCompose(inputUrl: string): Promise<RemoteCompos
             successfulUrl = candidate;
             break;
           }
-        } catch {
-          // not valid yaml
+        } catch (err) {
+          console.warn(`[fetchRemoteCompose] Candidate YAML parse error on ${candidate}:`, (err as Error).message);
           continue;
         }
       }
@@ -327,8 +332,8 @@ export async function synthesizeRemoteComposeAST(
           existingContent = content;
           break;
         }
-      } catch {
-        // ignore and check next
+      } catch (err) {
+        console.warn(`[synthesizeRemoteComposeAST] File read fail on ${cp}:`, (err as Error).message);
       }
     }
   }
@@ -341,8 +346,8 @@ export async function synthesizeRemoteComposeAST(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const existingDoc = yaml.parse(existingContent) as any;
       existingServiceCount = Object.keys(existingDoc?.services || {}).length;
-    } catch {
-      // fallback count 0
+    } catch (err) {
+      console.warn(`[synthesizeRemoteComposeAST] existing compose count parse failed:`, (err as Error).message);
     }
 
     // Deep merge incoming services, volumes, and networks into existing AST
@@ -373,7 +378,8 @@ export async function synthesizeRemoteComposeAST(
   if (Object.keys(incomingVolumes).length > 0) incomingDoc.volumes = incomingVolumes;
   if (Object.keys(incomingNetworks).length > 0) incomingDoc.networks = incomingNetworks;
 
-  const cleanYaml = yaml.stringify(incomingDoc);
+  validateComposeAstObject(incomingDoc);
+  const cleanYaml = strictlyDumpComposeAst(incomingDoc);
   const finalizedYaml = enforceDeterministicContainerNames(cleanYaml);
 
   return {

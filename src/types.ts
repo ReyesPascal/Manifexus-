@@ -186,3 +186,44 @@ export interface RemoteComposeMetadata {
   occupiedPorts?: number[];
 }
 
+export interface DiagnosticMicroStep {
+  stepIndex: number;
+  stepId: string;
+  stepName: string;
+  status: 'pending' | 'running' | 'success' | 'failed' | 'skipped';
+  timestamp: string;
+  durationMs?: number;
+  logs: string[];
+  metadata?: Record<string, unknown>;
+}
+
+export interface DiagnosticBundle {
+  installId: string;
+  timestamp: string;
+  completedAt?: string;
+  deploymentType: 'new-stack' | 'existing-stack';
+  targetStackName: string;
+  targetPath: string;
+  sourceUrl: string;
+  initialAstSnapshot?: Record<string, unknown> | null;
+  fetchedRemoteAst?: Record<string, unknown> | null;
+  finalMergedAst?: Record<string, unknown> | null;
+  fileWriteBytes?: number;
+  targetComposePath?: string;
+  dockerExecutionCommand?: string;
+  cwd?: string;
+  stdout?: string;
+  stderr?: string;
+  exitCode?: number;
+  success: boolean;
+  errorStackTrace?: string | null;
+  microSteps: DiagnosticMicroStep[];
+  systemEnvironment?: {
+    nodeEnv: string;
+    dockerSocket: string;
+    hostRoot: string;
+    logsDir: string;
+    platform: string;
+  };
+}
+
