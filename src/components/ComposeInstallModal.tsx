@@ -61,6 +61,19 @@ export const ComposeInstallModal: React.FC<ComposeInstallModalProps> = ({
   const [remappedPorts, setRemappedPorts] = useState<RemappedPort[]>([]);
   const [hasCollisions, setHasCollisions] = useState(false);
   const [copiedYaml, setCopiedYaml] = useState(false);
+  const [mergeInfo, setMergeInfo] = useState<{
+    isMerged: boolean;
+    existingServiceCount: number;
+    incomingServiceCount: number;
+    buildContextsFound: string[];
+    existingComposeFound: boolean;
+  }>({
+    isMerged: false,
+    existingServiceCount: 0,
+    incomingServiceCount: 0,
+    buildContextsFound: [],
+    existingComposeFound: false,
+  });
 
   // Step 4 / Execution Pipeline Console State
   const [isPipelineOpen, setIsPipelineOpen] = useState(false);
@@ -186,7 +199,7 @@ export const ComposeInstallModal: React.FC<ComposeInstallModalProps> = ({
     targetStackName.trim().length > 0 &&
     targetDirectory.trim().length > 0;
 
-  // Run AST Port Collision Engine before entering Step 3
+  // Run AST Port Collision Engine & Non-Destructive Deep Merge before entering Step 3
   const handleProceedToReview = async () => {
     if (!isStep2Valid || !remoteMetadata?.rawYaml) return;
 
@@ -195,17 +208,30 @@ export const ComposeInstallModal: React.FC<ComposeInstallModalProps> = ({
       const res = await fetch('/api/compose/resolve-ports', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ yaml: remoteMetadata.rawYaml }),
+        body: JSON.stringify({
+          yaml: remoteMetadata.rawYaml,
+          sourceUrl: remoteMetadata.resolvedSourceUrl || remoteUrl,
+          targetDirectory,
+          targetStackName,
+          installMode,
+        }),
       });
 
       const data = await res.json();
       if (!res.ok) {
-        throw new Error(data.error || 'Port collision engine analysis failed');
+        throw new Error(data.error || 'AST synthesis and port analysis engine failed');
       }
 
-      setResolvedYaml(data.resolvedYaml);
+      setResolvedYaml(data.synthesizedYaml || data.resolvedYaml);
       setRemappedPorts(data.remappedPorts || []);
       setHasCollisions(Boolean(data.hasCollisions));
+      setMergeInfo({
+        isMerged: Boolean(data.isMerged),
+        existingServiceCount: data.existingServiceCount || 0,
+        incomingServiceCount: data.incomingServiceCount || 0,
+        buildContextsFound: data.buildContextsFound || [],
+        existingComposeFound: Boolean(data.existingComposeFound),
+      });
       setCurrentStep(3);
     } catch (err) {
       setFetchError((err as Error).message);
@@ -692,6 +718,40 @@ export const ComposeInstallModal: React.FC<ComposeInstallModalProps> = ({
             {/* ========================================================================= */}
             {currentStep === 3 && (
               <div className="space-y-6">
+                {/* Non-Destructive Deep Merge Banner */}
+                {mergeInfo.isMerged && (
+                  <div className="p-4 rounded-xl bg-cyan-950/40 border border-cyan-500/40 flex items-start gap-3">
+                    <div className="p-2 rounded-lg bg-cyan-900/60 border border-cyan-500/30 text-cyan-400 shrink-0">
+                      <Layers className="w-4 h-4" />
+                    </div>
+                    <div className="space-y-1">
+                      <div className="text-xs font-mono font-bold text-cyan-300">
+                        Non-Destructive AST Deep Merge Active
+                      </div>
+                      <p className="text-xs text-slate-300 font-mono leading-relaxed">
+                        Target stack <span className="text-cyan-300 font-semibold">{targetStackName}</span> ({targetDirectory}) contains <span className="text-emerald-400 font-bold">{mergeInfo.existingServiceCount}</span> existing service(s) which will be safely preserved. Injected <span className="text-cyan-300 font-bold">{mergeInfo.incomingServiceCount}</span> incoming remote service(s) into the AST without overwriting existing stack definitions.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Build Context Git Fetch & Path Mutation Banner */}
+                {mergeInfo.buildContextsFound.length > 0 && (
+                  <div className="p-4 rounded-xl bg-purple-950/40 border border-purple-500/40 flex items-start gap-3">
+                    <div className="p-2 rounded-lg bg-purple-900/60 border border-purple-500/30 text-purple-400 shrink-0">
+                      <GitBranch className="w-4 h-4" />
+                    </div>
+                    <div className="space-y-1">
+                      <div className="text-xs font-mono font-bold text-purple-300">
+                        Build Context Git Fetch &amp; AST Path Mutation
+                      </div>
+                      <p className="text-xs text-slate-300 font-mono leading-relaxed">
+                        Service(s) <span className="text-purple-300 font-bold">{mergeInfo.buildContextsFound.join(', ')}</span> require local build contexts. The pipeline will automatically fetch the remote repository into dedicated subdirectory <code className="text-purple-300">./remote-build-{mergeInfo.buildContextsFound[0]}</code> and mutate AST build paths before deployment.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
                 {/* Collision Analysis Banner */}
                 {hasCollisions ? (
                   <div className="p-4 rounded-xl bg-amber-950/40 border border-amber-500/40 space-y-3">
@@ -865,7 +925,7 @@ export const ComposeInstallModal: React.FC<ComposeInstallModalProps> = ({
           streamUrl="/api/compose/install-stream"
           streamPayload={{
             installId: activeInstallId,
-            sourceUrl: remoteUrl,
+            sourceUrl: remoteMetadata?.resolvedSourceUrl || remoteUrl,
             targetStackName,
             targetDirectory,
             installMode,

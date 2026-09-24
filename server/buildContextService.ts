@@ -20,8 +20,8 @@ export interface GitRepoInfo {
 export function resolveGitRepoInfo(sourceUrl: string): GitRepoInfo {
   const trimmed = sourceUrl.trim();
 
-  // Pattern 1: raw.githubusercontent.com/owner/repo/branch/...
-  const rawMatch = trimmed.match(/^https?:\/\/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\/([^/]+)(?:\/.*)?$/);
+  // Pattern 1: raw.githubusercontent.com/owner/repo/(refs/heads/)?branch/...
+  const rawMatch = trimmed.match(/^https?:\/\/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\/(?:refs\/heads\/)?([^/]+)(?:\/.*)?$/);
   if (rawMatch) {
     const [, owner, repo, branch] = rawMatch;
     return {
@@ -34,8 +34,8 @@ export function resolveGitRepoInfo(sourceUrl: string): GitRepoInfo {
     };
   }
 
-  // Pattern 2: github.com/owner/repo/blob/branch/...
-  const blobMatch = trimmed.match(/^https?:\/\/github\.com\/([^/]+)\/([^/]+)\/blob\/([^/]+)(?:\/.*)?$/);
+  // Pattern 2: github.com/owner/repo/(blob|raw|tree)/(refs/heads/)?branch/...
+  const blobMatch = trimmed.match(/^https?:\/\/github\.com\/([^/]+)\/([^/]+)\/(?:blob|raw|tree)\/(?:refs\/heads\/)?([^/]+)(?:\/.*)?$/);
   if (blobMatch) {
     const [, owner, repo, branch] = blobMatch;
     return {
@@ -62,6 +62,21 @@ export function resolveGitRepoInfo(sourceUrl: string): GitRepoInfo {
     };
   }
 
+  // Fallback: Check if string contains github.com/owner/repo anywhere
+  const generalGhMatch = trimmed.match(/github\.com\/([^/\s]+)\/([^/\s#?]+)/);
+  if (generalGhMatch) {
+    const [, owner, repoRaw] = generalGhMatch;
+    const repo = repoRaw.replace(/\.git$/, '');
+    return {
+      isGitRepo: true,
+      owner,
+      repo,
+      branch: 'main',
+      cloneUrl: `https://github.com/${owner}/${repo}.git`,
+      tarballUrl: `https://github.com/${owner}/${repo}/archive/HEAD.tar.gz`,
+    };
+  }
+
   return {
     isGitRepo: false,
   };
@@ -74,11 +89,12 @@ export function resolveGitRepoInfo(sourceUrl: string): GitRepoInfo {
 export async function cloneOrDownloadRepoContext(
   repoInfo: GitRepoInfo,
   targetDirectory: string,
-  appName: string,
+  serviceName: string,
   log?: (msg: string) => void
 ): Promise<{ success: boolean; hostContextRelPath: string; hostContextAbsPath: string; error?: string }> {
-  const relPath = `./build-contexts/${appName}`;
-  const absPath = path.join(targetDirectory, 'build-contexts', appName);
+  const cleanServiceName = serviceName.toLowerCase().replace(/[^a-z0-9-_]/g, '-');
+  const relPath = `./remote-build-${cleanServiceName}`;
+  const absPath = path.join(targetDirectory, `remote-build-${cleanServiceName}`);
 
   if (!repoInfo.owner || !repoInfo.repo) {
     return {
@@ -164,7 +180,9 @@ mkdir -p "$DEST"
 cd "$DEST"
 
 if command -v git >/dev/null 2>&1; then
-  git clone --depth 1 "${cloneUrl}" "$DEST" 2>&1 || true
+  TMP_GIT="/tmp/clone_${cleanServiceName}_$$"
+  rm -rf "$TMP_GIT"
+  git clone --depth 1 "${cloneUrl}" "$TMP_GIT" 2>&1 && cp -r "$TMP_GIT/." "$DEST/" && rm -rf "$TMP_GIT" || true
 fi
 
 if [ ! -f "$DEST/Dockerfile" ] && [ ! -f "$DEST/dockerfile" ]; then
@@ -289,8 +307,9 @@ export async function resolveComposeBuildContexts(params: {
       log(`Service "${svcName}": Local build context required (${JSON.stringify(svc.build)}). Resolving repository source files...`);
     }
 
-    const appSubdirName = repoInfo.repo ? repoInfo.repo.toLowerCase().replace(/[^a-z0-9-_]/g, '-') : defaultAppName;
-    const cloneResult = await cloneOrDownloadRepoContext(repoInfo, targetDirectory, appSubdirName, log);
+    // Dedicated subdirectory within target stack: ./remote-build-<service_name>
+    const cleanSvcName = svcName.toLowerCase().replace(/[^a-z0-9-_]/g, '-');
+    const cloneResult = await cloneOrDownloadRepoContext(repoInfo, targetDirectory, cleanSvcName, log);
 
     if (!cloneResult.success) {
       throw new Error(
@@ -300,24 +319,14 @@ export async function resolveComposeBuildContexts(params: {
 
     clonedContextPaths.push(cloneResult.hostContextAbsPath);
 
-    // Mutate AST build context to strictly map the absolute host path to the newly cloned repository directory
+    // Programmatically mutate AST build context to point to the dedicated subdirectory ./remote-build-<service_name>
+    const relContextPath = `./remote-build-${cleanSvcName}`;
     if (typeof svc.build === 'string') {
-      const origBuild = svc.build.trim();
-      if (origBuild === '.' || origBuild === './' || origBuild === '') {
-        svc.build = cloneResult.hostContextAbsPath;
-      } else if (origBuild.startsWith('./')) {
-        svc.build = path.join(cloneResult.hostContextAbsPath, origBuild.slice(2));
-      } else if (!origBuild.startsWith('/')) {
-        svc.build = path.join(cloneResult.hostContextAbsPath, origBuild);
-      }
+      svc.build = relContextPath;
     } else if (typeof svc.build === 'object' && svc.build !== null) {
-      const origContext = (svc.build.context || '.').trim();
-      if (origContext === '.' || origContext === './' || origContext === '') {
-        svc.build.context = cloneResult.hostContextAbsPath;
-      } else if (origContext.startsWith('./')) {
-        svc.build.context = path.join(cloneResult.hostContextAbsPath, origContext.slice(2));
-      } else if (!origContext.startsWith('/')) {
-        svc.build.context = path.join(cloneResult.hostContextAbsPath, origContext);
+      svc.build.context = relContextPath;
+      if (!svc.build.dockerfile) {
+        svc.build.dockerfile = 'Dockerfile';
       }
     }
 

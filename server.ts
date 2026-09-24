@@ -26,7 +26,7 @@ import {
   repairTargetStack,
 } from './server/automationService';
 import { readHostFile, resolveDefaultHostHome } from './server/hostFsService';
-import { fetchRemoteCompose } from './server/remoteComposeService';
+import { fetchRemoteCompose, synthesizeRemoteComposeAST } from './server/remoteComposeService';
 import { resolvePortCollisions } from './server/portCollisionService';
 import {
   getMergeHistory,
@@ -503,10 +503,16 @@ async function startServer() {
     }
   });
 
-  // Directive 3: AST Port Collision Analysis & Resolution
+  // Directive 3: AST Port Collision Analysis, Relative Volume Namespacing & Non-Destructive Deep Merge
   app.post('/api/compose/resolve-ports', async (req, res) => {
     try {
-      const { yaml: yamlContent } = req.body;
+      const {
+        yaml: yamlContent,
+        sourceUrl,
+        targetDirectory,
+        targetStackName,
+        installMode,
+      } = req.body;
       if (!yamlContent) {
         return res.status(400).json({ error: 'YAML content is required' });
       }
@@ -519,7 +525,15 @@ async function startServer() {
         }
       }
 
-      const result = resolvePortCollisions(yamlContent, occupiedPorts);
+      const result = await synthesizeRemoteComposeAST({
+        rawYaml: yamlContent,
+        sourceUrl,
+        targetDirectory: targetDirectory || '',
+        targetStackName: targetStackName || 'app',
+        installMode: installMode || 'new-stack',
+        occupiedPorts,
+      });
+
       res.json(result);
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });

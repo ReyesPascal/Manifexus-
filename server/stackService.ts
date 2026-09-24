@@ -1,5 +1,5 @@
 import { dump } from 'js-yaml';
-import { parseDocument, YAMLMap } from 'yaml';
+import yaml, { parseDocument, YAMLMap } from 'yaml';
 import path from 'path';
 import { DeepContainerMetadata } from '../src/types';
 
@@ -128,10 +128,10 @@ export function mergeComposeWithAst(
   newNetworks?: Record<string, any>
 ): string {
   try {
-    const doc = parseDocument(existingYaml);
+    const doc = parseDocument(existingYaml && existingYaml.trim().length > 0 ? existingYaml : 'services: {}\n');
     let services = doc.get('services') as YAMLMap;
     if (!services) {
-      doc.set('services', new YAMLMap());
+      doc.set('services', doc.createNode({}));
       services = doc.get('services') as YAMLMap;
     }
 
@@ -139,35 +139,68 @@ export function mergeComposeWithAst(
       if (sDef && typeof sDef === 'object' && !sDef.container_name) {
         sDef.container_name = sName;
       }
-      services.set(sName, sDef);
+      services.set(sName, doc.createNode(sDef));
     }
 
     if (newVolumes && Object.keys(newVolumes).length > 0) {
       let volumes = doc.get('volumes') as YAMLMap;
       if (!volumes) {
-        doc.set('volumes', new YAMLMap());
+        doc.set('volumes', doc.createNode({}));
         volumes = doc.get('volumes') as YAMLMap;
       }
       for (const [vName, vDef] of Object.entries(newVolumes)) {
-        volumes.set(vName, vDef);
+        volumes.set(vName, doc.createNode(vDef));
       }
     }
 
     if (newNetworks && Object.keys(newNetworks).length > 0) {
       let networks = doc.get('networks') as YAMLMap;
       if (!networks) {
-        doc.set('networks', new YAMLMap());
+        doc.set('networks', doc.createNode({}));
         networks = doc.get('networks') as YAMLMap;
       }
       for (const [nName, nDef] of Object.entries(newNetworks)) {
-        networks.set(nName, nDef);
+        networks.set(nName, doc.createNode(nDef));
       }
     }
 
-    return doc.toString();
+    const res = doc.toString();
+    if (res && res.trim().length > 0) {
+      return res;
+    }
   } catch (err) {
-    console.warn('[AST Merge] Fallback to standard merge due to AST parse error:', err);
-    return '';
+    console.warn('[AST Merge] Fallback to standard object merge due to AST parse error:', err);
+  }
+
+  // Robust fallback: Non-destructive object deep merge so content is never lost or emptied
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const parsed = (existingYaml && existingYaml.trim().length > 0 ? yaml.parse(existingYaml) : {}) || {};
+    if (!parsed.services || typeof parsed.services !== 'object') {
+      parsed.services = {};
+    }
+    for (const [sName, sDef] of Object.entries(newServices)) {
+      if (sDef && typeof sDef === 'object' && !sDef.container_name) {
+        sDef.container_name = sName;
+      }
+      parsed.services[sName] = sDef;
+    }
+    if (newVolumes && Object.keys(newVolumes).length > 0) {
+      if (!parsed.volumes || typeof parsed.volumes !== 'object') parsed.volumes = {};
+      for (const [vName, vDef] of Object.entries(newVolumes)) {
+        parsed.volumes[vName] = vDef;
+      }
+    }
+    if (newNetworks && Object.keys(newNetworks).length > 0) {
+      if (!parsed.networks || typeof parsed.networks !== 'object') parsed.networks = {};
+      for (const [nName, nDef] of Object.entries(newNetworks)) {
+        parsed.networks[nName] = nDef;
+      }
+    }
+    return yaml.stringify(parsed);
+  } catch (fallbackErr) {
+    console.error('[AST Merge] Fatal fallback merge error:', fallbackErr);
+    return existingYaml;
   }
 }
 

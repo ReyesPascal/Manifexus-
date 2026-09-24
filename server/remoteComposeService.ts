@@ -1,5 +1,8 @@
+import path from 'path';
 import yaml from 'yaml';
-import { extractPortsFromCompose, ExtractedPort } from './portCollisionService';
+import { extractPortsFromCompose, resolvePortCollisions, ExtractedPort, RemappedPort } from './portCollisionService';
+import { readHostFile } from './hostFsService';
+import { mergeComposeWithAst, enforceDeterministicContainerNames } from './stackService';
 
 export interface RemoteComposeMetadata {
   url: string;
@@ -173,5 +176,215 @@ export async function fetchRemoteCompose(inputUrl: string): Promise<RemoteCompos
     isGitHubRepo,
     repoOwner,
     repoName,
+  };
+}
+
+/**
+ * Directive 3: Resolves and namespaces any relative host directory bind mounts in services
+ * (e.g. ./downloads -> ./<service_name>/downloads) to prevent colliding with existing stack directories.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function namespaceRelativeVolumeMounts(services: Record<string, any>): void {
+  for (const [svcName, svc] of Object.entries(services)) {
+    if (!svc || typeof svc !== 'object') continue;
+    if (!Array.isArray(svc.volumes)) continue;
+
+    const cleanSvcName = svcName.toLowerCase().replace(/[^a-z0-9-_]/g, '-');
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    svc.volumes = svc.volumes.map((vol: any) => {
+      if (typeof vol === 'string') {
+        const parts = vol.split(':');
+        const hostSrc = parts[0]?.trim();
+        if (hostSrc && hostSrc.startsWith('./')) {
+          const cleanRel = hostSrc.slice(2);
+          // If not already namespaced under service name or remote-build
+          if (!cleanRel.startsWith(`${cleanSvcName}/`) && !cleanRel.startsWith('remote-build-')) {
+            parts[0] = `./${cleanSvcName}/${cleanRel}`;
+            return parts.join(':');
+          }
+        }
+        return vol;
+      } else if (typeof vol === 'object' && vol !== null) {
+        if (vol.source && typeof vol.source === 'string' && vol.source.startsWith('./')) {
+          const cleanRel = vol.source.slice(2);
+          if (!cleanRel.startsWith(`${cleanSvcName}/`) && !cleanRel.startsWith('remote-build-')) {
+            return {
+              ...vol,
+              source: `./${cleanSvcName}/${cleanRel}`,
+            };
+          }
+        }
+        return vol;
+      }
+      return vol;
+    });
+  }
+}
+
+export interface SynthesizeRemoteComposeParams {
+  rawYaml: string;
+  sourceUrl?: string;
+  targetStackName: string;
+  targetDirectory: string;
+  installMode: 'existing-stack' | 'new-stack';
+  occupiedPorts?: Set<number>;
+}
+
+export interface SynthesizeRemoteComposeResult {
+  synthesizedYaml: string;
+  resolvedYaml: string;
+  hasCollisions: boolean;
+  remappedPorts: RemappedPort[];
+  isMerged: boolean;
+  existingServiceCount: number;
+  incomingServiceCount: number;
+  buildContextsFound: string[];
+  existingComposeFound: boolean;
+}
+
+/**
+ * Directive 1 & 2: Remote Compose AST Synthesis & Merging Engine
+ * First reads and parses existing docker-compose.yml in the target host directory,
+ * deep-merges services, volumes, and networks into the existing AST without overwriting root objects,
+ * scans for build: directives to point to ./remote-build-<service_name>,
+ * namespaces relative volume mounts, and injects deterministic container names.
+ */
+export async function synthesizeRemoteComposeAST(
+  params: SynthesizeRemoteComposeParams
+): Promise<SynthesizeRemoteComposeResult> {
+  const { rawYaml, targetStackName, targetDirectory, installMode, occupiedPorts } = params;
+
+  // 1. Resolve Port Collisions on incoming compose specification
+  const portRes = resolvePortCollisions(rawYaml, occupiedPorts || new Set());
+  const workingYaml = portRes.resolvedYaml;
+
+  // 2. Parse incoming document
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const incomingDoc = (yaml.parse(workingYaml) || {}) as any;
+  const incomingServices = (incomingDoc.services || {}) as Record<string, any>;
+  const incomingVolumes = (incomingDoc.volumes || {}) as Record<string, any>;
+  const incomingNetworks = (incomingDoc.networks || {}) as Record<string, any>;
+  const incomingServiceNames = Object.keys(incomingServices);
+
+  if (incomingServiceNames.length === 0) {
+    throw new Error('Fetched YAML has no services defined under the "services:" root key.');
+  }
+
+  // 3. Scan for build: directives and mutate AST to dedicated ./remote-build-<service_name> subdirectories
+  const buildContextsFound: string[] = [];
+  for (const svcName of incomingServiceNames) {
+    const svc = incomingServices[svcName];
+    if (!svc || typeof svc !== 'object') continue;
+
+    const hasBuild = Boolean(svc.build);
+    const hasImage = typeof svc.image === 'string' && svc.image.trim().length > 0;
+
+    if (hasBuild) {
+      if (hasImage) {
+        // Pre-built image priority: drop local build context
+        delete svc.build;
+      } else {
+        const cleanSvcName = svcName.toLowerCase().replace(/[^a-z0-9-_]/g, '-');
+        buildContextsFound.push(svcName);
+        const relContextPath = `./remote-build-${cleanSvcName}`;
+
+        if (typeof svc.build === 'string') {
+          svc.build = relContextPath;
+        } else if (typeof svc.build === 'object' && svc.build !== null) {
+          svc.build.context = relContextPath;
+          if (!svc.build.dockerfile) {
+            svc.build.dockerfile = 'Dockerfile';
+          }
+        }
+      }
+    }
+
+    // Enforce deterministic container_name
+    if (!svc.container_name) {
+      svc.container_name = svcName;
+    }
+  }
+
+  // 4. Namespace relative host directory bind mounts in incoming services to prevent clashing with existing stack directories
+  if (installMode === 'existing-stack') {
+    namespaceRelativeVolumeMounts(incomingServices);
+  }
+
+  // 5. Check target directory for existing docker-compose.yml
+  let existingContent: string | undefined;
+  if (installMode === 'existing-stack' && targetDirectory) {
+    const candidatePaths = [
+      path.join(targetDirectory, 'docker-compose.yml'),
+      path.join(targetDirectory, 'docker-compose.yaml'),
+      path.join(targetDirectory, 'compose.yaml'),
+    ];
+
+    for (const cp of candidatePaths) {
+      try {
+        const content = await readHostFile(cp);
+        if (content && content.trim().length > 0) {
+          existingContent = content;
+          break;
+        }
+      } catch {
+        // ignore and check next
+      }
+    }
+  }
+
+  // 6. AST Deep Merge vs New Stack Synthesis
+  if (existingContent) {
+    // Parse existing compose document to count services
+    let existingServiceCount = 0;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const existingDoc = yaml.parse(existingContent) as any;
+      existingServiceCount = Object.keys(existingDoc?.services || {}).length;
+    } catch {
+      // fallback count 0
+    }
+
+    // Deep merge incoming services, volumes, and networks into existing AST
+    const merged = mergeComposeWithAst(
+      existingContent,
+      incomingServices,
+      incomingVolumes,
+      incomingNetworks
+    );
+
+    const finalizedYaml = enforceDeterministicContainerNames(merged);
+
+    return {
+      synthesizedYaml: finalizedYaml,
+      resolvedYaml: finalizedYaml,
+      hasCollisions: portRes.hasCollisions,
+      remappedPorts: portRes.remappedPorts,
+      isMerged: true,
+      existingServiceCount,
+      incomingServiceCount: incomingServiceNames.length,
+      buildContextsFound,
+      existingComposeFound: true,
+    };
+  }
+
+  // New Stack mode or existing compose not found
+  incomingDoc.services = incomingServices;
+  if (Object.keys(incomingVolumes).length > 0) incomingDoc.volumes = incomingVolumes;
+  if (Object.keys(incomingNetworks).length > 0) incomingDoc.networks = incomingNetworks;
+
+  const cleanYaml = yaml.stringify(incomingDoc);
+  const finalizedYaml = enforceDeterministicContainerNames(cleanYaml);
+
+  return {
+    synthesizedYaml: finalizedYaml,
+    resolvedYaml: finalizedYaml,
+    hasCollisions: portRes.hasCollisions,
+    remappedPorts: portRes.remappedPorts,
+    isMerged: false,
+    existingServiceCount: 0,
+    incomingServiceCount: incomingServiceNames.length,
+    buildContextsFound,
+    existingComposeFound: false,
   };
 }

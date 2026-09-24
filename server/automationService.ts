@@ -35,6 +35,7 @@ import {
 import { resolvePortCollisions, extractPortsFromCompose, RemappedPort } from './portCollisionService';
 import { mergeComposeWithAst, enforceDeterministicContainerNames } from './stackService';
 import { resolveComposeBuildContexts } from './buildContextService';
+import { namespaceRelativeVolumeMounts } from './remoteComposeService';
 import { sysLog } from './systemLogService';
 
 const execAsync = util.promisify(exec);
@@ -1214,6 +1215,9 @@ export async function executeStreamingComposeInstall(
       const incomingVolumes = parsedRemote.volumes || {};
       const incomingNetworks = parsedRemote.networks || {};
 
+      // Directive 3: Namespace relative host directory bind mounts (e.g. ./downloads -> ./<service_name>/downloads)
+      namespaceRelativeVolumeMounts(incomingServices);
+
       const mergedYaml = mergeComposeWithAst(
         preMergeComposeContent,
         incomingServices,
@@ -1268,8 +1272,8 @@ export async function executeStreamingComposeInstall(
     }
 
     // Directive 2 & 3: Strict Elevated Deployment Execution & Zero False Positives
-    log(`Dispatching elevated "docker compose up -d --remove-orphans" to host daemon in ${req.targetDirectory}...`, 5);
-    const composeResult = await runHostDockerCompose(req.targetDirectory, 'up -d --remove-orphans');
+    log(`Dispatching elevated "docker compose up -d --build --remove-orphans" to host daemon in ${req.targetDirectory}...`, 5);
+    const composeResult = await runHostDockerCompose(req.targetDirectory, 'up -d --build --remove-orphans');
     if (composeResult.stdout) {
       for (const line of composeResult.stdout.split('\n')) {
         if (line.trim()) log(` [docker] ${line}`, 5);
