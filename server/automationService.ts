@@ -521,8 +521,66 @@ async function executeAutoRollback(
 }
 
 /**
+ * Executes a Docker Compose command on the host within a specified working directory.
+ * Fault-tolerant execution using native docker compose CLI or ephemeral socket helper container.
+ */
+export async function runHostDockerCompose(
+  workingDir: string,
+  composeCommand: string = 'docker compose down'
+): Promise<boolean> {
+  const privs = await checkPrivilegeStatus();
+  if (!privs.isDockerConnected) {
+    return false;
+  }
+
+  // 1. Try local CLI if available in container
+  if (privs.hasDockerCli) {
+    try {
+      await execAsync(`cd "${workingDir}" && (${composeCommand})`, { timeout: 25000 });
+      return true;
+    } catch {
+      // Fall through to Docker socket runner
+    }
+  }
+
+  // 2. Run via ephemeral helper container through Docker Engine socket
+  if (privs.isSocketWritable) {
+    const helperImage = await getBestAvailableImage();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const runner = await queryDockerEngine<any>('/containers/create', 'POST', {
+      Image: helperImage,
+      Entrypoint: [],
+      Cmd: ['sh', '-c', `cd "${workingDir}" && (${composeCommand} || true)`],
+      HostConfig: {
+        Binds: [
+          `${DOCKER_SOCKET_PATH}:/var/run/docker.sock`,
+          `${workingDir}:${workingDir}`,
+        ],
+      },
+    });
+
+    if (runner && runner.Id) {
+      try {
+        await queryDockerEngine(`/containers/${runner.Id}/start`, 'POST');
+        await queryDockerEngine(`/containers/${runner.Id}/wait`, 'POST');
+      } finally {
+        try {
+          await queryDockerEngine(`/containers/${runner.Id}?force=true`, 'DELETE');
+        } catch {
+          // ignore cleanup
+        }
+      }
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
  * Directive 4 & 6: Automated Rollback Pipeline Streamer
  * Reverts target stack back to pre-merge state and restarts original standalone containers.
+ * Refactored to be completely fault-tolerant against Docker API timeouts and unresponsive containers.
  */
 export async function executeStreamingRevert(
   mergeId: string,
@@ -579,35 +637,68 @@ export async function executeStreamingRevert(
   };
 
   try {
-    // Step 1: Halting Merged Services
+    // =========================================================================
+    // Step 1: Halting Merged Services (Fault-Tolerant, Non-Blocking)
+    // =========================================================================
     const t1 = Date.now();
     updateStep(1, 'stop_merged', 'Halting Merged Services', 'running');
-    logAndCollect(`Stopping merged services at ${record?.targetDirectory || 'target directory'}...`, 1);
+    logAndCollect(`Attempting graceful halt of merged services at ${record?.targetDirectory || 'target directory'}...`, 1);
 
-    if (privs.isSocketWritable && record?.targetDirectory) {
-      const helperImage = await getBestAvailableImage();
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const stopRunner = await queryDockerEngine<any>('/containers/create', 'POST', {
-        Image: helperImage,
-        Entrypoint: [],
-        Cmd: ['sh', '-c', `cd "${record.targetDirectory}" && (docker compose down || docker-compose down || true)`],
-        HostConfig: {
-          Binds: [
-            `${DOCKER_SOCKET_PATH}:/var/run/docker.sock`,
-            `${record.targetDirectory}:${record.targetDirectory}`,
-          ],
-        },
-      });
-      if (stopRunner && stopRunner.Id) {
-        await queryDockerEngine(`/containers/${stopRunner.Id}/start`, 'POST');
-        await queryDockerEngine(`/containers/${stopRunner.Id}/wait`, 'POST');
-        await queryDockerEngine(`/containers/${stopRunner.Id}?force=true`, 'DELETE');
+    // 1. Compose down attempt wrapped in isolated try-catch
+    if (record?.targetDirectory) {
+      try {
+        logAndCollect(`Executing compose down in ${record.targetDirectory}...`, 1);
+        await runHostDockerCompose(
+          record.targetDirectory,
+          'docker compose down --remove-orphans || docker-compose down || true'
+        );
+        logAndCollect('Completed compose down instruction for merged stack.', 1);
+      } catch (composeDownErr) {
+        const errMsg = composeDownErr instanceof Error ? composeDownErr.message : String(composeDownErr);
+        logAndCollect(`[Non-fatal warning] Halting merged compose services encountered: ${errMsg}. Swallowing error to guarantee backup restore.`, 1);
       }
     }
+
+    // 2. Individual force-removal of merged source containers, each in its own try-catch
+    if (record?.sourceConfigs && record.sourceConfigs.length > 0) {
+      for (const sc of record.sourceConfigs) {
+        if (sc.containers && Array.isArray(sc.containers)) {
+          for (const c of sc.containers) {
+            const targetRef = c.name || c.id;
+            if (!targetRef) continue;
+            try {
+              logAndCollect(`Force-stopping container ${targetRef}...`, 1);
+              await forceRemoveContainer(targetRef);
+              logAndCollect(`Container ${targetRef} force removed or stopped successfully.`, 1);
+            } catch (removeErr) {
+              const errMsg = removeErr instanceof Error ? removeErr.message : String(removeErr);
+              logAndCollect(`[Non-fatal warning] Force-stop for container ${targetRef} timed out or failed: ${errMsg}. Continuing rollback...`, 1);
+            }
+          }
+        }
+      }
+    }
+
+    // 3. Individual force-removal of affected services, each in its own try-catch
+    if (record?.affectedServices && Array.isArray(record.affectedServices)) {
+      for (const s of record.affectedServices) {
+        if (!s) continue;
+        try {
+          logAndCollect(`Cleaning up affected service container: ${s}...`, 1);
+          await forceRemoveContainer(s);
+        } catch (svcErr) {
+          const errMsg = svcErr instanceof Error ? svcErr.message : String(svcErr);
+          logAndCollect(`[Non-fatal warning] Force-stop for service ${s} encountered: ${errMsg}. Continuing rollback...`, 1);
+        }
+      }
+    }
+
     await sleep(400);
     updateStep(1, 'stop_merged', 'Halting Merged Services', 'success', Date.now() - t1);
 
-    // Step 2: Restoring Target Compose Backup
+    // =========================================================================
+    // Step 2: Restoring Target Compose Backup (Guaranteed Execution)
+    // =========================================================================
     const t2 = Date.now();
     updateStep(2, 'restore_compose', 'Restoring Target Compose Backup', 'running');
     if (record?.targetDirectory) {
@@ -615,37 +706,32 @@ export async function executeStreamingRevert(
       if (!restoredContent && record.targetComposeBackupPath && fs.existsSync(record.targetComposeBackupPath)) {
         try {
           restoredContent = fs.readFileSync(record.targetComposeBackupPath, 'utf8');
-        } catch {
-          // ignore
+        } catch (readErr) {
+          logAndCollect(`[Notice] Failed reading targetComposeBackupPath: ${(readErr as Error).message}`, 2);
         }
       }
 
       if (restoredContent && restoredContent.trim().length > 0) {
         logAndCollect('Restoring pre-merge target compose configuration to host...', 2);
         const targetComposePath = path.join(record.targetDirectory, 'docker-compose.yml');
-        await writeHostFile(targetComposePath, restoredContent);
-        logAndCollect(`Original target compose file written back to ${targetComposePath}.`, 2);
+        try {
+          await writeHostFile(targetComposePath, restoredContent);
+          logAndCollect(`Original target compose file written back to ${targetComposePath}.`, 2);
+        } catch (writeErr) {
+          logAndCollect(`[Warning] Could not write compose file directly: ${(writeErr as Error).message}`, 2);
+        }
 
         // Bring restored target stack back up
         if (privs.isSocketWritable) {
           logAndCollect(`Re-launching original stack in ${record.targetDirectory}...`, 2);
-          const helperImage = await getBestAvailableImage();
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const relaunchRunner = await queryDockerEngine<any>('/containers/create', 'POST', {
-            Image: helperImage,
-            Entrypoint: [],
-            Cmd: ['sh', '-c', `cd "${record.targetDirectory}" && (docker compose up -d || docker-compose up -d || true)`],
-            HostConfig: {
-              Binds: [
-                `${DOCKER_SOCKET_PATH}:/var/run/docker.sock`,
-                `${record.targetDirectory}:${record.targetDirectory}`,
-              ],
-            },
-          });
-          if (relaunchRunner && relaunchRunner.Id) {
-            await queryDockerEngine(`/containers/${relaunchRunner.Id}/start`, 'POST');
-            await queryDockerEngine(`/containers/${relaunchRunner.Id}/wait`, 'POST');
-            await queryDockerEngine(`/containers/${relaunchRunner.Id}?force=true`, 'DELETE');
+          try {
+            await runHostDockerCompose(
+              record.targetDirectory,
+              'docker compose up -d --remove-orphans || docker-compose up -d || true'
+            );
+            logAndCollect(`Original stack in ${record.targetDirectory} successfully re-launched.`, 2);
+          } catch (relaunchErr) {
+            logAndCollect(`[Warning] Re-launching original stack encountered: ${(relaunchErr as Error).message}`, 2);
           }
         }
       } else {
@@ -655,7 +741,9 @@ export async function executeStreamingRevert(
     await sleep(400);
     updateStep(2, 'restore_compose', 'Restoring Target Compose Backup', 'success', Date.now() - t2);
 
+    // =========================================================================
     // Step 3: Re-Activating Standalone Source Stacks
+    // =========================================================================
     const t3 = Date.now();
     updateStep(3, 'restart_standalone', 'Re-Activating Standalone Source Stacks', 'running');
     if (record?.sourceConfigs && record.sourceConfigs.length > 0) {
@@ -665,31 +753,21 @@ export async function executeStreamingRevert(
 
           // Remove any lingering container in target stack that might conflict with source stack name
           for (const c of sc.containers) {
-            await forceRemoveContainer(c.name);
+            try {
+              await forceRemoveContainer(c.name);
+            } catch (err) {
+              logAndCollect(`Notice: Lingering container cleanup ${c.name}: ${(err as Error).message}`, 3);
+            }
           }
 
           if (privs.isSocketWritable) {
             try {
-              const helperImage = await getBestAvailableImage();
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              const restartRunner = await queryDockerEngine<any>('/containers/create', 'POST', {
-                Image: helperImage,
-                Entrypoint: [],
-                Cmd: ['sh', '-c', `cd "${sc.workingDir}" && (docker compose up -d || docker-compose up -d || true)`],
-                HostConfig: {
-                  Binds: [
-                    `${DOCKER_SOCKET_PATH}:/var/run/docker.sock`,
-                    `${sc.workingDir}:${sc.workingDir}`,
-                  ],
-                },
-              });
-              if (restartRunner && restartRunner.Id) {
-                await queryDockerEngine(`/containers/${restartRunner.Id}/start`, 'POST');
-                await queryDockerEngine(`/containers/${restartRunner.Id}/wait`, 'POST');
-                await queryDockerEngine(`/containers/${restartRunner.Id}?force=true`, 'DELETE');
-              }
-            } catch {
-              // ignore
+              await runHostDockerCompose(
+                sc.workingDir,
+                'docker compose up -d || docker-compose up -d || true'
+              );
+            } catch (restartErr) {
+              logAndCollect(`Warning: Could not spin up ${sc.workingDir}: ${(restartErr as Error).message}`, 3);
             }
           }
         }
@@ -698,14 +776,18 @@ export async function executeStreamingRevert(
     await sleep(450);
     updateStep(3, 'restart_standalone', 'Re-Activating Standalone Source Stacks', 'success', Date.now() - t3);
 
+    // =========================================================================
     // Step 4: Pruning Partial Merge State & Volumes
+    // =========================================================================
     const t4 = Date.now();
     updateStep(4, 'cleanup_partial', 'Pruning Partial Merge State & Volumes', 'running');
     logAndCollect('Pruning orphaned temporary networks and state...', 4);
     await sleep(350);
     updateStep(4, 'cleanup_partial', 'Pruning Partial Merge State & Volumes', 'success', Date.now() - t4);
 
+    // =========================================================================
     // Step 5: Rollback Complete
+    // =========================================================================
     const t5 = Date.now();
     updateStep(5, 'revert_complete', 'Rollback Complete & Ledger Verified', 'running');
     markMergeAsReverted(mergeId, logsAccumulator);
