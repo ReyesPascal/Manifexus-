@@ -20,7 +20,15 @@ import {
   saveMergeHistoryRecord,
 } from './historyService';
 import { readHostFile, writeHostFile, checkHostFileExists, forceRemoveContainer, createHostDirectory } from './hostFsService';
-import { archiveStackData, restoreStackData, runComposeInDir, formatBytes, provisionStackFolder } from './dataBackupService';
+import {
+  archiveStackData,
+  restoreStackData,
+  runComposeInDir,
+  runComposeCapture,
+  composeErrorTail,
+  formatBytes,
+  provisionStackFolder,
+} from './dataBackupService';
 
 const execAsync = util.promisify(exec);
 
@@ -226,6 +234,23 @@ function removeServicesFromCompose(composeText: string, services: string[]): str
   const doc = yaml.parseDocument(composeText);
   for (const svc of services) {
     doc.deleteIn(['services', svc]);
+  }
+  // Remaining services must not point at the ones that left, or `compose up` refuses to run
+  const remaining = doc.get('services') as yaml.YAMLMap | undefined;
+  if (remaining && yaml.isMap(remaining)) {
+    for (const item of remaining.items) {
+      const name = String((item.key as yaml.Scalar)?.value ?? item.key);
+      for (const field of ['depends_on', 'links']) {
+        const node = doc.getIn(['services', name, field]);
+        if (yaml.isSeq(node)) {
+          node.items = node.items.filter((i) => !services.includes(String((i as yaml.Scalar).value ?? i).split(':')[0]));
+          if (!node.items.length) doc.deleteIn(['services', name, field]);
+        } else if (yaml.isMap(node)) {
+          for (const svc of services) node.delete(svc);
+          if (!node.items.length) doc.deleteIn(['services', name, field]);
+        }
+      }
+    }
   }
   return doc.toString();
 }
@@ -438,8 +463,14 @@ export async function executeStreamingPipeline(
         });
         log(`Created new stack ${req.targetStackName} in ${targetDir}.`, 5);
       }
-      const up = await runComposeInDir(targetDir, 'up -d');
-      if (!up) throw new Error(`docker compose up failed in ${targetDir}.`);
+      const up = await runComposeCapture(targetDir, 'up -d', {
+        extraDirs: Array.from(sourceGroups.values()).map((g) => g.workingDir),
+      });
+      if (!up.ok) {
+        const why = composeErrorTail(up.output);
+        if (why) log(why, 5);
+        throw new Error(`Docker couldn't start the apps in ${req.targetStackName}${why ? `: ${why.split('\n').pop()}` : '.'}`);
+      }
       log(`${req.targetStackName} is up.`, 5);
     });
 

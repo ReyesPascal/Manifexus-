@@ -416,7 +416,7 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
     if (page === 'review') {
       return {
         label: planLoading ? 'Preparing…' : `Move ${plural(selected.length, 'App')}`,
-        disabled: planLoading || !plan || Boolean(planError) || !canRun,
+        disabled: planLoading || !plan || Boolean(planError) || !canRun || (plan?.blockers?.length || 0) > 0,
         go: startMove,
       };
     }
@@ -677,6 +677,45 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
         </Group>
         <SectionFooter>{summaryFooter}</SectionFooter>
       </section>
+
+      {(plan?.blockers?.length || 0) > 0 && (
+        <section>
+          <Group className="ios-inset-icon">
+            {plan!.blockers!.map((b, i) => (
+              <Row
+                key={`b${i}`}
+                leading={
+                  <IconTile color={ios.red}>
+                    <BangGlyph />
+                  </IconTile>
+                }
+                title="Can’t move this way"
+                subtitle={b}
+              />
+            ))}
+          </Group>
+          <SectionFooter>Go back to Apps and select the missing app too, or leave these where they are.</SectionFooter>
+        </section>
+      )}
+
+      {(plan?.warnings?.length || 0) > 0 && (
+        <section>
+          <Group className="ios-inset-icon">
+            {plan!.warnings!.map((w, i) => (
+              <Row
+                key={`w${i}`}
+                leading={
+                  <IconTile color={ios.orange}>
+                    <BangGlyph />
+                  </IconTile>
+                }
+                title="Heads up"
+                subtitle={w}
+              />
+            ))}
+          </Group>
+        </section>
+      )}
 
       {portConflicts.length > 0 && (
         <section>

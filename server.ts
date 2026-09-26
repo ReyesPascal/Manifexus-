@@ -23,6 +23,7 @@ import {
 } from './server/storageService';
 import {
   generateStackMergePlan,
+  collectSourceComposes,
   MergePlanRequest,
   isManifexusContainer,
   discoverHostComposeStacks,
@@ -487,7 +488,10 @@ async function startServer() {
         }
       }
 
+      const sourceComposes = await collectSourceComposes(selectedContainers);
+
       const plan = generateStackMergePlan(selectedContainers, {
+        sourceComposes,
         sourceContainerIds,
         targetStackName: targetStackName || 'combined-stack',
         targetDirectory: targetDir,

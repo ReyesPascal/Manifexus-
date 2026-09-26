@@ -455,6 +455,51 @@ export async function runComposeInDir(hostDir: string, args: string, timeoutMs =
   }
 }
 
+/**
+ * Like runComposeInDir, but also returns what compose printed (the last part, for error messages).
+ * `extraDirs` are other host folders the compose file refers to (e.g. env files of a moved app).
+ */
+export async function runComposeCapture(
+  hostDir: string,
+  args: string,
+  opts: { extraDirs?: string[]; timeoutMs?: number } = {}
+): Promise<{ ok: boolean; output: string }> {
+  const out = tmpFile('compose');
+  const script =
+    `cd ${shellQuote(hostDir)} || exit 3; ` +
+    `if docker compose version >/dev/null 2>&1; then docker compose ${args}; ` +
+    `elif command -v docker-compose >/dev/null 2>&1; then docker-compose ${args}; else echo "Docker Compose is not available"; exit 127; fi > ${shellQuote(out)} 2>&1`;
+  const binds = Array.from(new Set([hostDir, ...(opts.extraDirs || [])])).map((d) => `${d}:${d}`);
+  try {
+    const code = await runHelper(script, binds, opts.timeoutMs ?? 10 * 60 * 1000);
+    let output = '';
+    try {
+      output = fs.readFileSync(out, 'utf8');
+    } catch {
+      // no output
+    }
+    return { ok: code === 0, output };
+  } catch (err) {
+    return { ok: false, output: (err as Error).message };
+  } finally {
+    try {
+      fs.unlinkSync(out);
+    } catch {
+      // ignore
+    }
+  }
+}
+
+/** The last meaningful lines of compose output, for showing in an error. */
+export function composeErrorTail(output: string, lines = 6): string {
+  return output
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l && !/^(Container|Network|Volume) .* (Creating|Created|Starting|Started|Running|Recreate|Recreated|Stopping|Stopped|Removing|Removed|Waiting|Healthy)$/.test(l))
+    .slice(-lines)
+    .join('\n');
+}
+
 /** Removes one named volume. Returns false if it is in use or missing. */
 export async function removeVolume(name: string): Promise<boolean> {
   try {

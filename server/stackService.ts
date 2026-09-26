@@ -21,6 +21,7 @@ import {
   getProjectVolumes,
   removeVolume,
   removeHostDirectory,
+  runComposeCapture,
   formatBytes,
 } from './dataBackupService';
 
@@ -69,6 +70,8 @@ export interface StackMergePlan {
   rollbackScript: string;
   cleanupScript: string;
   existingComposeMergedWithAst?: boolean;
+  blockers?: string[];
+  warnings?: string[];
 }
 
 export interface MergePlanRequest {
@@ -78,6 +81,142 @@ export interface MergePlanRequest {
   mode: 'existing-stack' | 'new-stack';
   volumeHandling?: 'preserve-absolute' | 'consolidate-relative';
   existingComposeContent?: string;
+  /** Original compose text of each source stack, keyed by working directory */
+  sourceComposes?: Record<string, string>;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type AnyObj = Record<string, any>;
+
+/**
+ * Copies a service's definition from its original compose file so nothing is lost (network_mode,
+ * depends_on, env_file, cap_add, devices, healthcheck…), rewriting only what changes when the
+ * service lives in another folder / project:
+ *   - relative bind paths, env_file and build context become absolute (relative to the old folder)
+ *   - named volumes and networks of the old project become `external` references to the exact
+ *     same Docker objects, so data and connectivity are kept
+ * Returns blockers (moves that can't work) and warnings (things that change).
+ */
+export function adoptServiceDefinition(params: {
+  composeText: string;
+  service: string;
+  project: string;
+  workingDir: string;
+  movingServices: Set<string>;
+}): {
+  def?: AnyObj;
+  volumes: Record<string, AnyObj>;
+  networks: Record<string, AnyObj>;
+  blockers: string[];
+  warnings: string[];
+} {
+  const { composeText, service, project, workingDir, movingServices } = params;
+  const out = { volumes: {} as Record<string, AnyObj>, networks: {} as Record<string, AnyObj>, blockers: [] as string[], warnings: [] as string[] };
+  let doc: AnyObj;
+  try {
+    doc = parseDocument(composeText).toJSON() || {};
+  } catch {
+    return out;
+  }
+  const original = doc.services?.[service];
+  if (!original) return out;
+  const def: AnyObj = JSON.parse(JSON.stringify(original));
+  // compose's resolved view spells out unset fields as null
+  for (const k of Object.keys(def)) if (def[k] === null) delete def[k];
+  const abs = (p: string) => (p.startsWith('~') || p.startsWith('/') ? p : path.posix.normalize(path.posix.join(workingDir, p)));
+  const isPath = (p: string) => p.startsWith('.') || p.startsWith('/') || p.startsWith('~');
+  const topVolumes: AnyObj = doc.volumes || {};
+  const topNetworks: AnyObj = doc.networks || {};
+
+  const externalVolume = (name: string) => {
+    const decl = topVolumes[name] || {};
+    const real = decl?.external ? decl.name || name : decl?.name || `${project}_${name}`;
+    out.volumes[name] = { external: true, name: real };
+  };
+
+  // volumes (short "src:dst[:mode]" and long syntax)
+  if (Array.isArray(def.volumes)) {
+    def.volumes = def.volumes.map((v: string | AnyObj) => {
+      if (typeof v === 'string') {
+        const parts = v.split(':');
+        if (parts.length >= 2) {
+          if (isPath(parts[0])) parts[0] = abs(parts[0]);
+          else externalVolume(parts[0]);
+        }
+        return parts.join(':');
+      }
+      if (v && typeof v === 'object' && typeof v.source === 'string') {
+        if (v.type === 'bind' || isPath(v.source)) return { ...v, source: abs(v.source) };
+        if (v.type === 'volume' || !v.type) externalVolume(v.source);
+      }
+      return v;
+    });
+  }
+
+  if (typeof def.env_file === 'string') def.env_file = abs(def.env_file);
+  else if (Array.isArray(def.env_file))
+    def.env_file = def.env_file.map((e: string | AnyObj) => (typeof e === 'string' ? abs(e) : { ...e, path: abs(e.path) }));
+
+  if (typeof def.build === 'string') def.build = abs(def.build);
+  else if (def.build?.context) def.build = { ...def.build, context: abs(def.build.context) };
+
+  // Keep the service on the networks it used, as the same Docker networks
+  const netNames: string[] = Array.isArray(def.networks) ? def.networks : def.networks ? Object.keys(def.networks) : [];
+  for (const n of netNames) {
+    if (n === 'default') continue;
+    const decl = topNetworks[n] || {};
+    out.networks[n] = { external: true, name: decl?.external ? decl.name || n : decl?.name || `${project}_${n}` };
+  }
+
+  // Sharing another container's network only works if that one moves too
+  const nm: string | undefined = def.network_mode;
+  if (nm?.startsWith('service:')) {
+    const dep = nm.slice('service:'.length);
+    if (!movingServices.has(dep)) {
+      out.blockers.push(`${service} uses ${dep}’s network (network_mode: service:${dep}). Move ${dep} along with it.`);
+    }
+  }
+
+  // …and the reverse: an app staying behind that routes through this one (e.g. through a VPN container)
+  for (const [other, odef] of Object.entries(doc.services || {})) {
+    if (other === service || movingServices.has(other)) continue;
+    if ((odef as AnyObj)?.network_mode === `service:${service}`) {
+      out.blockers.push(`${other} uses ${service}’s network (network_mode: service:${service}). Move ${other} along with it.`);
+    }
+  }
+
+  // depends_on on services that stay behind can't be satisfied from another project
+  if (def.depends_on) {
+    const deps: string[] = Array.isArray(def.depends_on) ? def.depends_on : Object.keys(def.depends_on);
+    const staying = deps.filter((d) => !movingServices.has(d));
+    if (staying.length) {
+      if (Array.isArray(def.depends_on)) def.depends_on = def.depends_on.filter((d: string) => movingServices.has(d));
+      else for (const d of staying) delete def.depends_on[d];
+      if (!Object.keys(def.depends_on).length) delete def.depends_on;
+      out.warnings.push(`${service} depended on ${staying.join(', ')}, which stay${staying.length === 1 ? 's' : ''} in ${project}. It will start without waiting for ${staying.length === 1 ? 'it' : 'them'}.`);
+    }
+  }
+  if (def.links) {
+    out.warnings.push(`${service} used links, which were removed. Apps reach each other by name on shared networks.`);
+    delete def.links;
+  }
+  // Apps that stay in the old stack reach this one by its service name on the old project's
+  // default network; keep it attached there (with that name) so they don't lose it. Only when
+  // something actually stays behind, otherwise the old network may be removed with the old stack.
+  const staying = Object.keys(doc.services || {}).filter((n) => !movingServices.has(n));
+  const usesDefault = !netNames.length || netNames.includes('default');
+  if (!nm && usesDefault && staying.length > 0) {
+    const key = `${project}_default`;
+    const nets: AnyObj = Array.isArray(def.networks)
+      ? Object.fromEntries(def.networks.map((n: string) => [n, null]))
+      : { ...(def.networks || {}) };
+    if (!('default' in nets)) nets.default = null;
+    nets[key] = { aliases: [service] };
+    def.networks = nets;
+    out.networks[key] = { external: true, name: key };
+  }
+
+  return { def, ...out };
 }
 
 /**
@@ -106,7 +245,9 @@ export function mergeComposeWithAst(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   newServices: Record<string, any>,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  newVolumes?: Record<string, any>
+  newVolumes?: Record<string, any>,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  newNetworks?: Record<string, any>
 ): string {
   try {
     const doc = parseDocument(existingYaml);
@@ -139,11 +280,57 @@ export function mergeComposeWithAst(
       }
     }
 
+    if (newNetworks && Object.keys(newNetworks).length > 0) {
+      let networks = doc.get('networks') as YAMLMap;
+      if (!networks) {
+        doc.set('networks', new YAMLMap());
+        networks = doc.get('networks') as YAMLMap;
+      }
+      if (networks && (networks as YAMLMap).flow) (networks as YAMLMap).flow = false;
+      for (const [nName, nDef] of Object.entries(newNetworks)) {
+        if (!networks.has(nName)) networks.set(nName, nDef);
+      }
+    }
+
     return doc.toString();
   } catch (err) {
     console.warn('[AST Merge] Fallback to standard merge due to AST parse error:', err);
     return '';
   }
+}
+
+/**
+ * The compose definition of each stack that apps are leaving, keyed by working directory.
+ * Prefers compose's own resolved view (`docker compose config`: variables from .env filled in,
+ * paths absolute, real volume/network names); falls back to the raw file.
+ */
+export async function collectSourceComposes(selectedContainers: DeepContainerMetadata[]): Promise<Record<string, string>> {
+  const sourceComposes: Record<string, string> = {};
+  for (const c of selectedContainers) {
+    const dir = c.compose?.workingDir;
+    if (!dir || sourceComposes[dir] !== undefined) continue;
+    const files = (c.compose?.configFiles || '').split(',').map((f) => f.trim()).filter((f) => f.startsWith('/'));
+    // Best: compose's own resolved view (variables from .env filled in, paths absolute, real
+    // volume/network names). Falls back to the raw file if that fails.
+    const fileArgs = files.map((f) => `-f '${f.replace(/'/g, `'\\''`)}'`).join(' ');
+    const resolved = await runComposeCapture(dir, `${fileArgs} config --format json`, {
+      extraDirs: files.map((f) => path.posix.dirname(f)),
+      timeoutMs: 60 * 1000,
+    });
+    if (resolved.ok && resolved.output.trim().startsWith('{')) {
+      sourceComposes[dir] = resolved.output;
+      continue;
+    }
+    const candidates = files.length ? [files[0]] : ['docker-compose.yml', 'docker-compose.yaml', 'compose.yaml', 'compose.yml'].map((f) => path.posix.join(dir, f));
+    for (const cand of candidates) {
+      const text = await readHostFile(cand).catch(() => null);
+      if (text && text.trim()) {
+        sourceComposes[dir] = text;
+        break;
+      }
+    }
+  }
+  return sourceComposes;
 }
 
 /**
@@ -190,6 +377,17 @@ export function generateStackMergePlan(
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const composeServicesObj: Record<string, any> = {};
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const externalNetworks: Record<string, any> = {};
+  const blockers: string[] = [];
+  const warnings: string[] = [];
+  const movingByDir = new Map<string, Set<string>>();
+  for (const c of selectedContainers) {
+    if (c.compose?.workingDir && c.compose.service) {
+      if (!movingByDir.has(c.compose.workingDir)) movingByDir.set(c.compose.workingDir, new Set());
+      movingByDir.get(c.compose.workingDir)!.add(c.compose.service);
+    }
+  }
 
   for (const container of selectedContainers) {
     // Determine unique service name - strictly preserve original compose service names (e.g. 'db', 'app', 'nextcloud')
@@ -234,7 +432,8 @@ export function generateStackMergePlan(
       if (!mount.source || !mount.destination) continue;
 
       if (mount.type === 'volume') {
-        const rawVolumeName = mount.source;
+        // Docker reports the volume's disk path as `source`; the name is what compose needs
+        const rawVolumeName = mount.name || mount.source;
         let targetVolumeKey = rawVolumeName;
         const actualDockerVolumeName = rawVolumeName;
 
@@ -352,7 +551,27 @@ export function generateStackMergePlan(
       };
     }
 
-    composeServicesObj[serviceName] = serviceConfig;
+    // Prefer the service's real definition from its compose file over the reconstruction above
+    const srcText = container.compose?.workingDir ? options.sourceComposes?.[container.compose.workingDir] : undefined;
+    let finalConfig = serviceConfig;
+    if (srcText && container.compose?.service && container.compose.project && container.compose.workingDir) {
+      const adopted = adoptServiceDefinition({
+        composeText: srcText,
+        service: container.compose.service,
+        project: container.compose.project,
+        workingDir: container.compose.workingDir,
+        movingServices: movingByDir.get(container.compose.workingDir) || new Set(),
+      });
+      if (adopted.def) {
+        finalConfig = adopted.def;
+        Object.assign(externalNamedVolumes, adopted.volumes);
+        Object.assign(externalNetworks, adopted.networks);
+        blockers.push(...adopted.blockers);
+        warnings.push(...adopted.warnings);
+      }
+    }
+
+    composeServicesObj[serviceName] = finalConfig;
 
     servicesList.push({
       serviceName,
@@ -409,7 +628,7 @@ export function generateStackMergePlan(
     }
 
     const servicesToInject = Object.keys(incomingServicesObj).length > 0 ? incomingServicesObj : composeServicesObj;
-    const astResult = mergeComposeWithAst(existingComposeContent, servicesToInject, externalNamedVolumes);
+    const astResult = mergeComposeWithAst(existingComposeContent, servicesToInject, externalNamedVolumes, externalNetworks);
     if (astResult && astResult.trim().length > 0) {
       generatedComposeYaml = astResult;
       existingComposeMergedWithAst = true;
@@ -424,6 +643,9 @@ export function generateStackMergePlan(
 
     if (Object.keys(externalNamedVolumes).length > 0) {
       fullComposeDoc.volumes = externalNamedVolumes;
+    }
+    if (Object.keys(externalNetworks).length > 0) {
+      fullComposeDoc.networks = externalNetworks;
     }
 
     generatedComposeYaml = `# =========================================================================
@@ -569,6 +791,8 @@ echo "Cleanup complete. Your unified stack is running pristine!"
     rollbackScript,
     cleanupScript,
     existingComposeMergedWithAst,
+    blockers,
+    warnings,
   };
 }
 

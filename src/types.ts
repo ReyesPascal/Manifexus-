@@ -141,6 +141,10 @@ export interface StackMergePlan {
   volumeSafetyAudit: VolumeSafetyAuditItem[];
   portConflicts: PortConflictItem[];
   generatedComposeYaml: string;
+  /** Problems that make the move impossible as selected (e.g. a VPN dependency left behind) */
+  blockers?: string[];
+  /** Things that change and the user should know about */
+  warnings?: string[];
   migrationScript: string;
   rollbackScript: string;
   cleanupScript: string;
