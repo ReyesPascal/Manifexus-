@@ -151,3 +151,55 @@ export interface AutomationPrivileges {
   };
 }
 
+export type LogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR' | 'CRITICAL';
+
+export type LogEventType =
+  | 'API_CALL'
+  | 'DOCKER_EXEC'
+  | 'STATE_CHANGE'
+  | 'SYSTEM'
+  | 'AUTH'
+  | 'STACK_OP';
+
+export interface StructuredLogEntry {
+  id: string;
+  timestamp: string;
+  level: LogLevel;
+  eventType: LogEventType;
+  message: string;
+  source: string;
+  payload?: Record<string, unknown> | unknown[];
+  metadata?: {
+    method?: string;
+    route?: string;
+    statusCode?: number;
+    durationMs?: number;
+    ip?: string;
+    userAgent?: string;
+    [key: string]: unknown;
+  };
+  executionDetails?: {
+    command?: string;
+    targetContainer?: string;
+    stdout?: string;
+    stderr?: string;
+    exitCode?: number;
+    durationMs?: number;
+  };
+  error?: {
+    message: string;
+    stack?: string;
+    code?: string | number;
+  };
+}
+
+export interface LogQueryResult {
+  logs: StructuredLogEntry[];
+  total: number;
+  filteredCount: number;
+  logFilesCount: number;
+  activeLogFile: string;
+  storageDir: string;
+}
+
+

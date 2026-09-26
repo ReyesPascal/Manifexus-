@@ -11,6 +11,7 @@ import {
   AlertTriangle,
   Server,
   History,
+  Terminal,
 } from 'lucide-react';
 import { SystemStatus, AutomationPrivileges } from '../types';
 import { Zap, ShieldAlert } from 'lucide-react';
@@ -31,6 +32,7 @@ interface NavbarProps {
   onOpenSimulateModal: () => void;
   onOpenStackMerger?: () => void;
   onOpenHistory?: () => void;
+  onOpenLogs?: () => void;
   onRefresh: () => void;
   isRefreshing: boolean;
 }
@@ -51,6 +53,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenSimulateModal,
   onOpenStackMerger,
   onOpenHistory,
+  onOpenLogs,
   onRefresh,
   isRefreshing,
 }) => {
@@ -283,6 +286,18 @@ export const Navbar: React.FC<NavbarProps> = ({
               >
                 <History className="w-3.5 h-3.5 text-purple-400" />
                 <span className="hidden lg:inline">Ledger</span>
+              </button>
+            )}
+
+            {/* System Diagnostic Logs Dashboard */}
+            {onOpenLogs && (
+              <button
+                onClick={onOpenLogs}
+                className="px-2.5 py-1.5 rounded-lg bg-emerald-950/80 border border-emerald-500/40 text-xs font-mono text-emerald-300 hover:bg-emerald-900/60 transition-colors flex items-center gap-1.5 shadow-[0_0_12px_rgba(16,185,129,0.15)]"
+                title="Open Global Diagnostic Logging & Observability Dashboard"
+              >
+                <Terminal className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Logs</span>
               </button>
             )}
 

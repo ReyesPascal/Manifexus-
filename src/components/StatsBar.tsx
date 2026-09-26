@@ -23,7 +23,7 @@ export const StatsBar: React.FC<StatsBarProps> = ({ systemStatus, portsCount }) 
           <span>FLEET RUNNING</span>
           <span className="relative flex h-2 w-2">
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500 animate-pulse"></span>
           </span>
         </div>
         <div className="flex items-baseline gap-2">
@@ -37,13 +37,16 @@ export const StatsBar: React.FC<StatsBarProps> = ({ systemStatus, portsCount }) 
       </div>
 
       {/* Stopped / Inactive */}
-      <div className="bg-[#0b0f19]/90 border border-slate-800/90 rounded-xl p-3.5 relative overflow-hidden group hover:border-slate-700 transition-all">
+      <div className="bg-[#0b0f19]/90 border border-slate-800/90 rounded-xl p-3.5 relative overflow-hidden group hover:border-rose-500/30 transition-all">
         <div className="flex items-center justify-between text-xs text-slate-400 font-mono mb-1">
           <span>EXITED / STOPPED</span>
-          <Radio className="w-3.5 h-3.5 text-slate-500" />
+          <span className="relative flex h-2 w-2">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-500 animate-pulse shadow-[0_0_8px_rgba(244,63,94,0.8)]"></span>
+          </span>
         </div>
         <div className="flex items-baseline gap-2">
-          <span className="text-2xl font-bold font-mono text-slate-300">
+          <span className="text-2xl font-bold font-mono text-rose-400">
             {systemStatus?.stoppedContainers ?? 0}
           </span>
           <span className="text-xs text-slate-500 font-mono">offline</span>

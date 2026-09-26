@@ -1,6 +1,7 @@
 import http from 'http';
 import fs from 'fs';
 import { DeepContainerMetadata, ContainerPort, ContainerMount, ComposeMetadata } from '../src/types';
+import { globalLogService } from './globalLogService';
 
 const DOCKER_SOCKET_PATH = process.env.DOCKER_SOCKET_PATH || '/var/run/docker.sock';
 
@@ -13,8 +14,14 @@ export function isDockerSocketAvailable(): boolean {
   }
 }
 
-// Low-level HTTP request over Unix Domain Socket
+// Low-level HTTP request over Unix Domain Socket with Granular Diagnostic Execution Logging
 export function queryDockerEngine<T>(path: string, method: string = 'GET', body?: unknown): Promise<T> {
+  const startTime = Date.now();
+  // Extract target container ID if the path is a container-specific endpoint like /containers/{id}/...
+  const containerMatch = path.match(/\/containers\/([a-zA-Z0-9_-]+)/);
+  const targetContainer = containerMatch ? containerMatch[1] : undefined;
+  const commandDesc = `DOCKER_SOCK ${method} ${path}`;
+
   return new Promise((resolve, reject) => {
     const payload = body !== undefined ? (typeof body === 'string' ? body : JSON.stringify(body)) : null;
 
@@ -43,7 +50,25 @@ export function queryDockerEngine<T>(path: string, method: string = 'GET', body?
         data += chunk;
       });
       res.on('end', () => {
-        if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
+        const durationMs = Date.now() - startTime;
+        const statusCode = res.statusCode || 0;
+        const isSuccess = statusCode >= 200 && statusCode < 300;
+
+        if (isSuccess) {
+          // Log socket execution telemetry
+          // Filter out spammy top-level container polling listings unless query parameter or error
+          if (!path.startsWith('/containers/json') || method !== 'GET') {
+            globalLogService.logDockerExec({
+              command: commandDesc,
+              targetContainer,
+              stdout: data.length > 2000 ? `${data.substring(0, 2000)}... [TRUNCATED]` : data,
+              stderr: '',
+              exitCode: 0,
+              durationMs,
+              payload: payload ? { requestPayload: payload } : undefined,
+            });
+          }
+
           try {
             resolve(data ? JSON.parse(data) : ({} as T));
           } catch {
@@ -51,18 +76,49 @@ export function queryDockerEngine<T>(path: string, method: string = 'GET', body?
             resolve(data as unknown as T);
           }
         } else {
-          reject(new Error(`Docker API ${path} returned status ${res.statusCode}: ${data}`));
+          const errMsg = `Docker API ${path} returned status ${statusCode}: ${data}`;
+          globalLogService.logDockerExec({
+            command: commandDesc,
+            targetContainer,
+            stdout: '',
+            stderr: data,
+            exitCode: statusCode,
+            durationMs,
+            error: new Error(errMsg),
+          });
+          reject(new Error(errMsg));
         }
       });
     });
 
     req.on('error', (err) => {
+      const durationMs = Date.now() - startTime;
+      globalLogService.logDockerExec({
+        command: commandDesc,
+        targetContainer,
+        stdout: '',
+        stderr: err.message,
+        exitCode: 1,
+        durationMs,
+        error: err,
+      });
       reject(err);
     });
 
     req.on('timeout', () => {
       req.destroy();
-      reject(new Error(`Docker API request to ${path} timed out`));
+      const durationMs = Date.now() - startTime;
+      const timeoutErr = new Error(`Docker API request to ${path} timed out`);
+      globalLogService.logDockerExec({
+        command: commandDesc,
+        targetContainer,
+        stdout: '',
+        stderr: 'Request timed out after 10000ms',
+        exitCode: 124,
+        durationMs,
+        error: timeoutErr,
+      });
+      reject(timeoutErr);
     });
 
     if (payload) {
@@ -1143,23 +1199,54 @@ export async function getContainersList(): Promise<{
   };
 }
 
-// Container action (start, stop, restart)
+// Container action (start, stop, restart) with full execution telemetry logging
 export async function executeContainerAction(
   containerId: string,
   action: 'start' | 'stop' | 'restart'
 ): Promise<{ success: boolean; message: string }> {
+  const startTime = Date.now();
+  const command = `docker ${action} ${containerId}`;
+
   if (isDockerSocketAvailable()) {
     try {
       await queryDockerEngine(`/containers/${containerId}/${action}`, 'POST');
-      return { success: true, message: `Container ${containerId} ${action}ed successfully.` };
+      const durationMs = Date.now() - startTime;
+      const successMsg = `Container ${containerId} ${action}ed successfully.`;
+
+      globalLogService.logDockerExec({
+        command,
+        targetContainer: containerId,
+        stdout: successMsg,
+        stderr: '',
+        exitCode: 0,
+        durationMs,
+        message: `Docker container action: ${action} succeeded for [${containerId}]`,
+      });
+
+      return { success: true, message: successMsg };
     } catch (err) {
-      return { success: false, message: (err as Error).message };
+      const durationMs = Date.now() - startTime;
+      const errMsg = (err as Error).message;
+
+      globalLogService.logDockerExec({
+        command,
+        targetContainer: containerId,
+        stdout: '',
+        stderr: errMsg,
+        exitCode: 1,
+        durationMs,
+        error: err,
+        message: `Docker container action: ${action} FAILED for [${containerId}]`,
+      });
+
+      return { success: false, message: errMsg };
     }
   }
 
   // Simulated action in demo mode
   const target = demoContainers.find((c) => c.id === containerId || c.cleanName === containerId);
   if (target) {
+    const prevState = target.state;
     if (action === 'start') {
       target.state = 'running';
       target.status = 'Up Less than a minute';
@@ -1170,10 +1257,47 @@ export async function executeContainerAction(
       target.state = 'running';
       target.status = 'Up Less than a minute (restarted)';
     }
-    return { success: true, message: `[Demo] Container ${target.cleanName} ${action}ed.` };
+
+    const durationMs = Date.now() - startTime;
+    const msg = `[Demo] Container ${target.cleanName} ${action}ed.`;
+
+    globalLogService.logDockerExec({
+      command: `[DEMO] ${command}`,
+      targetContainer: target.cleanName,
+      stdout: msg,
+      stderr: '',
+      exitCode: 0,
+      durationMs,
+      message: `[Demo Environment] Container ${action} on ${target.cleanName}`,
+      payload: { previousState: prevState, newState: target.state },
+    });
+
+    globalLogService.logStateChange({
+      message: `Container ${target.cleanName} state transitioned from ${prevState} -> ${target.state}`,
+      entityId: target.id,
+      previousState: prevState,
+      nextState: target.state,
+      source: 'dockerService',
+    });
+
+    return { success: true, message: msg };
   }
 
-  return { success: false, message: `Container not found` };
+  const durationMs = Date.now() - startTime;
+  const notFoundMsg = `Container not found: ${containerId}`;
+
+  globalLogService.logDockerExec({
+    command,
+    targetContainer: containerId,
+    stdout: '',
+    stderr: notFoundMsg,
+    exitCode: 1,
+    durationMs,
+    level: 'WARN',
+    message: `Container action rejected: ${notFoundMsg}`,
+  });
+
+  return { success: false, message: notFoundMsg };
 }
 
 // Helper to add mock container in demo mode to test instant reactivity

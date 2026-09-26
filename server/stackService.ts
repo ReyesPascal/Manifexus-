@@ -1,7 +1,88 @@
-import { dump } from 'js-yaml';
-import { parseDocument, YAMLMap } from 'yaml';
+import * as jsyaml from 'js-yaml';
+import yaml, { parseDocument, YAMLMap } from 'yaml';
 import path from 'path';
 import { DeepContainerMetadata } from '../src/types';
+
+export interface ComposeAstObject {
+  version?: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  services: Record<string, any>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  volumes?: Record<string, any>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  networks?: Record<string, any>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  [key: string]: any;
+}
+
+/**
+ * Directive 2: AST Object Validation
+ * Validates the mutated compose AST structure before stringification.
+ * Throws a descriptive critical error if invalid.
+ */
+export function validateComposeAstObject(ast: unknown): ComposeAstObject {
+  if (!ast || typeof ast !== 'object') {
+    throw new Error('AST Validation Error: Compose AST is not a valid object (received null, undefined, or primitive).');
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const obj = ast as Record<string, any>;
+  if (!obj.services || typeof obj.services !== 'object') {
+    throw new Error('AST Validation Error: Compose AST is missing required "services" dictionary object.');
+  }
+
+  const serviceKeys = Object.keys(obj.services);
+  if (serviceKeys.length === 0) {
+    throw new Error('AST Validation Error: "services" dictionary contains zero services. Refusing to synthesize empty stack.');
+  }
+
+  for (const sName of serviceKeys) {
+    const sDef = obj.services[sName];
+    if (!sDef || typeof sDef !== 'object') {
+      throw new Error(`AST Validation Error: Service "${sName}" definition is invalid or not an object.`);
+    }
+    // Must have at least image or build
+    if (!sDef.image && !sDef.build) {
+      throw new Error(`AST Validation Error: Service "${sName}" must specify an "image" or "build" directive.`);
+    }
+  }
+
+  return obj as ComposeAstObject;
+}
+
+/**
+ * Directive 3: Strict Stringification using js-yaml (jsyaml.dump).
+ * Validates AST first, dumps to YAML, and guarantees output is never null, empty, blank, or 0-bytes.
+ * Throws a critical error and stops execution if stringification produces empty string.
+ */
+export function strictlyDumpComposeAst(ast: unknown): string {
+  const validated = validateComposeAstObject(ast);
+
+  if (!validated.version) {
+    validated.version = '3.8';
+  }
+
+  const dumped = jsyaml.dump(validated, {
+    indent: 2,
+    lineWidth: -1,
+    noRefs: true,
+  });
+
+  if (!dumped || dumped.trim().length === 0) {
+    throw new Error(
+      'Critical Stringification Failure: jsyaml.dump produced an empty or blank output string. Execution stopped to prevent 0-byte file write.'
+    );
+  }
+
+  const byteLength = Buffer.byteLength(dumped, 'utf-8');
+  if (byteLength === 0) {
+    throw new Error(
+      'Critical Stringification Failure: Output string byte length is 0. Execution stopped to prevent 0-byte file write.'
+    );
+  }
+
+  return dumped;
+}
 
 export interface VolumeSafetyAuditItem {
   service: string;
@@ -70,45 +151,160 @@ export function isManifexusContainer(c: {
 }
 
 /**
- * Directive 5: AST-Based Intelligent Stack Merging
+ * Module 5: Deterministic AST Injection
+ * Inspects all services in a Compose YAML document. If container_name is missing,
+ * explicitly injects container_name: <service_key> directly beneath image/build properties.
+ */
+export function enforceDeterministicContainerNames(composeYaml: string): string {
+  try {
+    const doc = parseDocument(composeYaml);
+    const services = doc.get('services') as YAMLMap;
+    if (services && typeof services.toJSON === 'function') {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const entries = (services as any).items || [];
+      for (const item of entries) {
+        const sKey = String(item.key?.value || item.key);
+        const sVal = item.value;
+        if (sVal && typeof sVal.get === 'function') {
+          if (!sVal.get('container_name')) {
+            // Find index of image or build to insert right after
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const subItems = (sVal as any).items || [];
+            let insertIdx = -1;
+            for (let i = 0; i < subItems.length; i++) {
+              const k = String(subItems[i].key?.value || subItems[i].key);
+              if (k === 'image' || k === 'build') {
+                insertIdx = i + 1;
+              }
+            }
+            if (insertIdx !== -1 && insertIdx <= subItems.length) {
+              const pair = doc.createPair('container_name', sKey);
+              subItems.splice(insertIdx, 0, pair);
+            } else {
+              sVal.set('container_name', sKey);
+            }
+          }
+        }
+      }
+      return doc.toString();
+    }
+  } catch (err) {
+    console.warn('[AST] Could not enforce deterministic container_name via AST:', (err as Error).message);
+  }
+  return composeYaml;
+}
+
+/**
+ * Directive 1 & 2: Non-Destructive Compose AST Deep-Merge Engine
  * Merges new services, volumes, and networks into an existing compose file while preserving
  * comments, directives, styling, and existing formatting.
+ * Implements Safe Fallback to base AST { version: '3.8', services: {} }, AST validation,
+ * and strict stringification to guarantee no 0-byte output.
  */
 export function mergeComposeWithAst(
   existingYaml: string,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   newServices: Record<string, any>,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  newVolumes?: Record<string, any>
+  newVolumes?: Record<string, any>,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  newNetworks?: Record<string, any>
 ): string {
+  // Safe Fallback Base AST representation
+  let baseObj: ComposeAstObject = { version: '3.8', services: {} };
+
   try {
-    const doc = parseDocument(existingYaml);
+    if (existingYaml && existingYaml.trim().length > 0) {
+      const parsed = yaml.parse(existingYaml);
+      if (parsed && typeof parsed === 'object') {
+        baseObj = parsed as ComposeAstObject;
+        if (!baseObj.services || typeof baseObj.services !== 'object') {
+          baseObj.services = {};
+        }
+      }
+    }
+  } catch (parseErr) {
+    console.warn('[AST Merge] Failed to parse existing yaml, falling back to base AST { version: "3.8", services: {} }:', (parseErr as Error).message);
+    baseObj = { version: '3.8', services: {} };
+  }
+
+  // Inject incoming services into base object
+  for (const [sName, sDef] of Object.entries(newServices)) {
+    if (sDef && typeof sDef === 'object' && !sDef.container_name) {
+      sDef.container_name = sName;
+    }
+    baseObj.services[sName] = sDef;
+  }
+
+  // Inject incoming volumes
+  if (newVolumes && Object.keys(newVolumes).length > 0) {
+    if (!baseObj.volumes || typeof baseObj.volumes !== 'object') {
+      baseObj.volumes = {};
+    }
+    for (const [vName, vDef] of Object.entries(newVolumes)) {
+      baseObj.volumes[vName] = vDef;
+    }
+  }
+
+  // Inject incoming networks
+  if (newNetworks && Object.keys(newNetworks).length > 0) {
+    if (!baseObj.networks || typeof baseObj.networks !== 'object') {
+      baseObj.networks = {};
+    }
+    for (const [nName, nDef] of Object.entries(newNetworks)) {
+      baseObj.networks[nName] = nDef;
+    }
+  }
+
+  // Attempt comment-preserving AST document merge first
+  try {
+    const doc = parseDocument(existingYaml && existingYaml.trim().length > 0 ? existingYaml : 'version: "3.8"\nservices: {}\n');
     let services = doc.get('services') as YAMLMap;
     if (!services) {
-      doc.set('services', new YAMLMap());
+      doc.set('services', doc.createNode({}));
       services = doc.get('services') as YAMLMap;
     }
 
     for (const [sName, sDef] of Object.entries(newServices)) {
-      services.set(sName, sDef);
+      services.set(sName, doc.createNode(sDef));
     }
 
     if (newVolumes && Object.keys(newVolumes).length > 0) {
       let volumes = doc.get('volumes') as YAMLMap;
       if (!volumes) {
-        doc.set('volumes', new YAMLMap());
+        doc.set('volumes', doc.createNode({}));
         volumes = doc.get('volumes') as YAMLMap;
       }
       for (const [vName, vDef] of Object.entries(newVolumes)) {
-        volumes.set(vName, vDef);
+        volumes.set(vName, doc.createNode(vDef));
       }
     }
 
-    return doc.toString();
+    if (newNetworks && Object.keys(newNetworks).length > 0) {
+      let networks = doc.get('networks') as YAMLMap;
+      if (!networks) {
+        doc.set('networks', doc.createNode({}));
+        networks = doc.get('networks') as YAMLMap;
+      }
+      for (const [nName, nDef] of Object.entries(newNetworks)) {
+        networks.set(nName, doc.createNode(nDef));
+      }
+    }
+
+    const astString = doc.toString();
+    // Validate AST string result before accepting
+    if (astString && astString.trim().length > 0) {
+      const parsedCheck = yaml.parse(astString);
+      if (parsedCheck && parsedCheck.services && Object.keys(parsedCheck.services).length > 0) {
+        return astString;
+      }
+    }
   } catch (err) {
-    console.warn('[AST Merge] Fallback to standard merge due to AST parse error:', err);
-    return '';
+    console.warn('[AST Merge] Document-level AST merge fallback triggered:', (err as Error).message);
   }
+
+  // Strict Stringification & Validation via strictlyDumpComposeAst
+  return strictlyDumpComposeAst(baseObj);
 }
 
 /**
@@ -400,7 +596,7 @@ export function generateStackMergePlan(
 # - Named volumes mapped using 'external: true' to preserve existing databases
 # =========================================================================
 
-${dump(fullComposeDoc, { indent: 2, lineWidth: -1 })}`;
+${jsyaml.dump(fullComposeDoc, { indent: 2, lineWidth: -1 })}`;
   }
 
   // Generate Step-by-Step Shell Migration Script
@@ -449,7 +645,7 @@ ${originalWorkingDirs.length > 0
       .map(
         (dir) => `if [ -d "${dir}" ]; then
   echo "Stopping standalone instances in ${dir}..."
-  (cd "${dir}" && docker compose down || docker-compose down || true)
+  (cd "${dir}" && docker compose -f "${dir}/docker-compose.yml" down || docker-compose -f "${dir}/docker-compose.yml" down || true)
 fi`
       )
       .join('\n')
@@ -457,10 +653,10 @@ fi`
 
 echo "=== [Step 4/6] Launching Unified Compose Stack ==="
 cd "${targetDirClean}"
-docker compose up -d || docker-compose up -d
+docker compose -f "${targetDirClean}/docker-compose.yml" up -d || docker-compose -f "${targetDirClean}/docker-compose.yml" up -d
 
 echo "=== [Step 5/6] Health & Port Verification ==="
-docker compose ps || docker-compose ps
+docker compose -f "${targetDirClean}/docker-compose.yml" ps || docker-compose -f "${targetDirClean}/docker-compose.yml" ps
 
 echo "=== [Step 6/6] Zero-Data-Loss Migration Complete ==="
 echo "All ${servicesList.length} services are now running unified in ${targetDirClean}!"
@@ -475,7 +671,7 @@ set -e
 
 echo "=== [Rollback 1/3] Stopping Merged Stack ==="
 if [ -d "${targetDirClean}" ]; then
-  (cd "${targetDirClean}" && docker compose down || docker-compose down || true)
+  (cd "${targetDirClean}" && docker compose -f "${targetDirClean}/docker-compose.yml" down || docker-compose -f "${targetDirClean}/docker-compose.yml" down || true)
 fi
 
 echo "=== [Rollback 2/3] Restoring Original Standalone Stacks ==="
@@ -483,7 +679,7 @@ ${originalWorkingDirs
   .map(
     (dir) => `if [ -d "${dir}" ]; then
   echo "Spinning original containers back up in ${dir}..."
-  (cd "${dir}" && docker compose up -d || docker-compose up -d || true)
+  (cd "${dir}" && docker compose -f "${dir}/docker-compose.yml" up -d || docker-compose -f "${dir}/docker-compose.yml" up -d || true)
 fi`
   )
   .join('\n')}
@@ -493,7 +689,7 @@ LATEST_BACKUP=$(ls -t "${targetDirClean}"/docker-compose.backup.*.yml 2>/dev/nul
 if [ -n "$LATEST_BACKUP" ] && [ -f "$LATEST_BACKUP" ]; then
   echo "Restoring previous compose file from $LATEST_BACKUP..."
   cp "$LATEST_BACKUP" "${targetDirClean}/docker-compose.yml"
-  (cd "${targetDirClean}" && docker compose up -d || docker-compose up -d || true)
+  (cd "${targetDirClean}" && docker compose -f "${targetDirClean}/docker-compose.yml" up -d || docker-compose -f "${targetDirClean}/docker-compose.yml" up -d || true)
 fi
 
 echo "Rollback successfully completed!"
@@ -508,10 +704,10 @@ set -e
 
 echo "Checking health of new stack in ${targetDirClean}..."
 cd "${targetDirClean}"
-docker compose ps
+docker compose -f "${targetDirClean}/docker-compose.yml" ps
 
 echo "Pruning dangling stopped containers and orphaned networks..."
-docker compose down -v --remove-orphans 2>/dev/null || true
+docker compose -f "${targetDirClean}/docker-compose.yml" down -v --remove-orphans 2>/dev/null || true
 docker container prune -f
 docker network prune -f
 

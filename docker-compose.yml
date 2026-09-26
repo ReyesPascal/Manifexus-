@@ -9,6 +9,9 @@ services:
       - NODE_ENV=production
       - PORT=3334
       - DOCKER_SOCKET_PATH=/var/run/docker.sock
+      - LOGS_DIR=/app/logs
+      - BACKUPS_DIR=/app/backups
+      - DATA_DIR=/data
     volumes:
       # Mount the Docker daemon socket (read-only for automatic container discovery, or rw for elevated automation)
       - /var/run/docker.sock:/var/run/docker.sock
@@ -16,6 +19,8 @@ services:
       - ./data:/data
       # Directive 9: Dedicated persistent volume for zero-loss pre-merge snapshots and state ledgers
       - ./backups:/app/backups
+      # Part 2 & 4: Persistent volume mount for centralized system audit logs and diagnostic bundles
+      - ./logs:/app/logs
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3334/api/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"]
       interval: 30s

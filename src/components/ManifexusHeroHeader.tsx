@@ -12,6 +12,8 @@ import {
   Zap,
   Info,
   ChevronRight,
+  FileText,
+  Search,
 } from 'lucide-react';
 import { DeepContainerMetadata, SystemStatus, AutomationPrivileges } from '../types';
 
@@ -101,6 +103,11 @@ export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
                   <HardDrive className="w-3.5 h-3.5 text-purple-400" />
                   Backups: <code className="text-purple-300 font-bold">/app/backups</code>
                 </span>
+
+                <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-slate-900/90 border border-cyan-500/50 text-cyan-300 shadow-[0_0_8px_rgba(6,182,212,0.2)]">
+                  <FileText className="w-3.5 h-3.5 text-cyan-400" />
+                  Logs: <code className="text-cyan-400 font-bold">/app/logs</code>
+                </span>
               </div>
             </div>
           </div>
@@ -138,10 +145,11 @@ export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
               {container && onInspectContainer && (
                 <button
                   onClick={() => onInspectContainer(container)}
-                  className="px-3.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs font-mono text-slate-300 hover:text-white transition-all flex items-center gap-1.5"
+                  className="px-3.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs font-mono text-slate-300 hover:text-white transition-all flex items-center gap-1.5 shadow-sm"
+                  title="Inspect container health, mounts, environment, and logs"
                 >
-                  <Terminal className="w-3.5 h-3.5 text-cyan-400" />
-                  Health & Logs
+                  <Search className="w-3.5 h-3.5 text-cyan-400" />
+                  Inspect
                 </button>
               )}
 

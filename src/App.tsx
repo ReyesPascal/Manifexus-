@@ -32,6 +32,7 @@ import { HostAutomationModal } from './components/HostAutomationModal';
 import { ManifexusHeroHeader } from './components/ManifexusHeroHeader';
 import { MergeHistoryModal } from './components/MergeHistoryModal';
 import { ExecutionPipelineConsole } from './components/ExecutionPipelineConsole';
+import { SystemLogsDashboard } from './components/SystemLogsDashboard';
 import { AutomationPrivileges } from './types';
 import { History } from 'lucide-react';
 
@@ -58,6 +59,7 @@ export default function App() {
   const [isSimulateOpen, setIsSimulateOpen] = useState(false);
   const [isMergeModalOpen, setIsMergeModalOpen] = useState(false);
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
+  const [isLogsDashboardOpen, setIsLogsDashboardOpen] = useState(false);
   const [revertRecordToStream, setRevertRecordToStream] = useState<any | null>(null);
   const [mergeModalInitialIds, setMergeModalInitialIds] = useState<string[]>([]);
   const [mergeModalInitialStack, setMergeModalInitialStack] = useState<string | undefined>(undefined);
@@ -380,6 +382,7 @@ export default function App() {
           setIsMergeModalOpen(true);
         }}
         onOpenHistory={() => setIsHistoryModalOpen(true)}
+        onOpenLogs={() => setIsLogsDashboardOpen(true)}
         onRefresh={() => {
           fetchData(true);
           fetchPrivileges();
@@ -793,6 +796,15 @@ export default function App() {
           setRevertRecordToStream(record);
         }}
       />
+
+      {/* Directive 4: Advanced System Logs & Global Diagnostics Dashboard Overlay */}
+      {isLogsDashboardOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 md:p-6 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
+          <div className="flex flex-col w-full max-w-7xl h-[92vh] bg-slate-950 border border-slate-700/80 rounded-2xl shadow-2xl overflow-hidden ring-1 ring-white/10">
+            <SystemLogsDashboard onClose={() => setIsLogsDashboardOpen(false)} />
+          </div>
+        </div>
+      )}
 
       {/* Directive 4 & 6: Revert Execution Pipeline Console */}
       {revertRecordToStream && (
