@@ -21,13 +21,10 @@ import {
   generateElevateScript,
   executeStreamingPipeline,
   executeStreamingRevert,
-  executeStreamingComposeInstall,
   resolveHostPathToContainer,
   repairTargetStack,
 } from './server/automationService';
-import { readHostFile, resolveDefaultHostHome } from './server/hostFsService';
-import { fetchRemoteCompose, synthesizeRemoteComposeAST } from './server/remoteComposeService';
-import { resolvePortCollisions } from './server/portCollisionService';
+import { readHostFile } from './server/hostFsService';
 import {
   getMergeHistory,
   finalizeMergeRecord,
@@ -35,19 +32,6 @@ import {
 } from './server/historyService';
 import fs from 'fs';
 import { DeepContainerMetadata } from './src/types';
-import {
-  getSystemLogs,
-  pruneSystemLogs,
-  logEvent,
-  sysLog,
-} from './server/systemLogService';
-import {
-  getDiagnosticBundle,
-  listRecentDiagnosticBundles,
-} from './server/diagnosticLogService';
-
-// --- NEW IMPORT FOR DIRECTIVE 4 ---
-import setupRoutes from './server/setupRoutes'; 
 
 async function startServer() {
   const app = express();
@@ -62,9 +46,6 @@ async function startServer() {
 
   app.use(express.json());
 
-  // --- REGISTER NEW SETUP ROUTES ---
-  app.use(setupRoutes);
-
   // API Routes FIRST
   app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', time: new Date().toISOString() });
@@ -77,22 +58,8 @@ async function startServer() {
       const available = isDockerSocketAvailable();
       const { containers, isDemo, dockerVersion, os } = await getContainersList();
 
-      // Module 4: Metric Calculation Audit
-      // FLEET RUNNING strictly counts 'running' state
       const runningCount = containers.filter((c) => c.state === 'running').length;
-      // EXITED / STOPPED strictly counts 'exited', 'stopped', or 'dead' states across all stacks
-      const stoppedCount = containers.filter((c) => {
-        const s = (c.state || '').toLowerCase();
-        const st = (c.status || '').toLowerCase();
-        return (
-          s === 'exited' ||
-          s === 'stopped' ||
-          s === 'dead' ||
-          st.startsWith('exited') ||
-          st.includes('dead') ||
-          st.includes('stopped')
-        );
-      }).length;
+      const stoppedCount = containers.length - runningCount;
       const stacks = new Set(containers.filter((c) => c.compose?.isCompose && c.compose.project).map((c) => c.compose.project)).size;
 
       res.json({
@@ -159,18 +126,8 @@ async function startServer() {
 
     try {
       const result = await executeContainerAction(id, action);
-      sysLog.info('docker', `Container action executed: "${action}" on container ${id}`, {
-        containerId: id,
-        action,
-        success: result.success,
-      });
       res.json(result);
     } catch (err) {
-      sysLog.error('docker', `Container action failed: "${action}" on container ${id}: ${(err as Error).message}`, {
-        containerId: id,
-        action,
-        error: (err as Error).message,
-      });
       res.status(500).json({ error: (err as Error).message });
     }
   });
@@ -481,159 +438,6 @@ async function startServer() {
     }
   });
 
-  // Directive 2: Fetch and inspect remote Compose URL
-  app.post('/api/compose/fetch-remote', async (req, res) => {
-    try {
-      const { url } = req.body;
-      if (!url || typeof url !== 'string' || url.trim().length === 0) {
-        return res
-          .status(400)
-          .json({ error: 'A remote URL (e.g. GitHub repository link or raw compose file URL) is required.' });
-      }
-
-      const metadata = await fetchRemoteCompose(url);
-
-      // Get current occupied host ports across fleet
-      const { containers } = await getContainersList();
-      const occupiedPorts: number[] = [];
-      for (const c of containers) {
-        for (const p of c.ports) {
-          if (p.publicPort && !occupiedPorts.includes(p.publicPort)) {
-            occupiedPorts.push(p.publicPort);
-          }
-        }
-      }
-
-      res.json({
-        ...metadata,
-        occupiedPorts,
-      });
-    } catch (err) {
-      res.status(400).json({ error: (err as Error).message });
-    }
-  });
-
-  // Directive 3: AST Port Collision Analysis, Relative Volume Namespacing & Non-Destructive Deep Merge
-  app.post('/api/compose/resolve-ports', async (req, res) => {
-    try {
-      const {
-        yaml: yamlContent,
-        sourceUrl,
-        targetDirectory,
-        targetStackName,
-        installMode,
-      } = req.body;
-      if (!yamlContent) {
-        return res.status(400).json({ error: 'YAML content is required' });
-      }
-
-      const { containers } = await getContainersList();
-      const occupiedPorts = new Set<number>();
-      for (const c of containers) {
-        for (const p of c.ports) {
-          if (p.publicPort) occupiedPorts.add(p.publicPort);
-        }
-      }
-
-      const result = await synthesizeRemoteComposeAST({
-        rawYaml: yamlContent,
-        sourceUrl,
-        targetDirectory: targetDirectory || '',
-        targetStackName: targetStackName || 'app',
-        installMode: installMode || 'new-stack',
-        occupiedPorts,
-      });
-
-      res.json(result);
-    } catch (err) {
-      res.status(500).json({ error: (err as Error).message });
-    }
-  });
-
-  // Directives 4 & 5: Live Streaming Remote Compose Installation (SSE)
-  app.post('/api/compose/install-stream', async (req, res) => {
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    // @ts-ignore
-    if (res.flushHeaders) res.flushHeaders();
-
-    const sendEvent = (data: any) => {
-      res.write(`data: ${JSON.stringify(data)}\n\n`);
-    };
-
-    try {
-      const { installId, sourceUrl, targetStackName, targetDirectory, installMode, composeYaml } = req.body;
-      if (!composeYaml || !targetDirectory || !targetStackName) {
-        sendEvent({
-          type: 'error',
-          error: 'Missing required install parameters (composeYaml, targetDirectory, targetStackName).',
-        });
-        res.end();
-        return;
-      }
-
-      await executeStreamingComposeInstall(
-        {
-          installId,
-          sourceUrl: sourceUrl || 'remote-compose',
-          targetStackName,
-          targetDirectory,
-          installMode: installMode || 'new-stack',
-          composeYaml,
-        },
-        sendEvent
-      );
-    } catch (err) {
-      sendEvent({ type: 'error', error: (err as Error).message });
-    } finally {
-      res.end();
-    }
-  });
-
-  // Diagnostic Background Logging Endpoints (Part 2)
-  app.get('/api/compose/diagnostics/:installId', async (req, res) => {
-    try {
-      const bundle = getDiagnosticBundle(req.params.installId);
-      if (!bundle) {
-        res.status(404).json({ error: `Diagnostic bundle not found for install ID "${req.params.installId}"` });
-        return;
-      }
-      res.json(bundle);
-    } catch (err) {
-      res.status(500).json({ error: (err as Error).message });
-    }
-  });
-
-  app.get('/api/compose/diagnostics', async (_req, res) => {
-    try {
-      const bundles = listRecentDiagnosticBundles();
-      res.json({ bundles });
-    } catch (err) {
-      res.status(500).json({ error: (err as Error).message });
-    }
-  });
-
-  // Host environment detection (default home directory, existing stack directories)
-  app.get('/api/compose/host-environment', async (req, res) => {
-    try {
-      const { containers } = await getContainersList();
-      const existingWorkingDirs: string[] = [];
-      for (const c of containers) {
-        if (c.compose?.workingDir && !existingWorkingDirs.includes(c.compose.workingDir)) {
-          existingWorkingDirs.push(c.compose.workingDir);
-        }
-      }
-      const defaultHomeDir = resolveDefaultHostHome(existingWorkingDirs);
-      res.json({
-        defaultHomeDir,
-        existingWorkingDirs,
-      });
-    } catch (err) {
-      res.status(500).json({ error: (err as Error).message });
-    }
-  });
-
   // Get host automation privileges (detects if sandboxed or elevated)
   app.get('/api/system/privileges', async (req, res) => {
     try {
@@ -706,51 +510,6 @@ async function startServer() {
         targetStackName: stackName,
         targetDirectory: targetDir,
       });
-    } catch (err) {
-      res.status(500).json({ error: (err as Error).message });
-    }
-  });
-
-  // =========================================================================
-  // Module 3: Centralized System Logs API (Query, Filter, Prune, Audit)
-  // =========================================================================
-  app.get('/api/system/logs', (req, res) => {
-    try {
-      const { level, category, search, range, limit } = req.query;
-      const result = getSystemLogs({
-        level: level ? String(level) : undefined,
-        category: category ? String(category) : undefined,
-        search: search ? String(search) : undefined,
-        range: range ? String(range) : undefined,
-        limit: limit ? parseInt(String(limit), 10) : 500,
-      });
-      res.json(result);
-    } catch (err) {
-      res.status(500).json({ error: (err as Error).message });
-    }
-  });
-
-  app.post('/api/system/logs/prune', (req, res) => {
-    try {
-      const { range } = req.body;
-      if (!range || !['24h', '7d', '30d', 'all'].includes(range)) {
-        return res.status(400).json({ error: 'Valid range required: 24h, 7d, 30d, all' });
-      }
-      const result = pruneSystemLogs(range);
-      res.json(result);
-    } catch (err) {
-      res.status(500).json({ error: (err as Error).message });
-    }
-  });
-
-  app.post('/api/system/logs', (req, res) => {
-    try {
-      const { level, category, message, details } = req.body;
-      if (!level || !category || !message) {
-        return res.status(400).json({ error: 'level, category, and message are required' });
-      }
-      const entry = logEvent(level, category, message, details);
-      res.json({ success: true, entry });
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
     }

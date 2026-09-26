@@ -1,88 +1,7 @@
 import { dump } from 'js-yaml';
-import yaml, { parseDocument, YAMLMap } from 'yaml';
+import { parseDocument, YAMLMap } from 'yaml';
 import path from 'path';
 import { DeepContainerMetadata } from '../src/types';
-
-export interface ComposeAstObject {
-  version?: string;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  services: Record<string, any>;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  volumes?: Record<string, any>;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  networks?: Record<string, any>;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  [key: string]: any;
-}
-
-/**
- * Directive 2: AST Object Validation
- * Validates the mutated compose AST structure before stringification.
- * Throws a descriptive critical error if invalid.
- */
-export function validateComposeAstObject(ast: unknown): ComposeAstObject {
-  if (!ast || typeof ast !== 'object') {
-    throw new Error('AST Validation Error: Compose AST is not a valid object (received null, undefined, or primitive).');
-  }
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const obj = ast as Record<string, any>;
-  if (!obj.services || typeof obj.services !== 'object') {
-    throw new Error('AST Validation Error: Compose AST is missing required "services" dictionary object.');
-  }
-
-  const serviceKeys = Object.keys(obj.services);
-  if (serviceKeys.length === 0) {
-    throw new Error('AST Validation Error: "services" dictionary contains zero services. Refusing to synthesize empty stack.');
-  }
-
-  for (const sName of serviceKeys) {
-    const sDef = obj.services[sName];
-    if (!sDef || typeof sDef !== 'object') {
-      throw new Error(`AST Validation Error: Service "${sName}" definition is invalid or not an object.`);
-    }
-    // Must have at least image or build
-    if (!sDef.image && !sDef.build) {
-      throw new Error(`AST Validation Error: Service "${sName}" must specify an "image" or "build" directive.`);
-    }
-  }
-
-  return obj as ComposeAstObject;
-}
-
-/**
- * Directive 3: Strict Stringification using js-yaml (yaml.dump).
- * Validates AST first, dumps to YAML, and guarantees output is never null, empty, blank, or 0-bytes.
- * Throws a critical error and stops execution if stringification produces empty string.
- */
-export function strictlyDumpComposeAst(ast: unknown): string {
-  const validated = validateComposeAstObject(ast);
-
-  if (!validated.version) {
-    validated.version = '3.8';
-  }
-
-  const dumped = dump(validated, {
-    indent: 2,
-    lineWidth: -1,
-    noRefs: true,
-  });
-
-  if (!dumped || dumped.trim().length === 0) {
-    throw new Error(
-      'Critical Stringification Failure: yaml.dump produced an empty or blank output string. Execution stopped to prevent 0-byte file write.'
-    );
-  }
-
-  const byteLength = Buffer.byteLength(dumped, 'utf-8');
-  if (byteLength === 0) {
-    throw new Error(
-      'Critical Stringification Failure: Output string byte length is 0. Execution stopped to prevent 0-byte file write.'
-    );
-  }
-
-  return dumped;
-}
 
 export interface VolumeSafetyAuditItem {
   service: string;
@@ -151,160 +70,45 @@ export function isManifexusContainer(c: {
 }
 
 /**
- * Module 5: Deterministic AST Injection
- * Inspects all services in a Compose YAML document. If container_name is missing,
- * explicitly injects container_name: <service_key> directly beneath image/build properties.
- */
-export function enforceDeterministicContainerNames(composeYaml: string): string {
-  try {
-    const doc = parseDocument(composeYaml);
-    const services = doc.get('services') as YAMLMap;
-    if (services && typeof services.toJSON === 'function') {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const entries = (services as any).items || [];
-      for (const item of entries) {
-        const sKey = String(item.key?.value || item.key);
-        const sVal = item.value;
-        if (sVal && typeof sVal.get === 'function') {
-          if (!sVal.get('container_name')) {
-            // Find index of image or build to insert right after
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const subItems = (sVal as any).items || [];
-            let insertIdx = -1;
-            for (let i = 0; i < subItems.length; i++) {
-              const k = String(subItems[i].key?.value || subItems[i].key);
-              if (k === 'image' || k === 'build') {
-                insertIdx = i + 1;
-              }
-            }
-            if (insertIdx !== -1 && insertIdx <= subItems.length) {
-              const pair = doc.createPair('container_name', sKey);
-              subItems.splice(insertIdx, 0, pair);
-            } else {
-              sVal.set('container_name', sKey);
-            }
-          }
-        }
-      }
-      return doc.toString();
-    }
-  } catch (err) {
-    console.warn('[AST] Could not enforce deterministic container_name via AST:', err);
-  }
-  return composeYaml;
-}
-
-/**
- * Directive 1 & 2: Non-Destructive Compose AST Deep-Merge Engine
+ * Directive 5: AST-Based Intelligent Stack Merging
  * Merges new services, volumes, and networks into an existing compose file while preserving
  * comments, directives, styling, and existing formatting.
- * Implements Safe Fallback to base AST { version: '3.8', services: {} }, AST validation,
- * and strict stringification to guarantee no 0-byte output.
  */
 export function mergeComposeWithAst(
   existingYaml: string,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   newServices: Record<string, any>,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  newVolumes?: Record<string, any>,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  newNetworks?: Record<string, any>
+  newVolumes?: Record<string, any>
 ): string {
-  // Safe Fallback Base AST representation
-  let baseObj: ComposeAstObject = { version: '3.8', services: {} };
-
   try {
-    if (existingYaml && existingYaml.trim().length > 0) {
-      const parsed = yaml.parse(existingYaml);
-      if (parsed && typeof parsed === 'object') {
-        baseObj = parsed as ComposeAstObject;
-        if (!baseObj.services || typeof baseObj.services !== 'object') {
-          baseObj.services = {};
-        }
-      }
-    }
-  } catch (parseErr) {
-    console.warn('[AST Merge] Failed to parse existing yaml, falling back to base AST { version: "3.8", services: {} }:', parseErr);
-    baseObj = { version: '3.8', services: {} };
-  }
-
-  // Inject incoming services into base object
-  for (const [sName, sDef] of Object.entries(newServices)) {
-    if (sDef && typeof sDef === 'object' && !sDef.container_name) {
-      sDef.container_name = sName;
-    }
-    baseObj.services[sName] = sDef;
-  }
-
-  // Inject incoming volumes
-  if (newVolumes && Object.keys(newVolumes).length > 0) {
-    if (!baseObj.volumes || typeof baseObj.volumes !== 'object') {
-      baseObj.volumes = {};
-    }
-    for (const [vName, vDef] of Object.entries(newVolumes)) {
-      baseObj.volumes[vName] = vDef;
-    }
-  }
-
-  // Inject incoming networks
-  if (newNetworks && Object.keys(newNetworks).length > 0) {
-    if (!baseObj.networks || typeof baseObj.networks !== 'object') {
-      baseObj.networks = {};
-    }
-    for (const [nName, nDef] of Object.entries(newNetworks)) {
-      baseObj.networks[nName] = nDef;
-    }
-  }
-
-  // Attempt comment-preserving AST document merge first
-  try {
-    const doc = parseDocument(existingYaml && existingYaml.trim().length > 0 ? existingYaml : 'version: "3.8"\nservices: {}\n');
+    const doc = parseDocument(existingYaml);
     let services = doc.get('services') as YAMLMap;
     if (!services) {
-      doc.set('services', doc.createNode({}));
+      doc.set('services', new YAMLMap());
       services = doc.get('services') as YAMLMap;
     }
 
     for (const [sName, sDef] of Object.entries(newServices)) {
-      services.set(sName, doc.createNode(sDef));
+      services.set(sName, sDef);
     }
 
     if (newVolumes && Object.keys(newVolumes).length > 0) {
       let volumes = doc.get('volumes') as YAMLMap;
       if (!volumes) {
-        doc.set('volumes', doc.createNode({}));
+        doc.set('volumes', new YAMLMap());
         volumes = doc.get('volumes') as YAMLMap;
       }
       for (const [vName, vDef] of Object.entries(newVolumes)) {
-        volumes.set(vName, doc.createNode(vDef));
+        volumes.set(vName, vDef);
       }
     }
 
-    if (newNetworks && Object.keys(newNetworks).length > 0) {
-      let networks = doc.get('networks') as YAMLMap;
-      if (!networks) {
-        doc.set('networks', doc.createNode({}));
-        networks = doc.get('networks') as YAMLMap;
-      }
-      for (const [nName, nDef] of Object.entries(newNetworks)) {
-        networks.set(nName, doc.createNode(nDef));
-      }
-    }
-
-    const astString = doc.toString();
-    // Validate AST string result before accepting
-    if (astString && astString.trim().length > 0) {
-      const parsedCheck = yaml.parse(astString);
-      if (parsedCheck && parsedCheck.services && Object.keys(parsedCheck.services).length > 0) {
-        return astString;
-      }
-    }
+    return doc.toString();
   } catch (err) {
-    console.warn('[AST Merge] Document-level AST merge fallback triggered:', err);
+    console.warn('[AST Merge] Fallback to standard merge due to AST parse error:', err);
+    return '';
   }
-
-  // Strict Stringification & Validation via strictlyDumpComposeAst
-  return strictlyDumpComposeAst(baseObj);
 }
 
 /**

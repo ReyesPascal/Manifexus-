@@ -14,12 +14,7 @@ export function isDockerSocketAvailable(): boolean {
 }
 
 // Low-level HTTP request over Unix Domain Socket
-export function queryDockerEngine<T>(
-  path: string,
-  method: string = 'GET',
-  body?: unknown,
-  customTimeoutMs?: number
-): Promise<T> {
+export function queryDockerEngine<T>(path: string, method: string = 'GET', body?: unknown): Promise<T> {
   return new Promise((resolve, reject) => {
     const payload = body !== undefined ? (typeof body === 'string' ? body : JSON.stringify(body)) : null;
 
@@ -33,19 +28,12 @@ export function queryDockerEngine<T>(
       headers['Content-Length'] = Buffer.byteLength(payload);
     }
 
-    // Directive 3: Explicitly increase timeout limit for stop/down/wait commands to minimum of 120 seconds
-    let defaultTimeout = 120000;
-    if (path.includes('/wait') || path.includes('/stop') || path.includes('/images/create')) {
-      defaultTimeout = 180000; // 3 minutes for container teardown / waiting / image pulling
-    }
-    const effectiveTimeout = customTimeoutMs || defaultTimeout;
-
     const options: http.RequestOptions = {
       socketPath: DOCKER_SOCKET_PATH,
       path: path,
       method: method,
       headers: headers,
-      timeout: effectiveTimeout,
+      timeout: 10000,
     };
 
     const req = http.request(options, (res) => {
@@ -1217,158 +1205,3 @@ export function mergeDemoContainersIntoStack(
   return true;
 }
 
-/**
- * Strips Docker multiplexed log frame headers from string
- */
-function cleanDockerLogsInternal(raw: string | unknown): string {
-  if (typeof raw !== 'string') return '';
-  if (raw.length > 8 && raw.charCodeAt(0) <= 2 && raw.charCodeAt(1) === 0 && raw.charCodeAt(2) === 0) {
-    let cleaned = '';
-    let pos = 0;
-    while (pos < raw.length) {
-      if (pos + 8 > raw.length) break;
-      const size = (raw.charCodeAt(pos + 4) << 24) |
-                   (raw.charCodeAt(pos + 5) << 16) |
-                   (raw.charCodeAt(pos + 6) << 8) |
-                   raw.charCodeAt(pos + 7);
-      pos += 8;
-      cleaned += raw.substring(pos, pos + size);
-      pos += size;
-    }
-    return cleaned || raw.substring(8);
-  }
-  return raw;
-}
-
-/**
- * Module 1: Fail-Safe Diagnostics
- * Retrieves the last N lines of stdout and stderr for a container, exposing the exact crash reason.
- */
-export async function getContainerLogsTail(containerNameOrId: string, tail: number = 100): Promise<string> {
-  const cleanName = containerNameOrId.replace(/^\//, '');
-  if (isDockerSocketAvailable()) {
-    try {
-      const raw = await queryDockerEngine<string>(
-        `/containers/${encodeURIComponent(cleanName)}/logs?stdout=1&stderr=1&tail=${tail}`,
-        'GET'
-      );
-      const cleaned = cleanDockerLogsInternal(raw);
-      if (cleaned && cleaned.trim()) {
-        return cleaned.trim();
-      }
-    } catch {
-      // fallback to helper container
-    }
-
-    try {
-      const helperImage = await getBestAvailableImage();
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const runner = await queryDockerEngine<any>('/containers/create', 'POST', {
-        Image: helperImage,
-        Entrypoint: [],
-        Cmd: ['docker', 'logs', cleanName, '--tail', String(tail)],
-        HostConfig: {
-          Binds: [`${DOCKER_SOCKET_PATH}:/var/run/docker.sock`],
-        },
-      });
-
-      if (runner && runner.Id) {
-        await queryDockerEngine(`/containers/${runner.Id}/start`, 'POST');
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        await queryDockerEngine<any>(`/containers/${runner.Id}/wait`, 'POST', undefined, 10000);
-        const logs = await queryDockerEngine<string>(`/containers/${runner.Id}/logs?stdout=1&stderr=1`, 'GET');
-        await queryDockerEngine(`/containers/${runner.Id}?force=true`, 'DELETE');
-        const cleaned = cleanDockerLogsInternal(logs);
-        if (cleaned && cleaned.trim()) {
-          return cleaned.trim();
-        }
-      }
-    } catch {
-      // ignore
-    }
-  }
-
-  return `[Container "${cleanName}" exited before runtime logs could be flushed. Verify volume permissions and port bindings.]`;
-}
-
-/**
- * Module 5: Label-Based Health Checks
- * Looks up a container strictly via Docker Compose labels (com.docker.compose.project and com.docker.compose.service)
- */
-export async function getContainerByComposeService(
-  projectName: string,
-  serviceName: string
-): Promise<{ id: string; name: string; state: string; status: string } | null> {
-  if (isDockerSocketAvailable()) {
-    try {
-      // 1. Direct label filter query on Docker Engine
-      const filters = JSON.stringify({
-        label: [
-          `com.docker.compose.project=${projectName}`,
-          `com.docker.compose.service=${serviceName}`,
-        ],
-      });
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const results = await queryDockerEngine<any[]>(
-        `/containers/json?all=1&filters=${encodeURIComponent(filters)}`
-      );
-
-      if (Array.isArray(results) && results.length > 0) {
-        const c = results[0];
-        const id = c.Id ? c.Id.substring(0, 12) : '';
-        const rawName = (c.Names && c.Names[0]) ? c.Names[0].replace(/^\//, '') : serviceName;
-        return {
-          id: id || c.Id,
-          name: rawName,
-          state: (c.State || '').toLowerCase(),
-          status: c.Status || '',
-        };
-      }
-    } catch {
-      // fallback to inspecting fleet
-    }
-  }
-
-  // Fallback: search getContainersList() by compose metadata
-  try {
-    const { containers } = await getContainersList();
-    const match = containers.find(
-      (c) =>
-        c.compose?.project?.toLowerCase() === projectName.toLowerCase() &&
-        c.compose?.service?.toLowerCase() === serviceName.toLowerCase()
-    ) || containers.find(
-      (c) => c.cleanName === serviceName || c.name === `/${serviceName}`
-    );
-
-    if (match) {
-      return {
-        id: match.id,
-        name: match.cleanName,
-        state: match.state?.toLowerCase() || '',
-        status: match.status || '',
-      };
-    }
-  } catch {
-    // ignore
-  }
-
-  return null;
-}
-
-/**
- * Module 1: Rollback Resource Pruning
- * Completely prunes orphaned networks and untagged dangling images created during failed runs.
- */
-export async function pruneOrphanedDockerResources(networkName?: string): Promise<void> {
-  if (isDockerSocketAvailable()) {
-    try {
-      await queryDockerEngine('/networks/prune', 'POST').catch(() => null);
-      await queryDockerEngine('/images/prune?filters={"dangling":["true"]}', 'POST').catch(() => null);
-      if (networkName) {
-        await queryDockerEngine(`/networks/${encodeURIComponent(networkName)}`, 'DELETE').catch(() => null);
-      }
-    } catch {
-      // ignore
-    }
-  }
-}

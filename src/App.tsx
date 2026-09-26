@@ -21,22 +21,17 @@ import {
 } from './types';
 import { Navbar } from './components/Navbar';
 import { StatsBar } from './components/StatsBar';
-
-// 1. IMPORT THE NEW CONTAINER CARD (Replaces AppCard)
-import ContainerCard from './components/ContainerCard';
-
+import { AppCard } from './components/AppCard';
 import { InspectModal } from './components/InspectModal';
 import { HelpDrawer } from './components/HelpDrawer';
 import { GroupManagerModal } from './components/GroupManagerModal';
 import { SettingsModal } from './components/SettingsModal';
 import { SimulateContainerModal } from './components/SimulateContainerModal';
 import { StackMergeModal } from './components/StackMergeModal';
-import { ComposeInstallModal } from './components/ComposeInstallModal';
 import { HostAutomationModal } from './components/HostAutomationModal';
 import { ManifexusHeroHeader } from './components/ManifexusHeroHeader';
 import { MergeHistoryModal } from './components/MergeHistoryModal';
 import { ExecutionPipelineConsole } from './components/ExecutionPipelineConsole';
-import { SystemLogsModal } from './components/SystemLogsModal';
 import { AutomationPrivileges } from './types';
 import { History } from 'lucide-react';
 
@@ -45,7 +40,6 @@ export default function App() {
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
   const [privileges, setPrivileges] = useState<AutomationPrivileges | null>(null);
   const [isAutomationModalOpen, setIsAutomationModalOpen] = useState(false);
-  const [isComposeInstallOpen, setIsComposeInstallOpen] = useState(false);
   const [config, setConfig] = useState<ManifexusConfig | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -64,7 +58,6 @@ export default function App() {
   const [isSimulateOpen, setIsSimulateOpen] = useState(false);
   const [isMergeModalOpen, setIsMergeModalOpen] = useState(false);
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
-  const [isSystemLogsOpen, setIsSystemLogsOpen] = useState(false);
   const [revertRecordToStream, setRevertRecordToStream] = useState<any | null>(null);
   const [mergeModalInitialIds, setMergeModalInitialIds] = useState<string[]>([]);
   const [mergeModalInitialStack, setMergeModalInitialStack] = useState<string | undefined>(undefined);
@@ -123,16 +116,7 @@ export default function App() {
       fetchData(false);
     }, intervalSeconds * 1000);
 
-    const handleRefreshFleet = () => {
-      fetchData(true);
-      fetchPrivileges();
-    };
-    window.addEventListener('manifexus:refresh_fleet', handleRefreshFleet);
-
-    return () => {
-      clearInterval(timer);
-      window.removeEventListener('manifexus:refresh_fleet', handleRefreshFleet);
-    };
+    return () => clearInterval(timer);
   }, [fetchData, fetchPrivileges, config?.refreshIntervalSeconds]);
 
   // Execute container lifecycle action
@@ -151,16 +135,6 @@ export default function App() {
       }
     } catch (err) {
       console.error(`Failed to ${action} container:`, err);
-    }
-  };
-
-  // 2. NEW DELETE HANDLER FOR CONTAINER CARD
-  const handleDelete = async (id: string) => {
-    if (confirm('Are you sure you want to delete this container?')) {
-      console.log('Delete requested for container ID:', id);
-      // If you implement a DELETE route later, call it here:
-      // await fetch(`/api/containers/${id}`, { method: 'DELETE' });
-      // await fetchData(true);
     }
   };
 
@@ -325,7 +299,7 @@ export default function App() {
 
       return !c.isHidden;
     });
-  }, [containers, statusFilter, searchQuery, config?.groups, isManifexus]);
+  }, [containers, statusFilter, searchQuery, config?.groups]);
 
   // Unique ports count
   const discoveredPortsCount = useMemo(() => {
@@ -400,14 +374,12 @@ export default function App() {
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenGroupManager={() => setIsGroupManagerOpen(true)}
         onOpenSimulateModal={() => setIsSimulateOpen(true)}
-        onOpenComposeInstall={() => setIsComposeInstallOpen(true)}
         onOpenStackMerger={() => {
           setMergeModalInitialIds([]);
           setMergeModalInitialStack(undefined);
           setIsMergeModalOpen(true);
         }}
         onOpenHistory={() => setIsHistoryModalOpen(true)}
-        onOpenSystemLogs={() => setIsSystemLogsOpen(true)}
         onRefresh={() => {
           fetchData(true);
           fetchPrivileges();
@@ -537,16 +509,24 @@ export default function App() {
                     )}
                   </div>
 
-                  {/* 3. NEW CONTAINER CARD MAP (Groups) */}
+                  {/* Grid of App Cards */}
                   {items.length > 0 ? (
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                       {items.map((container) => (
-                        <ContainerCard
+                        <AppCard
                           key={container.id}
                           container={container}
-                          onStart={(id) => handleContainerAction(id, 'start')}
-                          onStop={(id) => handleContainerAction(id, 'stop')}
-                          onDelete={handleDelete}
+                          hostAddress={hostAddress}
+                          groups={config?.groups || []}
+                          onInspect={setInspectContainer}
+                          onAssignGroup={handleAssignGroup}
+                          onAction={handleContainerAction}
+                          onSetPrimaryPort={handleSetPrimaryPort}
+                          onMergeToStack={(c) => {
+                            setMergeModalInitialIds([c.id]);
+                            setMergeModalInitialStack(c.compose?.project);
+                            setIsMergeModalOpen(true);
+                          }}
                         />
                       ))}
                     </div>
@@ -577,15 +557,22 @@ export default function App() {
                   </span>
                 </div>
 
-                {/* 3. NEW CONTAINER CARD MAP (Uncategorized) */}
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                   {groupedByUserCategories.uncategorized.map((container) => (
-                    <ContainerCard
+                    <AppCard
                       key={container.id}
                       container={container}
-                      onStart={(id) => handleContainerAction(id, 'start')}
-                      onStop={(id) => handleContainerAction(id, 'stop')}
-                      onDelete={handleDelete}
+                      hostAddress={hostAddress}
+                      groups={config?.groups || []}
+                      onInspect={setInspectContainer}
+                      onAssignGroup={handleAssignGroup}
+                      onAction={handleContainerAction}
+                      onSetPrimaryPort={handleSetPrimaryPort}
+                      onMergeToStack={(c) => {
+                        setMergeModalInitialIds([c.id]);
+                        setMergeModalInitialStack(c.compose?.project);
+                        setIsMergeModalOpen(true);
+                      }}
                     />
                   ))}
                 </div>
@@ -648,15 +635,23 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* 3. NEW CONTAINER CARD MAP (Compose Stacks) */}
+                {/* Stack Service Grid */}
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                   {stackData.containers.map((container) => (
-                    <ContainerCard
+                    <AppCard
                       key={container.id}
                       container={container}
-                      onStart={(id) => handleContainerAction(id, 'start')}
-                      onStop={(id) => handleContainerAction(id, 'stop')}
-                      onDelete={handleDelete}
+                      hostAddress={hostAddress}
+                      groups={config?.groups || []}
+                      onInspect={setInspectContainer}
+                      onAssignGroup={handleAssignGroup}
+                      onAction={handleContainerAction}
+                      onSetPrimaryPort={handleSetPrimaryPort}
+                      onMergeToStack={(c) => {
+                        setMergeModalInitialIds([c.id]);
+                        setMergeModalInitialStack(projectName);
+                        setIsMergeModalOpen(true);
+                      }}
                     />
                   ))}
                 </div>
@@ -686,15 +681,22 @@ export default function App() {
                   </span>
                 </div>
 
-                {/* 3. NEW CONTAINER CARD MAP (Standalone) */}
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                   {groupedByComposeStacks.standalone.map((container) => (
-                    <ContainerCard
+                    <AppCard
                       key={container.id}
                       container={container}
-                      onStart={(id) => handleContainerAction(id, 'start')}
-                      onStop={(id) => handleContainerAction(id, 'stop')}
-                      onDelete={handleDelete}
+                      hostAddress={hostAddress}
+                      groups={config?.groups || []}
+                      onInspect={setInspectContainer}
+                      onAssignGroup={handleAssignGroup}
+                      onAction={handleContainerAction}
+                      onSetPrimaryPort={handleSetPrimaryPort}
+                      onMergeToStack={(c) => {
+                        setMergeModalInitialIds([c.id]);
+                        setMergeModalInitialStack(undefined);
+                        setIsMergeModalOpen(true);
+                      }}
                     />
                   ))}
                 </div>
@@ -774,18 +776,6 @@ export default function App() {
         }}
       />
 
-      {/* Remote Compose Installation Studio Modal */}
-      <ComposeInstallModal
-        isOpen={isComposeInstallOpen}
-        onClose={() => setIsComposeInstallOpen(false)}
-        containers={containers}
-        privileges={privileges}
-        onInstallSuccess={() => {
-          fetchData(true);
-          fetchPrivileges();
-        }}
-      />
-
       {/* Host Automation & Privileges Elevation Modal */}
       <HostAutomationModal
         isOpen={isAutomationModalOpen}
@@ -820,12 +810,6 @@ export default function App() {
           }}
         />
       )}
-
-      {/* Module 3: Centralized System Logs Modal */}
-      <SystemLogsModal
-        isOpen={isSystemLogsOpen}
-        onClose={() => setIsSystemLogsOpen(false)}
-      />
     </div>
   );
 }

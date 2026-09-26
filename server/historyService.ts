@@ -13,8 +13,6 @@ export interface MergeHistoryRecord {
   affectedServices: string[];
   preMergeComposeContent?: string;
   targetComposeBackupPath?: string;
-  preMergeEnvContent?: string;
-  targetEnvBackupPath?: string;
   sourceConfigs: {
     project: string;
     workingDir: string;
@@ -25,10 +23,6 @@ export interface MergeHistoryRecord {
   archiveSizeBytes: number;
   summary: string;
   logs?: string[];
-  type?: 'MERGE' | 'COMPOSE_INSTALL';
-  installMode?: 'existing-stack' | 'new-stack';
-  sourceUrl?: string;
-  remappedPorts?: { service: string; originalHostPort: number; allocatedHostPort: number }[];
 }
 
 // Backup paths: Prefer /app/backups as required by Directive 6, fallback to ./data/backups or ./backups
@@ -129,21 +123,6 @@ export async function createPreMergeSnapshot(params: {
     fs.writeFileSync(targetComposeBackupPath, preMergeTargetCompose, 'utf8');
   }
 
-  // Backup target .env file if it exists
-  let targetEnvBackupPath: string | undefined;
-  let preMergeEnvContent: string | undefined;
-  try {
-    const targetEnvCandidate = path.join(targetDirectory, '.env');
-    const readEnv = await readHostFile(targetEnvCandidate);
-    if (readEnv && readEnv.trim().length > 0) {
-      preMergeEnvContent = readEnv;
-      targetEnvBackupPath = path.join(backupArchiveDir, 'target-.env.pre-merge');
-      fs.writeFileSync(targetEnvBackupPath, readEnv, 'utf8');
-    }
-  } catch {
-    // ignore
-  }
-
   // Group source containers by stack/working directory
   const sourceStacksSet = new Set<string>();
   const sourceConfigsMap: Record<string, MergeHistoryRecord['sourceConfigs'][0]> = {};
@@ -208,8 +187,6 @@ export async function createPreMergeSnapshot(params: {
     affectedServices: selectedContainers.map((c) => c.cleanName),
     preMergeComposeContent: preMergeTargetCompose,
     targetComposeBackupPath,
-    preMergeEnvContent,
-    targetEnvBackupPath,
     sourceConfigs: Object.values(sourceConfigsMap),
     status: 'pending_decision',
     archiveSizeBytes,
@@ -251,95 +228,3 @@ export function markMergeAsReverted(id: string, logs: string[]): boolean {
   saveMergeHistoryRecord(record);
   return true;
 }
-
-/**
- * Directives 4 & 5: Create state ledger entry & zero-data-loss backup snapshot for COMPOSE_INSTALL
- */
-export async function createComposeInstallSnapshot(params: {
-  installId: string;
-  targetStackName: string;
-  targetDirectory: string;
-  installMode: 'existing-stack' | 'new-stack';
-  sourceUrl: string;
-  affectedServices: string[];
-  preMergeComposeContent?: string;
-  remappedPorts?: { service: string; originalHostPort: number; allocatedHostPort: number }[];
-}): Promise<{ backupArchiveDir: string; record: MergeHistoryRecord }> {
-  const {
-    installId,
-    targetStackName,
-    targetDirectory,
-    installMode,
-    sourceUrl,
-    affectedServices,
-    preMergeComposeContent,
-    remappedPorts,
-  } = params;
-
-  const backupRoot = resolveBackupDir();
-  const archiveDirName = `snapshot_${installId}`;
-  const backupArchiveDir = path.join(backupRoot, archiveDirName);
-
-  if (!fs.existsSync(backupArchiveDir)) {
-    fs.mkdirSync(backupArchiveDir, { recursive: true });
-  }
-
-  let targetComposeBackupPath: string | undefined;
-  if (preMergeComposeContent) {
-    targetComposeBackupPath = path.join(backupArchiveDir, 'target-docker-compose.pre-merge.yml');
-    fs.writeFileSync(targetComposeBackupPath, preMergeComposeContent, 'utf8');
-  }
-
-  // Backup target .env file if it exists for existing stack
-  let targetEnvBackupPath: string | undefined;
-  let preMergeEnvContent: string | undefined;
-  try {
-    const targetEnvCandidate = path.join(targetDirectory, '.env');
-    const readEnv = await readHostFile(targetEnvCandidate);
-    if (readEnv && readEnv.trim().length > 0) {
-      preMergeEnvContent = readEnv;
-      targetEnvBackupPath = path.join(backupArchiveDir, 'target-.env.pre-merge');
-      fs.writeFileSync(targetEnvBackupPath, readEnv, 'utf8');
-    }
-  } catch {
-    // ignore
-  }
-
-  let archiveSizeBytes = 1024;
-  try {
-    const files = fs.readdirSync(backupArchiveDir);
-    archiveSizeBytes = files.reduce((acc, f) => acc + fs.statSync(path.join(backupArchiveDir, f)).size, 0);
-  } catch {
-    // ignore
-  }
-
-  const record: MergeHistoryRecord = {
-    id: installId,
-    timestamp: new Date().toISOString(),
-    targetStackName,
-    targetDirectory,
-    backupArchiveDir,
-    sourceStacks: [sourceUrl],
-    affectedServices,
-    preMergeComposeContent,
-    targetComposeBackupPath,
-    preMergeEnvContent,
-    targetEnvBackupPath,
-    sourceConfigs: [],
-    status: 'pending_decision',
-    archiveSizeBytes,
-    type: 'COMPOSE_INSTALL',
-    installMode,
-    sourceUrl,
-    remappedPorts,
-    summary:
-      installMode === 'new-stack'
-        ? `Provisioned new stack "${targetStackName}" with ${affectedServices.length} service(s) from remote Compose`
-        : `Installed ${affectedServices.length} service(s) into existing stack "${targetStackName}" from remote Compose`,
-  };
-
-  saveMergeHistoryRecord(record);
-
-  return { backupArchiveDir, record };
-}
-
