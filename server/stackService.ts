@@ -107,6 +107,11 @@ export function mergeComposeWithAst(
       doc.set('services', new YAMLMap());
       services = doc.get('services') as YAMLMap;
     }
+    // A freshly provisioned stack has `services: {}` (flow style); switch to block style so
+    // merged services are written as normal multi-line YAML instead of one inline `{...}` blob.
+    if (services && (services as YAMLMap).flow) {
+      (services as YAMLMap).flow = false;
+    }
 
     for (const [sName, sDef] of Object.entries(newServices)) {
       services.set(sName, sDef);
@@ -117,6 +122,9 @@ export function mergeComposeWithAst(
       if (!volumes) {
         doc.set('volumes', new YAMLMap());
         volumes = doc.get('volumes') as YAMLMap;
+      }
+      if (volumes && (volumes as YAMLMap).flow) {
+        (volumes as YAMLMap).flow = false;
       }
       for (const [vName, vDef] of Object.entries(newVolumes)) {
         volumes.set(vName, vDef);
@@ -885,6 +893,13 @@ export async function deleteHostStack(params: {
   // Customize ledger record description
   snapshotRes.record.summary = `Deleted stack "${sanitizedName}" (safe pre-deletion snapshot archived in ${snapshotRes.backupArchiveDir})`;
   snapshotRes.record.status = 'active';
+  snapshotRes.record.type = 'STACK_DELETE';
+  snapshotRes.record.deletedStack = {
+    project: sanitizedName,
+    workingDir: resolvedTargetDir,
+    configFiles: composeFilePath,
+    serviceCount: stackContainers.length,
+  };
   saveMergeHistoryRecord(snapshotRes.record);
 
   // Step 2: Use Docker Socket Helper to run docker compose down -v --remove-orphans

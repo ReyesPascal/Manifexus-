@@ -18,7 +18,7 @@ import {
   markMergeAsReverted,
   resolveBackupDir,
 } from './historyService';
-import { readHostFile, writeHostFile, checkHostFileExists, forceRemoveContainer } from './hostFsService';
+import { readHostFile, writeHostFile, checkHostFileExists, forceRemoveContainer, createHostDirectory } from './hostFsService';
 
 const execAsync = util.promisify(exec);
 
@@ -637,11 +637,20 @@ export async function executeStreamingRevert(
   };
 
   try {
+    // A STACK_DELETE record reverts differently from a merge: there is nothing running to halt,
+    // the host directory is gone and must be re-provisioned, and the stack must be re-registered
+    // so the dashboard (which cannot scan the host filesystem) shows it again.
+    // Records written before the `type` field existed are recognised by their `delete_` id prefix.
+    const isDeleteRevert = record?.type === 'STACK_DELETE' || mergeId.startsWith('delete_');
+
     // =========================================================================
     // Step 1: Halting Merged Services (Fault-Tolerant, Non-Blocking)
     // =========================================================================
     const t1 = Date.now();
     updateStep(1, 'stop_merged', 'Halting Merged Services', 'running');
+    if (isDeleteRevert) {
+      logAndCollect('Reverting a stack deletion: no merged services to halt.', 1);
+    } else {
     logAndCollect(`Attempting graceful halt of merged services at ${record?.targetDirectory || 'target directory'}...`, 1);
 
     // 1. Compose down attempt wrapped in isolated try-catch
@@ -692,6 +701,7 @@ export async function executeStreamingRevert(
         }
       }
     }
+    } // end non-delete halt
 
     await sleep(400);
     updateStep(1, 'stop_merged', 'Halting Merged Services', 'success', Date.now() - t1);
@@ -711,6 +721,42 @@ export async function executeStreamingRevert(
         }
       }
 
+      if (isDeleteRevert) {
+        // The delete removed the whole host directory, so re-create it before writing files back.
+        logAndCollect(`Re-creating deleted stack directory ${record.targetDirectory} on host...`, 2);
+        const dirOk = await createHostDirectory(record.targetDirectory);
+        if (!dirOk) {
+          logAndCollect(`[Warning] Could not confirm creation of ${record.targetDirectory}; attempting file restore anyway.`, 2);
+        }
+
+        // An empty stack's baseline compose may not have been captured if the pre-delete read failed.
+        const hadNoServices =
+          (record.deletedStack?.serviceCount ?? 0) === 0 &&
+          !(record.sourceConfigs || []).some((sc) => sc.containers && sc.containers.length > 0);
+        if ((!restoredContent || !restoredContent.trim()) && hadNoServices) {
+          logAndCollect('No archived compose content found for this empty stack; restoring baseline `services: {}`.', 2);
+          restoredContent = 'services: {}\n';
+        }
+
+        // Restore the archived .env as well, since the delete removed it along with the directory.
+        let envContent = record.preMergeEnvContent;
+        if (!envContent && record.targetEnvBackupPath && fs.existsSync(record.targetEnvBackupPath)) {
+          try {
+            envContent = fs.readFileSync(record.targetEnvBackupPath, 'utf8');
+          } catch {
+            // ignore
+          }
+        }
+        if (envContent && envContent.trim().length > 0) {
+          try {
+            await writeHostFile(path.posix.join(record.targetDirectory, '.env'), envContent);
+            logAndCollect('Archived .env file restored.', 2);
+          } catch (envErr) {
+            logAndCollect(`[Warning] Could not restore .env: ${(envErr as Error).message}`, 2);
+          }
+        }
+      }
+
       if (restoredContent && restoredContent.trim().length > 0) {
         logAndCollect('Restoring pre-merge target compose configuration to host...', 2);
         const targetComposePath = path.join(record.targetDirectory, 'docker-compose.yml');
@@ -721,8 +767,16 @@ export async function executeStreamingRevert(
           logAndCollect(`[Warning] Could not write compose file directly: ${(writeErr as Error).message}`, 2);
         }
 
-        // Bring restored target stack back up
-        if (privs.isSocketWritable) {
+        // Bring restored target stack back up (skip when the compose declares no services,
+        // e.g. a restored empty stack, where `compose up` has nothing to start)
+        let restoredServiceCount = 0;
+        try {
+          const parsed = yaml.parse(restoredContent);
+          restoredServiceCount = parsed?.services ? Object.keys(parsed.services).length : 0;
+        } catch {
+          restoredServiceCount = 1; // unknown shape: let compose decide
+        }
+        if (privs.isSocketWritable && restoredServiceCount > 0) {
           logAndCollect(`Re-launching original stack in ${record.targetDirectory}...`, 2);
           try {
             await runHostDockerCompose(
@@ -736,6 +790,29 @@ export async function executeStreamingRevert(
         }
       } else {
         logAndCollect('No previous target compose existed; cleaning up generated stack file.', 2);
+      }
+
+      if (isDeleteRevert) {
+        // Put the stack back in the persistent stack registry so it reappears on the dashboard
+        // and in the "Merge into Existing Stack" list. Imported lazily to avoid an import cycle
+        // (stackService already imports this module).
+        const project =
+          record.deletedStack?.project || record.targetStackName || path.posix.basename(record.targetDirectory);
+        const configFiles =
+          record.deletedStack?.configFiles || path.posix.join(record.targetDirectory, 'docker-compose.yml');
+        try {
+          const { registerCreatedStack } = await import('./stackService');
+          registerCreatedStack({
+            project,
+            workingDir: record.targetDirectory,
+            configFiles,
+            serviceCount: record.deletedStack?.serviceCount ?? 0,
+            source: 'provisioned',
+          });
+          logAndCollect(`Stack '${project}' re-registered with Manifexus.`, 2);
+        } catch (regErr) {
+          logAndCollect(`[Warning] Could not re-register stack '${project}': ${(regErr as Error).message}`, 2);
+        }
       }
     }
     await sleep(400);

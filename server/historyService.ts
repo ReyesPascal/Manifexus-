@@ -25,7 +25,14 @@ export interface MergeHistoryRecord {
   archiveSizeBytes: number;
   summary: string;
   logs?: string[];
-  type?: 'MERGE' | 'COMPOSE_INSTALL';
+  type?: 'MERGE' | 'COMPOSE_INSTALL' | 'STACK_DELETE';
+  // Present on STACK_DELETE records: what is needed to re-provision and re-register the stack on revert
+  deletedStack?: {
+    project: string;
+    workingDir: string;
+    configFiles: string;
+    serviceCount: number;
+  };
   installMode?: 'existing-stack' | 'new-stack';
   sourceUrl?: string;
   remappedPorts?: { service: string; originalHostPort: number; allocatedHostPort: number }[];

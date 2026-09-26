@@ -25,13 +25,16 @@ import {
   Clock,
   RotateCcw,
 } from 'lucide-react';
-import { DeepContainerMetadata, StackMergePlan, AutomationPrivileges } from '../types';
+import { DeepContainerMetadata, StackMergePlan, AutomationPrivileges, EmptyComposeStack } from '../types';
 import { ExecutionPipelineConsole } from './ExecutionPipelineConsole';
 
 interface StackMergeModalProps {
   isOpen: boolean;
   onClose: () => void;
   containers: DeepContainerMetadata[];
+  // Stacks with no running containers (e.g. freshly provisioned). They are valid merge targets
+  // but are invisible if the target list is built from containers alone.
+  emptyStacks?: EmptyComposeStack[];
   initialSelectedIds?: string[];
   initialTargetStack?: string;
   onMergeSuccess?: () => void;
@@ -52,6 +55,7 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
   isOpen,
   onClose,
   containers,
+  emptyStacks = [],
   initialSelectedIds = [],
   initialTargetStack,
   onMergeSuccess,
@@ -110,6 +114,28 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
     return { stacks, standalone };
   }, [mergeableContainers]);
 
+  // Every stack that can be merged INTO: stacks with containers plus empty/provisioned stacks.
+  // Maps project name -> host working directory.
+  const targetStackOptions = useMemo(() => {
+    const options = new Map<string, string | undefined>();
+    for (const p of Object.keys(groupedStacks.stacks)) {
+      options.set(p, groupedStacks.stacks[p].dir);
+    }
+    for (const es of emptyStacks as EmptyComposeStack[]) {
+      if (es.project.toLowerCase() === 'manifexus') continue;
+      if (!options.has(es.project)) {
+        options.set(es.project, es.workingDir);
+      }
+    }
+    return options;
+  }, [groupedStacks, emptyStacks]);
+
+  const selectExistingTarget = (projectName: string) => {
+    setTargetStackName(projectName);
+    const dir = targetStackOptions.get(projectName);
+    if (dir) setTargetDirectory(dir);
+  };
+
   // Selected container objects list
   const selectedContainersList = useMemo(() => {
     return mergeableContainers.filter((c) => selectedIds.includes(c.id));
@@ -149,9 +175,7 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
 
       if (initialTargetStack && initialTargetStack !== 'manifexus') {
         setMode('existing-stack');
-        setTargetStackName(initialTargetStack);
-        const existingDir = mergeableContainers.find((c) => c.compose?.project === initialTargetStack)?.compose?.workingDir;
-        if (existingDir) setTargetDirectory(existingDir);
+        selectExistingTarget(initialTargetStack);
       } else {
         setMode('new-stack');
         setTargetStackName('combined-stack');
@@ -671,6 +695,12 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
                     onClick={(e) => {
                       e.stopPropagation();
                       setMode('existing-stack');
+                      // Make the state match what the dropdown shows: if the current name isn't
+                      // an existing stack, select the first one (and its directory).
+                      if (!targetStackOptions.has(targetStackName)) {
+                        const first = targetStackOptions.keys().next().value;
+                        if (first) selectExistingTarget(first);
+                      }
                     }}
                     className={`p-4 rounded-xl border cursor-pointer transition-all ${
                       mode === 'existing-stack'
@@ -698,15 +728,12 @@ export const StackMergeModal: React.FC<StackMergeModalProps> = ({
                       <select
                         value={targetStackName}
                         onChange={(e) => {
-                          const val = e.target.value;
-                          setTargetStackName(val);
-                          const existingDir = mergeableContainers.find((c) => c.compose?.project === val)?.compose?.workingDir;
-                          if (existingDir) setTargetDirectory(existingDir);
+                          selectExistingTarget(e.target.value);
                         }}
                         onClick={(e) => e.stopPropagation()}
                         className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-700 text-white text-xs focus:border-cyan-500 focus:outline-none"
                       >
-                        {Object.keys(groupedStacks.stacks).map((p) => (
+                        {Array.from(targetStackOptions.keys()).map((p) => (
                           <option key={p} value={p}>
                             {p}
                           </option>

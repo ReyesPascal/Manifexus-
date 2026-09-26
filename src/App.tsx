@@ -968,6 +968,7 @@ export default function App() {
         isOpen={isMergeModalOpen}
         onClose={() => setIsMergeModalOpen(false)}
         containers={containers}
+        emptyStacks={emptyStacks}
         initialSelectedIds={mergeModalInitialIds}
         initialTargetStack={mergeModalInitialStack}
         privileges={privileges}
