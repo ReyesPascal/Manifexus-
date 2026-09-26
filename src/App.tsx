@@ -671,27 +671,11 @@ export default function App() {
 
                 {/* Stack Service Grid or Empty Stack Placeholder */}
                 {stackData.containers.length === 0 ? (
-                  <div className="py-8 px-6 rounded-xl bg-slate-950/40 border border-slate-800/80 text-center flex flex-col items-center justify-center gap-3">
-                    <div className="p-3 rounded-2xl bg-cyan-950/40 border border-cyan-500/30 text-cyan-400 shadow-inner">
-                      <FolderPlus className="w-6 h-6" />
+                  <div className="py-7 px-4 rounded-xl border border-dashed border-slate-800/80 bg-slate-950/30 flex flex-col items-center justify-center gap-1.5">
+                    <div className="flex items-center gap-2 text-slate-500 font-mono text-xs">
+                      <span className="w-1.5 h-1.5 rounded-full bg-cyan-400/60 animate-pulse" />
+                      <span>No active containers in this stack</span>
                     </div>
-                    <div className="max-w-md space-y-1">
-                      <h3 className="text-sm font-bold font-mono text-white">Empty Stack Provisioned</h3>
-                      <p className="text-xs font-mono text-slate-400">
-                        This stack directory has a baseline <code className="text-cyan-300">docker-compose.yml</code> file ready on the host. Click &apos;Populate Stack with Apps&apos; below to merge existing standalone containers into this stack.
-                      </p>
-                    </div>
-                    <button
-                      onClick={() => {
-                        setMergeModalInitialStack(projectName);
-                        setMergeModalInitialIds([]);
-                        setIsMergeModalOpen(true);
-                      }}
-                      className="mt-1 px-3.5 py-2 rounded-xl bg-cyan-950 hover:bg-cyan-900 border border-cyan-500/40 text-xs font-mono text-cyan-300 transition-colors flex items-center gap-2 shadow-[0_0_15px_rgba(6,182,212,0.15)] cursor-pointer"
-                    >
-                      <Layers className="w-3.5 h-3.5 text-cyan-400" />
-                      <span>Populate Stack with Apps</span>
-                    </button>
                   </div>
                 ) : (
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
