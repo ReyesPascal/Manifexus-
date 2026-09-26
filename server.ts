@@ -14,6 +14,7 @@ import {
   addDemoContainer,
   resolveAppIcon,
   mergeDemoContainersIntoStack,
+  cleanupStoppedHelpers,
 } from './server/dockerService';
 import {
   getConfig,
@@ -195,12 +196,21 @@ async function startServer() {
       const { containers, isDemo, dockerVersion, os } = await getContainersList();
       const emptyStacks = await discoverHostComposeStacks(containers);
 
-      const runningCount = containers.filter((c) => c.state === 'running').length;
-      const stoppedCount = containers.length - runningCount;
-      const stackNames = new Set([
-        ...containers.filter((c) => c.compose?.isCompose && c.compose.project).map((c) => c.compose.project as string),
-        ...emptyStacks.map((s) => s.project),
-      ]);
+      // Count what the dashboard shows: not Manifexus itself, not apps hidden in Settings
+      const config = getConfig();
+      const apps = containers.filter((c) => {
+        if (isManifexusContainer(c)) return false;
+        const o = config.appOverrides[c.id] || config.appOverrides[c.cleanName] || {};
+        return !o.isHidden;
+      });
+      const runningCount = apps.filter((c) => c.state === 'running').length;
+      const stoppedCount = apps.length - runningCount;
+      const stackNames = new Set(
+        [
+          ...apps.filter((c) => c.compose?.isCompose && c.compose.project).map((c) => c.compose.project as string),
+          ...emptyStacks.map((s) => s.project),
+        ].filter((p) => p.toLowerCase() !== 'manifexus')
+      );
       const stacks = stackNames.size;
 
       res.json({
@@ -210,7 +220,7 @@ async function startServer() {
         dockerVersion: dockerVersion || 'Unknown',
         operatingSystem: os || 'Linux',
         serverTime: new Date().toISOString(),
-        totalContainers: containers.length,
+        totalContainers: apps.length,
         runningContainers: runningCount,
         stoppedContainers: stoppedCount,
         composeStacksCount: stacks,
@@ -837,6 +847,10 @@ async function startServer() {
   // Learn which host folders are mounted into this container (refreshed in case mounts change)
   await refreshSelfMounts();
   setInterval(() => void refreshSelfMounts(), 60 * 1000);
+
+  // Remove helper containers left behind by interrupted jobs (they used to show up as stopped apps)
+  void cleanupStoppedHelpers();
+  setInterval(() => void cleanupStoppedHelpers(), 10 * 60 * 1000);
 
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`[Manifexus Core Engine] Server and Web Terminal running on http://0.0.0.0:${PORT}`);

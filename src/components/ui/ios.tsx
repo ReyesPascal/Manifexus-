@@ -336,3 +336,78 @@ export const FieldRow: React.FC<{
     />
   </label>
 );
+
+/**
+ * Standard sheet: dimmed backdrop, nav bar with a left action and centered title, scrolling body.
+ * Escape and clicking the backdrop close it. Use this for every new full screen.
+ */
+export const Sheet: React.FC<{
+  open: boolean;
+  title: string;
+  subtitle?: React.ReactNode;
+  onClose: () => void;
+  closeLabel?: string;
+  rightAction?: React.ReactNode;
+  footer?: React.ReactNode;
+  width?: number;
+  children: React.ReactNode;
+}> = ({ open, title, subtitle, onClose, closeLabel = 'Done', rightAction, footer, width = 600, children }) => {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, onClose]);
+  if (!open) return null;
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-6 bg-black/55"
+      style={{ fontFamily: ios.font }}
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        className="w-full h-[94vh] sm:h-[min(760px,88vh)] flex flex-col rounded-t-[14px] sm:rounded-[14px] overflow-hidden motion-safe:animate-[ios-sheet-in_220ms_ease-out]"
+        style={{ maxWidth: width, background: ios.sheet, boxShadow: '0 30px 80px rgba(0,0,0,0.55)', WebkitFontSmoothing: 'antialiased' }}
+      >
+        <div className="relative px-4 pt-3.5 pb-3" style={{ borderBottom: `0.5px solid ${ios.separator}` }}>
+          <div className="h-[28px] flex items-center justify-between">
+            <span className="w-[70px]" />
+            <span className="flex items-center justify-end min-w-[70px]">
+              {rightAction ?? (
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="text-[17px] font-semibold rounded focus-visible:outline-2 focus-visible:outline-[#0A84FF] hover:opacity-80"
+                  style={{ color: ios.blue }}
+                >
+                  {closeLabel}
+                </button>
+              )}
+            </span>
+          </div>
+          <h2 className="absolute left-1/2 top-3.5 -translate-x-1/2 h-[28px] flex items-center text-[17px] font-semibold text-white whitespace-nowrap">
+            {title}
+          </h2>
+          {subtitle && (
+            <p className="mt-1 text-[13px] text-center truncate px-10" style={{ color: ios.secondary }}>
+              {subtitle}
+            </p>
+          )}
+        </div>
+        <div className="flex-1 overflow-y-auto px-4 sm:px-5 pt-5 pb-8">{children}</div>
+        {footer && (
+          <div className="px-4 sm:px-5 py-3" style={{ borderTop: `0.5px solid ${ios.separator}` }}>
+            {footer}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};

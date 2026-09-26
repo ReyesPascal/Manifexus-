@@ -26,6 +26,7 @@ import {
 } from './types';
 import { Navbar } from './components/Navbar';
 import { StatsBar } from './components/StatsBar';
+import { PortsSheet } from './components/PortsSheet';
 import { AppCard } from './components/AppCard';
 import { InspectModal } from './components/InspectModal';
 import { HelpDrawer } from './components/HelpDrawer';
@@ -394,16 +395,23 @@ export default function App() {
     });
   }, [containers, statusFilter, searchQuery, config?.groups]);
 
-  // Unique ports count
-  const discoveredPortsCount = useMemo(() => {
-    const set = new Set<number>();
+  // Summary numbers, computed from exactly what the dashboard shows as app cards
+  // (not Manifexus itself, not apps hidden in Settings)
+  const visibleApps = useMemo(() => containers.filter((c) => !isManifexus(c) && !c.isHidden), [containers, isManifexus]);
+  const stats = useMemo(() => {
+    const running = visibleApps.filter((c) => c.state === 'running').length;
+    const stackNames = new Set<string>();
+    for (const c of visibleApps) if (c.compose?.isCompose && c.compose.project) stackNames.add(c.compose.project);
+    for (const s of emptyStacks) if (s.project.toLowerCase() !== 'manifexus') stackNames.add(s.project);
+    // Host ports actually in use: running apps plus Manifexus's own port
+    const ports = new Set<number>();
     for (const c of containers) {
-      for (const p of c.ports) {
-        if (p.publicPort) set.add(p.publicPort);
-      }
+      if (c.state !== 'running' || c.isHidden) continue;
+      for (const p of c.ports) if (p.publicPort) ports.add(p.publicPort);
     }
-    return set.size;
-  }, [containers]);
+    return { running, stopped: visibleApps.length - running, total: visibleApps.length, stacks: stackNames.size, ports: ports.size };
+  }, [visibleApps, emptyStacks, containers]);
+  const [isPortsOpen, setIsPortsOpen] = useState(false);
 
   // Grouped containers by Custom User Groups
   const groupedByUserCategories = useMemo(() => {
@@ -479,10 +487,6 @@ export default function App() {
         onOpenAutomationModal={() => setIsAutomationModalOpen(true)}
         viewMode={viewMode}
         onViewModeChange={setViewMode}
-        searchQuery={searchQuery}
-        onSearchChange={setSearchQuery}
-        statusFilter={statusFilter}
-        onStatusFilterChange={setStatusFilter}
         onToggleHelp={() => setIsHelpOpen(!isHelpOpen)}
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenGroupManager={() => setIsGroupManagerOpen(true)}
@@ -554,8 +558,18 @@ export default function App() {
 
         {/* Central Fleet Telemetry Metric Cards */}
         <StatsBar
-          systemStatus={systemStatus}
-          portsCount={discoveredPortsCount}
+          running={stats.running}
+          stopped={stats.stopped}
+          total={stats.total}
+          stacks={stats.stacks}
+          portsInUse={stats.ports}
+          statusFilter={statusFilter}
+          onStatusFilterChange={setStatusFilter}
+          onShowStacks={() => {
+            setStatusFilter('all');
+            setViewMode('compose');
+          }}
+          onShowPorts={() => setIsPortsOpen(true)}
         />
 
         {/* Error Notification */}
@@ -1049,6 +1063,13 @@ export default function App() {
           </div>
         </div>
       )}
+
+      <PortsSheet
+        open={isPortsOpen}
+        onClose={() => setIsPortsOpen(false)}
+        containers={containers.filter((c) => !c.isHidden)}
+        hostAddress={config?.hostAddress || 'localhost'}
+      />
 
       <DeleteStackDialog
         target={deleteStackTarget}

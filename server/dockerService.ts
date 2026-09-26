@@ -14,6 +14,48 @@ export function isDockerSocketAvailable(): boolean {
   }
 }
 
+export const HELPER_LABEL = 'dev.manifexus.helper';
+
+// Markers in the commands of helpers made by versions before HELPER_LABEL existed
+const LEGACY_HELPER_MARKERS = ['/target_dir', '/target_parent', 'COMPOSE_UP_TRIGGERED', 'COMPOSE_BIN='];
+
+/**
+ * True for containers Manifexus created for its own work (never the user's apps).
+ * Works on both list (/containers/json) and inspect (/containers/{id}/json) shapes.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function isManifexusHelper(raw: any): boolean {
+  const labels = raw?.Config?.Labels || raw?.Labels || {};
+  if (labels[HELPER_LABEL] === 'true') return true;
+  if (labels['com.docker.compose.project']) return false;
+  const cmd: string = Array.isArray(raw?.Config?.Cmd) ? raw.Config.Cmd.join(' ') : String(raw?.Command || '');
+  return LEGACY_HELPER_MARKERS.some((m) => cmd.includes(m));
+}
+
+/**
+ * Removes helper containers that have finished (e.g. left behind when a request timed out).
+ * Running helpers, such as an open web terminal, are left alone.
+ */
+export async function cleanupStoppedHelpers(): Promise<number> {
+  let removed = 0;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const all = await queryDockerEngine<any[]>('/containers/json?all=1');
+    for (const c of all || []) {
+      if (c.State === 'running' || !isManifexusHelper(c)) continue;
+      try {
+        await queryDockerEngine(`/containers/${c.Id}?force=true`, 'DELETE');
+        removed++;
+      } catch {
+        // ignore
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return removed;
+}
+
 // Low-level HTTP request over Unix Domain Socket with Granular Diagnostic Execution Logging
 export function queryDockerEngine<T>(path: string, method: string = 'GET', body?: unknown): Promise<T> {
   const startTime = Date.now();
@@ -21,6 +63,13 @@ export function queryDockerEngine<T>(path: string, method: string = 'GET', body?
   const containerMatch = path.match(/\/containers\/([a-zA-Z0-9_-]+)/);
   const targetContainer = containerMatch ? containerMatch[1] : undefined;
   const commandDesc = `DOCKER_SOCK ${method} ${path}`;
+
+  // Every container Manifexus creates itself is a short-lived helper (file access, backups,
+  // compose runs, terminals). Tag them so they never show up or get counted as apps.
+  if (method === 'POST' && path.startsWith('/containers/create') && body && typeof body === 'object') {
+    const b = body as { Labels?: Record<string, string> };
+    body = { ...b, Labels: { ...(b.Labels || {}), [HELPER_LABEL]: 'true' } };
+  }
 
   return new Promise((resolve, reject) => {
     const payload = body !== undefined ? (typeof body === 'string' ? body : JSON.stringify(body)) : null;
@@ -1165,9 +1214,9 @@ export async function getContainersList(): Promise<{
       const rawContainers = await queryDockerEngine<any[]>('/containers/json?all=1');
 
       if (Array.isArray(rawContainers)) {
-        // Deep inspect each container in parallel (up to 20 at a time)
+        // Deep inspect each container in parallel (up to 20 at a time); Manifexus's own helpers are not apps
         const inspected = await Promise.all(
-          rawContainers.map(async (c) => {
+          rawContainers.filter((c) => !isManifexusHelper(c)).map(async (c) => {
             try {
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               const deep = await queryDockerEngine<any>(`/containers/${c.Id}/json`);
