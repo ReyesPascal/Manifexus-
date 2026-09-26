@@ -12,6 +12,7 @@ import {
   ChevronRight,
   ShieldAlert,
   FolderPlus,
+  RefreshCw,
 } from 'lucide-react';
 import {
   DeepContainerMetadata,
@@ -36,6 +37,7 @@ import { MergeHistoryModal } from './components/MergeHistoryModal';
 import { ExecutionPipelineConsole } from './components/ExecutionPipelineConsole';
 import { SystemLogsDashboard } from './components/SystemLogsDashboard';
 import { CreateStackModal } from './components/CreateStackModal';
+import { WebTerminalModal } from './components/WebTerminalModal';
 import { AutomationPrivileges } from './types';
 import { History } from 'lucide-react';
 
@@ -68,6 +70,69 @@ export default function App() {
   const [revertRecordToStream, setRevertRecordToStream] = useState<any | null>(null);
   const [mergeModalInitialIds, setMergeModalInitialIds] = useState<string[]>([]);
   const [mergeModalInitialStack, setMergeModalInitialStack] = useState<string | undefined>(undefined);
+
+  // Directive 2 & 3: Web Terminal state
+  const [isTerminalModalOpen, setIsTerminalModalOpen] = useState(false);
+  const [terminalTargetFile, setTerminalTargetFile] = useState<string>('');
+  const [terminalStackName, setTerminalStackName] = useState<string | undefined>(undefined);
+
+  // Directive 5: Auto-Updater state
+  const [updateState, setUpdateState] = useState<'idle' | 'checking' | 'available' | 'updating'>('idle');
+  const [latestVersion, setLatestVersion] = useState<string | null>(null);
+  const [isUpdatingModalOpen, setIsUpdatingModalOpen] = useState(false);
+
+  // Check for updates
+  const handleCheckUpdate = useCallback(async () => {
+    setUpdateState('checking');
+    try {
+      const res = await fetch('/api/system/check-update?force=true');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.updateAvailable) {
+          setUpdateState('available');
+          setLatestVersion(data.latestVersion || 'latest');
+        } else {
+          setUpdateState('idle');
+        }
+      } else {
+        setUpdateState('idle');
+      }
+    } catch {
+      setUpdateState('idle');
+    }
+  }, []);
+
+  // Execute update
+  const handleExecuteUpdate = useCallback(async () => {
+    setUpdateState('updating');
+    setIsUpdatingModalOpen(true);
+
+    try {
+      await fetch('/api/system/self-update', { method: 'POST' });
+    } catch {
+      // Continue polling regardless of connection drop when container restarts
+    }
+
+    // Poll health endpoint every 1.5s until server returns OK, then force hard reload
+    let attempts = 0;
+    const interval = setInterval(async () => {
+      attempts++;
+      try {
+        const check = await fetch('/api/health', { cache: 'no-store' });
+        if (check.ok && attempts >= 2) {
+          clearInterval(interval);
+          window.location.reload();
+        }
+      } catch {
+        // Still recreating container
+      }
+
+      if (attempts >= 30) {
+        clearInterval(interval);
+        window.location.reload();
+      }
+    }, 1500);
+  }, []);
 
   // Fetch Container Telemetry & System Status
   const fetchData = useCallback(async (showRefreshingState = false) => {
@@ -410,6 +475,10 @@ export default function App() {
         }}
         onOpenHistory={() => setIsHistoryModalOpen(true)}
         onOpenLogs={() => setIsLogsDashboardOpen(true)}
+        updateState={updateState}
+        latestVersion={latestVersion}
+        onCheckUpdate={handleCheckUpdate}
+        onExecuteUpdate={handleExecuteUpdate}
         onRefresh={() => {
           fetchData(true);
           fetchPrivileges();
@@ -649,11 +718,36 @@ export default function App() {
                   </div>
 
                   <div className="flex items-center gap-2 self-start sm:self-center">
-                    {stackData.configFiles && (
-                      <div className="text-[11px] font-mono text-slate-500 truncate max-w-xs bg-slate-950 px-2 py-1 rounded border border-slate-800 hidden md:block">
-                        {stackData.configFiles}
-                      </div>
-                    )}
+                    {/* Directive 3: Open Compose in Terminal Button next to Compose File Path */}
+                    {(() => {
+                      const composePath =
+                        stackData.configFiles ||
+                        (stackData.workingDir ? `${stackData.workingDir}/docker-compose.yml` : undefined);
+                      if (!composePath) return null;
+                      return (
+                        <div className="flex items-center gap-1.5 bg-slate-950/80 px-2.5 py-1 rounded-lg border border-slate-800/80">
+                          <span
+                            className="text-[11px] font-mono text-slate-400 truncate max-w-xs hidden md:inline"
+                            title={composePath}
+                          >
+                            {composePath}
+                          </span>
+                          <button
+                            onClick={() => {
+                              setTerminalTargetFile(composePath);
+                              setTerminalStackName(projectName);
+                              setIsTerminalModalOpen(true);
+                            }}
+                            className="px-2 py-0.5 rounded bg-slate-900 hover:bg-cyan-950 hover:border-cyan-500/50 border border-slate-700/80 text-cyan-300 text-[11px] font-mono transition-all flex items-center gap-1.5 cursor-pointer shadow-sm"
+                            title={`Open ${composePath} in Host Web Terminal (nano)`}
+                          >
+                            <Terminal className="w-3.5 h-3.5 text-cyan-400" />
+                            <span className="hidden sm:inline">Open in Terminal</span>
+                          </button>
+                        </div>
+                      );
+                    })()}
+
                     <button
                       onClick={() => {
                         setMergeModalInitialStack(projectName);
@@ -876,6 +970,56 @@ export default function App() {
             : '/home/ubuntu/docker'
         }
       />
+
+      {/* Directive 2: Host Web Terminal Modal (nano) */}
+      <WebTerminalModal
+        isOpen={isTerminalModalOpen}
+        onClose={() => setIsTerminalModalOpen(false)}
+        filePath={terminalTargetFile}
+        stackName={terminalStackName}
+      />
+
+      {/* Directive 5: Deployment Loading Modal & Self-Updater Progress */}
+      {isUpdatingModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md animate-in fade-in">
+          <div className="w-full max-w-lg bg-[#0a0e18] border border-cyan-500/50 rounded-2xl p-6 shadow-2xl space-y-5 font-mono text-slate-200">
+            <div className="flex items-center gap-3">
+              <div className="p-3 rounded-xl bg-cyan-950/80 border border-cyan-500/40 text-cyan-400">
+                <RefreshCw className="w-6 h-6 animate-spin" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white tracking-wide">
+                  Updating Manifexus
+                </h3>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Host container recreation in progress...
+                </p>
+              </div>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 text-xs space-y-2">
+              <div className="flex items-center justify-between text-slate-400 text-[11px]">
+                <span>Pipeline Stage:</span>
+                <span className="text-cyan-300 font-bold">docker compose pull && up -d</span>
+              </div>
+              <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
+                <div className="bg-gradient-to-r from-cyan-500 to-emerald-500 h-full w-2/3 animate-pulse" />
+              </div>
+              <p className="text-[11px] text-slate-400 leading-relaxed pt-1">
+                The host Docker engine is pulling the latest image tag and recreating the container on your server. Stand by for automatic reconnect.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-between pt-1 text-[11px] text-slate-500">
+              <div className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                <span>Polling health heartbeat...</span>
+              </div>
+              <span>Auto-refreshing browser</span>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

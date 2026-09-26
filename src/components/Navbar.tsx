@@ -35,6 +35,10 @@ interface NavbarProps {
   onOpenStackMerger?: () => void;
   onOpenHistory?: () => void;
   onOpenLogs?: () => void;
+  updateState?: 'idle' | 'checking' | 'available' | 'updating';
+  latestVersion?: string | null;
+  onCheckUpdate?: () => void;
+  onExecuteUpdate?: () => void;
   onRefresh: () => void;
   isRefreshing: boolean;
 }
@@ -57,6 +61,10 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenStackMerger,
   onOpenHistory,
   onOpenLogs,
+  updateState = 'idle',
+  latestVersion,
+  onCheckUpdate,
+  onExecuteUpdate,
   onRefresh,
   isRefreshing,
 }) => {
@@ -313,6 +321,46 @@ export const Navbar: React.FC<NavbarProps> = ({
               >
                 <Terminal className="w-3.5 h-3.5 text-emerald-400" />
                 <span>Logs</span>
+              </button>
+            )}
+
+            {/* Directive 5: Auto-Updater Button */}
+            {onCheckUpdate && (
+              <button
+                onClick={updateState === 'available' ? onExecuteUpdate : onCheckUpdate}
+                disabled={updateState === 'checking' || updateState === 'updating'}
+                className={`px-2.5 py-1.5 rounded-lg border text-xs font-mono transition-all flex items-center gap-1.5 cursor-pointer shadow-sm ${
+                  updateState === 'available'
+                    ? 'bg-gradient-to-r from-emerald-950 via-teal-950 to-emerald-900 border-emerald-500/70 text-emerald-200 hover:border-emerald-400 shadow-[0_0_15px_rgba(16,185,129,0.35)] animate-pulse'
+                    : 'bg-slate-900 border-slate-700/80 text-slate-300 hover:border-cyan-500/40 hover:text-cyan-300'
+                }`}
+                title={
+                  updateState === 'available'
+                    ? `New version ${latestVersion || ''} available. Click to pull & update!`
+                    : 'Check host repository for new Manifexus version'
+                }
+              >
+                {updateState === 'checking' ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 text-cyan-400 animate-spin" />
+                    <span>Checking...</span>
+                  </>
+                ) : updateState === 'updating' ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 text-emerald-400 animate-spin" />
+                    <span>Updating...</span>
+                  </>
+                ) : updateState === 'available' ? (
+                  <>
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                    <span className="font-bold text-emerald-300">Update</span>
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>Check For New Version</span>
+                  </>
+                )}
               </button>
             )}
 

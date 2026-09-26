@@ -1,4 +1,5 @@
 import express from 'express';
+import http from 'http';
 import path from 'path';
 import {
   getContainersList,
@@ -19,6 +20,9 @@ import {
   isManifexusContainer,
   discoverHostComposeStacks,
   provisionEmptyStack,
+  getDefaultHostStacksBaseDir,
+  registerCreatedStack,
+  EmptyComposeStack,
 } from './server/stackService';
 import {
   checkPrivilegeStatus,
@@ -29,7 +33,7 @@ import {
   resolveHostPathToContainer,
   repairTargetStack,
 } from './server/automationService';
-import { readHostFile } from './server/hostFsService';
+import { readHostFile, createHostDirectory, writeHostFile } from './server/hostFsService';
 import {
   getMergeHistory,
   finalizeMergeRecord,
@@ -37,6 +41,8 @@ import {
 } from './server/historyService';
 import { globalLogService, LogLevel, LogEventType } from './server/globalLogService';
 import { expressLogMiddleware } from './server/logMiddleware';
+import { setupTerminalWebSocket } from './server/terminalService';
+import { checkManifexusUpdate, executeManifexusSelfUpdate } from './server/updateService';
 import fs from 'fs';
 import { DeepContainerMetadata } from './src/types';
 
@@ -405,37 +411,63 @@ async function startServer() {
     res.json({ success: true, container: mockContainer });
   });
 
-  // Directive 1: Create New Stack - Provision directory and write baseline docker-compose.yml
+  // Directive 1: Fix Physical Host Provisioning
+  // Uses elevated createHostDirectory and writeHostFile to provision the physical host directory and baseline compose file
   app.post('/api/stacks/create', async (req, res) => {
     try {
       const { stackName, baseDir } = req.body;
-      if (!stackName || typeof stackName !== 'string' || !stackName.trim()) {
-        return res.status(400).json({ error: 'A valid stackName is required.' });
+      const sanitizedName = String(stackName || '')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9_-]/g, '-')
+        .replace(/^-+|-+$/g, '');
+
+      if (!sanitizedName || sanitizedName.length < 2) {
+        return res.status(400).json({ error: 'A valid stackName is required (at least 2 alphanumeric characters, dashes, or underscores).' });
       }
 
       const { containers } = await getContainersList();
-      const result = await provisionEmptyStack(stackName, baseDir, containers);
+      const resolvedBaseDir = baseDir && typeof baseDir === 'string' && baseDir.trim().startsWith('/')
+        ? baseDir.trim()
+        : getDefaultHostStacksBaseDir(containers);
 
-      if (!result.success || !result.stack) {
-        return res.status(400).json({ error: result.error || 'Failed to create stack.' });
-      }
+      const targetHostDir = path.posix.join(resolvedBaseDir, sanitizedName);
+      const composeFilePath = path.posix.join(targetHostDir, 'docker-compose.yml');
+
+      // 1. Provision the absolute path on the physical host using elevated helper
+      await createHostDirectory(targetHostDir);
+
+      // 2. Write baseline docker-compose.yml file directly into that host directory
+      const baselineComposeYaml = `services: {}\n`;
+      const writeOk = await writeHostFile(composeFilePath, baselineComposeYaml);
+
+      const newStack: EmptyComposeStack = {
+        project: sanitizedName,
+        workingDir: targetHostDir,
+        configFiles: composeFilePath,
+        serviceCount: 0,
+        source: 'provisioned',
+      };
+
+      // Register stack so discovery detects it immediately
+      registerCreatedStack(newStack);
 
       globalLogService.log({
         eventType: 'STACK_OP',
         level: 'INFO',
         source: 'stackService',
-        message: `Empty stack '${result.stack.project}' provisioned at ${result.stack.workingDir}`,
+        message: `Empty stack '${sanitizedName}' provisioned on physical host at ${targetHostDir} (write status: ${writeOk ? 'success' : 'fallback'})`,
         payload: {
-          project: result.stack.project,
-          workingDir: result.stack.workingDir,
-          configFiles: result.stack.configFiles,
+          project: sanitizedName,
+          workingDir: targetHostDir,
+          configFiles: composeFilePath,
         },
       });
 
       res.status(201).json({
         success: true,
-        message: `Stack '${result.stack.project}' successfully provisioned.`,
-        stack: result.stack,
+        message: `Stack '${sanitizedName}' successfully provisioned on host at ${targetHostDir}.`,
+        stack: newStack,
       });
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
@@ -682,6 +714,28 @@ async function startServer() {
     }
   });
 
+  // Directive 4: Self-Updater API Endpoints
+  // Check for updates to Manifexus container
+  app.get('/api/system/check-update', async (req, res) => {
+    try {
+      const force = req.query.force === 'true';
+      const result = await checkManifexusUpdate(force);
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // Execute update using host helper container via Docker socket
+  app.post('/api/system/self-update', async (req, res) => {
+    try {
+      const result = await executeManifexusSelfUpdate();
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   // Mount Vite middleware in development or static files in production
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
@@ -698,8 +752,12 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`[Manifexus] Command hub running at http://0.0.0.0:${PORT}`);
+  // Create HTTP server and attach Directive 1 Web Terminal WebSocket
+  const server = http.createServer(app);
+  setupTerminalWebSocket(server);
+
+  server.listen(PORT, '0.0.0.0', () => {
+    console.log(`[Manifexus Core Engine] Server and Web Terminal running on http://0.0.0.0:${PORT}`);
   });
 }
 
