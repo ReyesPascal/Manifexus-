@@ -40,7 +40,7 @@ import {
   resolveHostPathToContainer,
   repairTargetStack,
 } from './server/automationService';
-import { readHostFile, createHostDirectory, writeHostFile } from './server/hostFsService';
+import { readHostFile, createHostDirectory, writeHostFile, refreshSelfMounts } from './server/hostFsService';
 import {
   getMergeHistory,
   finalizeMergeRecord,
@@ -833,6 +833,10 @@ async function startServer() {
   // Create HTTP server and attach Directive 1 Web Terminal WebSocket
   const server = http.createServer(app);
   setupTerminalWebSocket(server);
+
+  // Learn which host folders are mounted into this container (refreshed in case mounts change)
+  await refreshSelfMounts();
+  setInterval(() => void refreshSelfMounts(), 60 * 1000);
 
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`[Manifexus Core Engine] Server and Web Terminal running on http://0.0.0.0:${PORT}`);

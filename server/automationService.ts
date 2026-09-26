@@ -794,21 +794,11 @@ export async function executeAutomatedStackMerge(
   const privs = await checkPrivilegeStatus();
 
   logs.push(`Initiating automated merge for ${req.targetStackName} at ${req.targetDirectory}`);
-  let targetContainerDir = req.targetDirectory;
-  if (privs.isHostFsMounted) {
-    targetContainerDir = resolveHostPathToContainer(req.targetDirectory, privs.hostRootPath);
-    if (!fs.existsSync(targetContainerDir)) {
-      fs.mkdirSync(targetContainerDir, { recursive: true });
-    }
-  }
-
-  const localComposePath = path.join(targetContainerDir, 'docker-compose.yml');
-  try {
-    fs.writeFileSync(localComposePath, req.yamlContent, 'utf8');
-    logs.push(`Wrote compose configuration to ${localComposePath}`);
-  } catch (err) {
-    logs.push(`Direct write notice: ${(err as Error).message}`);
-  }
+  void privs;
+  const localComposePath = path.posix.join(req.targetDirectory, 'docker-compose.yml');
+  // Always write on the real host (never into Manifexus's own container filesystem)
+  await provisionStackFolder(req.targetDirectory, req.yamlContent, { overwrite: true });
+  logs.push(`Wrote compose configuration to ${localComposePath}`);
 
   return {
     success: true,

@@ -702,18 +702,12 @@ export async function discoverHostComposeStacks(
     }
   }
 
-  // Add standard user and docker directories if mounted or accessible
-  const standardMounts = ['/host/home', '/host'];
-  for (const m of standardMounts) {
-    if (fs.existsSync(m)) {
-      baseCandidates.add(m);
-    }
-  }
-
-  // 3. Scan directories for subdirectories containing compose files
+  // 3. Scan directories for subdirectories containing compose files. Only folders that are really
+  // mounted from the host can be scanned; anything else would be Manifexus's own container
+  // filesystem, which is where phantom "stacks" came from.
   for (const baseDir of baseCandidates) {
     const localBase = resolveContainerPath(baseDir);
-    if (!fs.existsSync(localBase)) {
+    if (!localBase || !fs.existsSync(localBase)) {
       continue;
     }
 
@@ -832,13 +826,7 @@ export async function provisionEmptyStack(
     // 2. Write baseline compose file
     const writeOk = await writeHostFile(composeFilePath, baselineComposeYaml);
     if (!writeOk) {
-      // Direct local write fallback
-      const localCandidate = resolveContainerPath(composeFilePath);
-      const localParent = path.dirname(localCandidate);
-      if (!fs.existsSync(localParent)) {
-        fs.mkdirSync(localParent, { recursive: true });
-      }
-      fs.writeFileSync(localCandidate, baselineComposeYaml, 'utf8');
+      throw new Error(`Could not write ${composeFilePath} on the server.`);
     }
 
     const newStack: EmptyComposeStack = {

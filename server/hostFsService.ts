@@ -1,25 +1,61 @@
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { queryDockerEngine, getBestAvailableImage } from './dockerService';
 
 const DOCKER_SOCKET_PATH = process.env.DOCKER_SOCKET_PATH || '/var/run/docker.sock';
-const HOST_ROOT = process.env.HOST_ROOT || '/host';
+
+interface SelfMount {
+  source: string;
+  destination: string;
+}
 
 /**
- * Resolves a host path inside the container if HOST_ROOT is mounted
+ * How host paths map into this process's filesystem.
+ *   undefined -> not known yet (treat nothing as local; use helper containers)
+ *   null      -> not running in a container: host paths ARE local paths
+ *   array     -> running in a container: only paths under these bind mounts are local
  */
-export function resolveContainerPath(hostPath: string): string {
-  if (fs.existsSync(HOST_ROOT)) {
-    if (HOST_ROOT.endsWith('/home') && hostPath.startsWith('/home/')) {
-      return path.join(HOST_ROOT, hostPath.replace('/home/', ''));
-    }
-    const cleanHostPath = hostPath.startsWith('/') ? hostPath.slice(1) : hostPath;
-    const candidate = path.join(HOST_ROOT, cleanHostPath);
-    if (fs.existsSync(candidate) || fs.existsSync(path.dirname(candidate))) {
-      return candidate;
+let selfMounts: SelfMount[] | null | undefined;
+
+/**
+ * Loads this container's bind mounts from Docker, so host paths are only read or written directly
+ * when they really are mounted from the host. Without this, a missing mount made Manifexus create
+ * "stack folders" inside its own container filesystem, invisible on the host and gone after an update.
+ */
+export async function refreshSelfMounts(): Promise<void> {
+  if (!fs.existsSync('/.dockerenv') && !fs.existsSync('/run/.containerenv')) {
+    selfMounts = null;
+    return;
+  }
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const info = await queryDockerEngine<any>(`/containers/${os.hostname()}/json`, 'GET');
+    selfMounts = ((info?.Mounts || []) as { Type?: string; Source?: string; Destination?: string }[])
+      .filter((m) => m.Type === 'bind' && m.Source && m.Destination)
+      .map((m) => ({ source: path.posix.normalize(m.Source!), destination: path.posix.normalize(m.Destination!) }))
+      // Longest source first so the most specific mount wins
+      .sort((a, b) => b.source.length - a.source.length);
+  } catch {
+    // Keep the previous answer; if we never got one, stay on the safe side (helpers only)
+  }
+}
+
+/**
+ * Returns where a host path can be reached directly from this process, or null if it can't
+ * (callers then go through a helper container, which always sees the real host).
+ */
+export function resolveContainerPath(hostPath: string): string | null {
+  const p = path.posix.normalize(hostPath);
+  if (selfMounts === null) return p;
+  if (!selfMounts) return null;
+  for (const m of selfMounts) {
+    if (m.source === '/') return path.posix.join(m.destination, p);
+    if (p === m.source || p.startsWith(m.source + '/')) {
+      return path.posix.join(m.destination, p.slice(m.source.length));
     }
   }
-  return hostPath;
+  return null;
 }
 
 /**
@@ -30,7 +66,7 @@ export function resolveContainerPath(hostPath: string): string {
 export async function readHostFile(hostFilePath: string): Promise<string | null> {
   // 1. Direct filesystem check
   const localCandidate = resolveContainerPath(hostFilePath);
-  if (fs.existsSync(localCandidate)) {
+  if (localCandidate && fs.existsSync(localCandidate)) {
     try {
       const stats = fs.statSync(localCandidate);
       if (stats.isFile()) {
@@ -86,11 +122,11 @@ export async function readHostFile(hostFilePath: string): Promise<string | null>
  */
 export async function writeHostFile(hostFilePath: string, content: string): Promise<boolean> {
   const localCandidate = resolveContainerPath(hostFilePath);
-  const localParent = path.dirname(localCandidate);
+  const localParent = localCandidate ? path.dirname(localCandidate) : null;
 
-  // 1. Attempt direct FS write if directory is writable
+  // 1. Attempt direct FS write, only when the path is really mounted from the host
   try {
-    if (fs.existsSync(localParent) || fs.existsSync(localCandidate)) {
+    if (localCandidate && localParent && (fs.existsSync(localParent) || fs.existsSync(localCandidate))) {
       if (!fs.existsSync(localParent)) {
         fs.mkdirSync(localParent, { recursive: true });
       }
@@ -144,12 +180,14 @@ export async function writeHostFile(hostFilePath: string, content: string): Prom
 export async function createHostDirectory(hostDirPath: string): Promise<boolean> {
   const localCandidate = resolveContainerPath(hostDirPath);
   try {
-    if (fs.existsSync(localCandidate)) {
-      return true;
-    }
-    fs.mkdirSync(localCandidate, { recursive: true });
-    if (fs.existsSync(localCandidate)) {
-      return true;
+    if (localCandidate) {
+      if (fs.existsSync(localCandidate)) {
+        return true;
+      }
+      fs.mkdirSync(localCandidate, { recursive: true });
+      if (fs.existsSync(localCandidate)) {
+        return true;
+      }
     }
   } catch {
     // Proceed to Docker Engine helper
@@ -189,7 +227,7 @@ export async function createHostDirectory(hostDirPath: string): Promise<boolean>
  */
 export async function checkHostFileExists(hostFilePath: string): Promise<boolean> {
   const localCandidate = resolveContainerPath(hostFilePath);
-  if (fs.existsSync(localCandidate)) {
+  if (localCandidate && fs.existsSync(localCandidate)) {
     return true;
   }
 
@@ -246,7 +284,7 @@ export async function deleteHostDirectory(hostDirPath: string): Promise<boolean>
 
   const localCandidate = resolveContainerPath(hostDirPath);
   try {
-    if (fs.existsSync(localCandidate)) {
+    if (localCandidate && fs.existsSync(localCandidate)) {
       fs.rmSync(localCandidate, { recursive: true, force: true });
       if (!fs.existsSync(localCandidate)) {
         return true;

@@ -14,7 +14,6 @@ import {
   FolderPlus,
   RefreshCw,
   Trash2,
-  CheckCircle2,
   Plus,
 } from 'lucide-react';
 import {
@@ -100,7 +99,6 @@ export default function App() {
 
   // Directive 4: Safe Delete Stack state
   const [deleteStackTarget, setDeleteStackTarget] = useState<DeleteStackTarget | null>(null);
-  const [deleteStackSuccessMessage, setDeleteStackSuccessMessage] = useState<string | null>(null);
 
   // Check for updates
   const handleCheckUpdate = useCallback(async () => {
@@ -1055,30 +1053,12 @@ export default function App() {
       <DeleteStackDialog
         target={deleteStackTarget}
         onCancel={() => setDeleteStackTarget(null)}
-        onDeleted={(message) => {
+        onDeleted={() => {
           setDeleteStackTarget(null);
-          setDeleteStackSuccessMessage(message);
           fetchData(true);
-          setTimeout(() => setDeleteStackSuccessMessage(null), 8000);
         }}
       />
 
-      {/* Delete Stack Success Notification Banner */}
-      {deleteStackSuccessMessage && (
-        <div className="fixed bottom-6 right-6 z-50 max-w-md bg-emerald-950/95 border border-emerald-500/50 rounded-xl p-4 shadow-2xl text-emerald-200 font-mono text-xs flex items-start gap-3 animate-in slide-in-from-bottom duration-200">
-          <CheckCircle2 className="w-5 h-5 text-emerald-400 flex-shrink-0 mt-0.5" />
-          <div className="space-y-1">
-            <p className="font-bold text-white">Stack deleted</p>
-            <p className="text-slate-300 text-[11px] leading-relaxed">{deleteStackSuccessMessage}</p>
-          </div>
-          <button
-            onClick={() => setDeleteStackSuccessMessage(null)}
-            className="text-slate-400 hover:text-white ml-auto"
-          >
-            ✕
-          </button>
-        </div>
-      )}
     </div>
   );
 }
