@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import {
   Layers,
   FolderKanban,
@@ -11,6 +11,7 @@ import {
   AlertTriangle,
   Server,
   History,
+  RotateCcw,
   Terminal,
   FolderPlus,
 } from 'lucide-react';
@@ -39,6 +40,7 @@ interface NavbarProps {
   latestVersion?: string | null;
   onCheckUpdate?: () => void;
   onExecuteUpdate?: () => void;
+  onSetUpdateAvailable?: (version: string) => void;
   onRefresh: () => void;
   isRefreshing: boolean;
 }
@@ -65,9 +67,32 @@ export const Navbar: React.FC<NavbarProps> = ({
   latestVersion,
   onCheckUpdate,
   onExecuteUpdate,
+  onSetUpdateAvailable,
   onRefresh,
   isRefreshing,
 }) => {
+  // Directive 2: Auto-poll update check endpoint every 6 hours silently
+  useEffect(() => {
+    const checkSilently = async () => {
+      try {
+        const res = await fetch('/api/system/check-update');
+        if (res.ok) {
+          const data = await res.json();
+          if ((data.updateAvailable || data.update_available) && onSetUpdateAvailable) {
+            onSetUpdateAvailable(data.latestVersion || 'latest');
+          }
+        }
+      } catch {
+        // Silent failure - do not interrupt user
+      }
+    };
+
+    // 6 hours in milliseconds: 6 * 60 * 60 * 1000 = 21,600,000 ms
+    const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
+    const interval = setInterval(checkSilently, SIX_HOURS_MS);
+
+    return () => clearInterval(interval);
+  }, [onSetUpdateAvailable]);
   return (
     <header className="sticky top-0 z-40 bg-[#07090e]/90 backdrop-blur-md border-b border-slate-800/80 px-4 lg:px-6 py-3">
       <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4">
@@ -300,15 +325,15 @@ export const Navbar: React.FC<NavbarProps> = ({
               </button>
             )}
 
-            {/* Merge State Ledger & Backups */}
+            {/* Directive 3: History & Reverts Button */}
             {onOpenHistory && (
               <button
                 onClick={onOpenHistory}
-                className="px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700/80 text-xs font-mono text-purple-300 hover:border-purple-500/40 hover:bg-purple-950/40 transition-colors flex items-center gap-1.5"
-                title="Open Merge State Ledger & Snapshots"
+                className="px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700/80 text-xs font-mono text-purple-300 hover:border-purple-500/40 hover:bg-purple-950/40 transition-colors flex items-center gap-1.5 shadow-[0_0_10px_rgba(168,85,247,0.1)]"
+                title="Open History & Reverts (Snapshots & State Rollback)"
               >
-                <History className="w-3.5 h-3.5 text-purple-400" />
-                <span className="hidden lg:inline">Ledger</span>
+                <RotateCcw className="w-3.5 h-3.5 text-purple-400" />
+                <span className="hidden lg:inline">History & Reverts</span>
               </button>
             )}
 

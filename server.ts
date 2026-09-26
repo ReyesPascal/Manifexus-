@@ -22,6 +22,7 @@ import {
   provisionEmptyStack,
   getDefaultHostStacksBaseDir,
   registerCreatedStack,
+  deleteHostStack,
   EmptyComposeStack,
 } from './server/stackService';
 import {
@@ -469,6 +470,22 @@ async function startServer() {
         message: `Stack '${sanitizedName}' successfully provisioned on host at ${targetHostDir}.`,
         stack: newStack,
       });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // Directive 4: Safe Delete Stack Feature
+  // Archives compose file first, runs docker compose down -v --remove-orphans via Docker socket, deletes host directory, logs to ledger
+  app.post('/api/stacks/delete', async (req, res) => {
+    try {
+      const { projectName, targetDirectory } = req.body;
+      if (!projectName || typeof projectName !== 'string' || !projectName.trim()) {
+        return res.status(400).json({ error: 'A valid projectName is required.' });
+      }
+
+      const result = await deleteHostStack({ projectName, targetDirectory });
+      res.json(result);
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
     }

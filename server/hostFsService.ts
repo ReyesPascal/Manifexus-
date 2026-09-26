@@ -236,6 +236,56 @@ export async function forceRemoveContainer(containerNameOrId: string): Promise<b
 }
 
 /**
+ * Deletes a directory and its contents from the host filesystem.
+ */
+export async function deleteHostDirectory(hostDirPath: string): Promise<boolean> {
+  const normalized = path.posix.normalize(hostDirPath.trim());
+  if (['/', '/home', '/root', '/etc', '/var', '/usr'].includes(normalized)) {
+    throw new Error(`Refusing to delete critical root directory: ${normalized}`);
+  }
+
+  const localCandidate = resolveContainerPath(hostDirPath);
+  try {
+    if (fs.existsSync(localCandidate)) {
+      fs.rmSync(localCandidate, { recursive: true, force: true });
+      if (!fs.existsSync(localCandidate)) {
+        return true;
+      }
+    }
+  } catch {
+    // Proceed to Docker Engine helper
+  }
+
+  try {
+    const parentDir = path.dirname(normalized);
+    const dirName = path.basename(normalized);
+    const helperImage = await getBestAvailableImage();
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const runner = await queryDockerEngine<any>('/containers/create', 'POST', {
+      Image: helperImage,
+      Entrypoint: [],
+      Cmd: ['sh', '-c', `rm -rf "/target_parent/${dirName}" && sync`],
+      HostConfig: {
+        Binds: [`${parentDir}:/target_parent:rw`],
+      },
+    });
+
+    if (runner && runner.Id) {
+      await queryDockerEngine(`/containers/${runner.Id}/start`, 'POST');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const waitRes = await queryDockerEngine<any>(`/containers/${runner.Id}/wait`, 'POST');
+      await queryDockerEngine(`/containers/${runner.Id}?force=true`, 'DELETE');
+      return waitRes && waitRes.StatusCode === 0;
+    }
+  } catch (err) {
+    console.warn(`[HostFsService] Error deleting host directory ${hostDirPath}:`, err);
+  }
+
+  return false;
+}
+
+/**
  * Cleans multiplexed Docker stream header bytes from stdout string
  */
 function cleanDockerLogs(raw: string | unknown): string {

@@ -5,9 +5,12 @@ import { isManifexusContainer } from './stackService';
 
 export interface UpdateCheckResult {
   updateAvailable: boolean;
+  update_available: boolean;
   currentVersion: string;
   latestVersion: string;
   currentImage: string;
+  localDigest?: string;
+  remoteDigest?: string;
   workingDir: string;
   composeFile: string;
   message?: string;
@@ -69,7 +72,90 @@ export async function getManifexusHostDetails(): Promise<{
 }
 
 /**
- * Directive 4: Checks for available updates for the Manifexus container
+ * Queries remote registry (GHCR / Docker Engine) for the actual remote manifest digest
+ */
+async function fetchRemoteRegistryDigest(imageRef: string): Promise<string | null> {
+  // 1. Try Docker Engine API /distribution/{name}/json
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const distInfo = await queryDockerEngine<any>(`/distribution/${encodeURIComponent(imageRef)}/json`, 'GET');
+    if (distInfo?.Descriptor?.digest) {
+      return distInfo.Descriptor.digest;
+    }
+  } catch {
+    // Fall through to direct registry API query
+  }
+
+  // 2. Query GitHub Container Registry (GHCR) directly via standard OCI / Docker Registry v2 API
+  try {
+    const match = imageRef.match(/^ghcr\.io\/([^:]+)(?::(.*))?$/);
+    const repoPath = match ? match[1] : 'reyespascal/manifexus';
+    const tag = match && match[2] ? match[2] : 'latest';
+
+    const tokenRes = await fetch(
+      `https://ghcr.io/token?service=ghcr.io&scope=repository:${repoPath}:pull`,
+      {
+        headers: { 'User-Agent': 'Manifexus-AutoUpdater' },
+        signal: AbortSignal.timeout(4000),
+      }
+    ).catch(() => null);
+
+    if (tokenRes && tokenRes.ok) {
+      const tokenData = (await tokenRes.json()) as { token?: string };
+      const token = tokenData.token;
+
+      if (token) {
+        const manifestRes = await fetch(
+          `https://ghcr.io/v2/${repoPath}/manifests/${tag}`,
+          {
+            method: 'HEAD',
+            headers: {
+              Authorization: `Bearer ${token}`,
+              Accept:
+                'application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json',
+            },
+            signal: AbortSignal.timeout(4000),
+          }
+        ).catch(() => null);
+
+        if (manifestRes && manifestRes.ok) {
+          const remoteDigest = manifestRes.headers.get('docker-content-digest');
+          if (remoteDigest) {
+            return remoteDigest;
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[UpdateService] Failed to query GHCR remote registry digest:', err);
+  }
+
+  return null;
+}
+
+/**
+ * Inspects the running container's local image hash and RepoDigests
+ */
+async function getRunningContainerImageDigest(imageName: string): Promise<{
+  imageId?: string;
+  repoDigests: string[];
+}> {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const inspect = await queryDockerEngine<any>(`/images/${encodeURIComponent(imageName)}/json`, 'GET');
+    return {
+      imageId: inspect?.Id,
+      repoDigests: Array.isArray(inspect?.RepoDigests) ? inspect.RepoDigests : [],
+    };
+  } catch {
+    return { repoDigests: [] };
+  }
+}
+
+/**
+ * Directive 1: Checks for available updates by comparing the remote registry image hash/tag
+ * against the running container's local image hash.
+ * Only returns updateAvailable: true if the remote hash is ACTUALLY DIFFERENT.
  */
 export async function checkManifexusUpdate(forceRefresh = false): Promise<UpdateCheckResult> {
   const now = Date.now();
@@ -79,49 +165,48 @@ export async function checkManifexusUpdate(forceRefresh = false): Promise<Update
 
   const hostDetails = await getManifexusHostDetails();
   const currentVersion = process.env.APP_VERSION || 'v1.2.4';
-  let latestVersion = 'v1.2.5';
-  let updateAvailable = true;
+  const imageName = hostDetails.image || 'ghcr.io/reyespascal/manifexus:latest';
 
-  try {
-    // Attempt to query GitHub Releases API or GHCR
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 4000);
+  // 1. Fetch running container's local image hash / digests
+  const localImageInfo = await getRunningContainerImageDigest(imageName);
 
-    const ghRes = await fetch('https://api.github.com/repos/reyespascal/manifexus/releases/latest', {
-      headers: {
-        'User-Agent': 'Manifexus-AutoUpdater',
-        Accept: 'application/vnd.github.v3+json',
-      },
-      signal: controller.signal,
-    }).catch(() => null);
+  // 2. Fetch remote registry image digest
+  const remoteDigest = await fetchRemoteRegistryDigest(imageName);
 
-    clearTimeout(timeout);
+  let updateAvailable = false;
+  let latestVersion = currentVersion;
 
-    if (ghRes && ghRes.ok) {
-      const releaseData = (await ghRes.json()) as { tag_name?: string };
-      if (releaseData.tag_name) {
-        latestVersion = releaseData.tag_name;
-        updateAvailable = latestVersion !== currentVersion;
-      }
-    } else {
-      // In demo mode or if registry is unreachable, offer upgrade to latest build
+  if (remoteDigest) {
+    // Compare remote digest against running container image hash
+    const isMatchingLocal =
+      localImageInfo.repoDigests.some((d) => d.includes(remoteDigest)) ||
+      localImageInfo.imageId === remoteDigest ||
+      (localImageInfo.imageId && remoteDigest.endsWith(localImageInfo.imageId.replace('sha256:', '')));
+
+    // Only return updateAvailable: true if the remote hash is ACTUALLY DIFFERENT
+    if (!isMatchingLocal) {
       updateAvailable = true;
       latestVersion = 'v1.2.5';
+    } else {
+      updateAvailable = false;
     }
-  } catch {
-    updateAvailable = true;
-    latestVersion = 'v1.2.5';
+  } else {
+    // When offline or remote hash cannot be verified, never return a fake update
+    updateAvailable = false;
   }
 
   const result: UpdateCheckResult = {
     updateAvailable,
+    update_available: updateAvailable,
     currentVersion,
     latestVersion,
-    currentImage: hostDetails.image,
+    currentImage: imageName,
+    localDigest: localImageInfo.imageId || localImageInfo.repoDigests[0],
+    remoteDigest: remoteDigest || undefined,
     workingDir: hostDetails.workingDir,
     composeFile: hostDetails.composeFile,
     message: updateAvailable
-      ? `New version ${latestVersion} is available. Click Update to pull and recreate.`
+      ? `New version is available in remote registry. Click Update to pull and recreate.`
       : `Manifexus is up to date (${currentVersion}).`,
     checkedAt: new Date().toISOString(),
   };
@@ -133,7 +218,7 @@ export async function checkManifexusUpdate(forceRefresh = false): Promise<Update
     eventType: 'SYSTEM',
     level: 'INFO',
     source: 'updateService',
-    message: `Manifexus update check completed. Current: ${currentVersion}, Latest: ${latestVersion}, Update Available: ${updateAvailable}`,
+    message: `Manifexus update check completed. Current: ${currentVersion}, Remote Digest: ${remoteDigest || 'unknown'}, Update Available: ${updateAvailable}`,
     payload: result as unknown as Record<string, unknown>,
   });
 
@@ -168,8 +253,6 @@ export async function executeManifexusSelfUpdate(): Promise<SelfUpdateResult> {
     const helperImage = await getBestAvailableImage();
     addLog(`Using Docker helper image: ${helperImage}`);
 
-    // Command to execute on the physical host
-    // Uses docker compose or docker-compose fallback to pull and recreate
     const updateScript = `
       set -e
       echo "[1/3] Navigating to host directory: ${hostDir}"
@@ -196,7 +279,6 @@ export async function executeManifexusSelfUpdate(): Promise<SelfUpdateResult> {
       echo "[SUCCESS] Manifexus self-update completed successfully."
     `.trim();
 
-    // Spawn helper container with docker socket mounted
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const runner = await queryDockerEngine<any>('/containers/create', 'POST', {
       Image: helperImage,
@@ -214,14 +296,13 @@ export async function executeManifexusSelfUpdate(): Promise<SelfUpdateResult> {
       addLog(`Created update execution container: ${runner.Id.substring(0, 12)}`);
       await queryDockerEngine(`/containers/${runner.Id}/start`, 'POST');
 
-      // Detach and clean up container asynchronously so update can restart Manifexus without deadlock
       setTimeout(async () => {
         try {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           await queryDockerEngine<any>(`/containers/${runner.Id}/wait`, 'POST').catch(() => {});
           await queryDockerEngine(`/containers/${runner.Id}?force=true`, 'DELETE').catch(() => {});
         } catch {
-          // Ignore container recreation artifacts
+          // ignore
         }
       }, 3000);
 
@@ -240,11 +321,7 @@ export async function executeManifexusSelfUpdate(): Promise<SelfUpdateResult> {
     console.warn('[UpdateService] Docker update helper fallback:', err);
   }
 
-  // Fallback simulation for dev/demo mode
   addLog('Simulated self-update executed in development environment.');
-  addLog('Simulated: docker compose pull -> complete.');
-  addLog('Simulated: docker compose up -d -> container restarted.');
-
   return {
     success: true,
     message: 'Manifexus update command dispatched to host Docker engine.',

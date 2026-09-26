@@ -1329,6 +1329,14 @@ export function mergeDemoContainersIntoStack(
   return true;
 }
 
+// Helper to remove mock stack containers in demo mode
+export function removeDemoContainersByProject(projectName: string): void {
+  const norm = projectName.toLowerCase();
+  demoContainers = demoContainers.filter(
+    (c) => (c.compose?.project || '').toLowerCase() !== norm
+  );
+}
+
 /**
  * Retrieves the last N lines of stdout/stderr logs for a given container.
  */

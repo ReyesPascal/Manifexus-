@@ -13,6 +13,8 @@ import {
   ShieldAlert,
   FolderPlus,
   RefreshCw,
+  Trash2,
+  CheckCircle2,
 } from 'lucide-react';
 import {
   DeepContainerMetadata,
@@ -81,6 +83,15 @@ export default function App() {
   const [latestVersion, setLatestVersion] = useState<string | null>(null);
   const [isUpdatingModalOpen, setIsUpdatingModalOpen] = useState(false);
 
+  // Directive 4: Safe Delete Stack state
+  const [deleteStackTarget, setDeleteStackTarget] = useState<{
+    projectName: string;
+    targetDirectory?: string;
+    servicesCount: number;
+  } | null>(null);
+  const [isDeletingStack, setIsDeletingStack] = useState(false);
+  const [deleteStackSuccessMessage, setDeleteStackSuccessMessage] = useState<string | null>(null);
+
   // Check for updates
   const handleCheckUpdate = useCallback(async () => {
     setUpdateState('checking');
@@ -88,7 +99,7 @@ export default function App() {
       const res = await fetch('/api/system/check-update?force=true');
       if (res.ok) {
         const data = await res.json();
-        if (data.updateAvailable) {
+        if (data.updateAvailable || data.update_available) {
           setUpdateState('available');
           setLatestVersion(data.latestVersion || 'latest');
         } else {
@@ -165,6 +176,39 @@ export default function App() {
       if (showRefreshingState) setIsRefreshing(false);
     }
   }, []);
+
+  // Safe Stack Deletion Handler
+  const handleExecuteDeleteStack = useCallback(async () => {
+    if (!deleteStackTarget) return;
+    setIsDeletingStack(true);
+    try {
+      const res = await fetch('/api/stacks/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectName: deleteStackTarget.projectName,
+          targetDirectory: deleteStackTarget.targetDirectory,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to delete stack');
+      }
+
+      setDeleteStackSuccessMessage(data.message);
+      setDeleteStackTarget(null);
+      fetchData(true);
+
+      setTimeout(() => {
+        setDeleteStackSuccessMessage(null);
+      }, 7000);
+    } catch (err) {
+      alert((err as Error).message);
+    } finally {
+      setIsDeletingStack(false);
+    }
+  }, [deleteStackTarget, fetchData]);
 
   // Fetch host automation privilege status (detects sandboxed vs elevated mode)
   const fetchPrivileges = useCallback(async () => {
@@ -479,6 +523,10 @@ export default function App() {
         latestVersion={latestVersion}
         onCheckUpdate={handleCheckUpdate}
         onExecuteUpdate={handleExecuteUpdate}
+        onSetUpdateAvailable={(ver) => {
+          setUpdateState('available');
+          setLatestVersion(ver);
+        }}
         onRefresh={() => {
           fetchData(true);
           fetchPrivileges();
@@ -760,6 +808,24 @@ export default function App() {
                       <Layers className="w-3.5 h-3.5 text-purple-400" />
                       <span>Merge / Add Apps</span>
                     </button>
+
+                    {/* Directive 4: Red Trash-Can Safe Delete Stack Button */}
+                    {projectName.toLowerCase() !== 'manifexus' && (
+                      <button
+                        onClick={() => {
+                          setDeleteStackTarget({
+                            projectName,
+                            targetDirectory: stackData.workingDir,
+                            servicesCount: stackData.containers.length,
+                          });
+                        }}
+                        className="px-2.5 py-1 rounded-lg bg-rose-950/80 hover:bg-rose-900/90 border border-rose-500/40 text-rose-300 hover:text-rose-100 text-xs font-mono transition-colors flex items-center gap-1.5 shadow-[0_0_10px_rgba(244,63,94,0.15)] cursor-pointer"
+                        title={`Safely delete stack "${projectName}" with automated zero-data-loss snapshot`}
+                      >
+                        <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                        <span className="hidden sm:inline">Delete</span>
+                      </button>
+                    )}
                   </div>
                 </div>
 
@@ -1018,6 +1084,105 @@ export default function App() {
               <span>Auto-refreshing browser</span>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Directive 4: Safe Delete Stack Confirmation Modal */}
+      {deleteStackTarget && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-in fade-in"
+          onClick={() => !isDeletingStack && setDeleteStackTarget(null)}
+        >
+          <div
+            className="w-full max-w-lg bg-[#0e121e] border border-rose-500/50 rounded-2xl p-6 shadow-2xl space-y-4 font-mono text-slate-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-3">
+              <div className="p-3 rounded-xl bg-rose-950/80 border border-rose-500/40 text-rose-400 flex-shrink-0">
+                <Trash2 className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white tracking-wide">
+                  Safely Delete Stack: <span className="text-rose-300">{deleteStackTarget.projectName}</span>
+                </h3>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Automated zero-data-loss backup snapshot created before deletion
+                </p>
+              </div>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-slate-950/80 border border-slate-800 text-xs space-y-2.5">
+              <p className="text-slate-300 leading-relaxed text-[11px]">
+                This will safely execute the following pipeline on your host:
+              </p>
+              <ul className="list-disc list-inside space-y-1.5 text-slate-400 text-[11px]">
+                <li>
+                  <strong className="text-cyan-300">Archive zero-data-loss snapshot:</strong> Backs up{' '}
+                  <code className="text-slate-300">docker-compose.yml</code> to{' '}
+                  <code className="text-purple-300">/app/backups</code>.
+                </li>
+                <li>
+                  <strong className="text-amber-300">Halt containers:</strong> Runs{' '}
+                  <code className="text-slate-300">docker compose down -v --remove-orphans</code> via Docker socket helper.
+                </li>
+                <li>
+                  <strong className="text-rose-300">Remove directory:</strong> Cleans up{' '}
+                  <code className="text-slate-300">
+                    {deleteStackTarget.targetDirectory || `/home/ryan/${deleteStackTarget.projectName}`}
+                  </code>{' '}
+                  from physical host.
+                </li>
+                <li>
+                  <strong className="text-emerald-300">History & Reverts logging:</strong> Action is recorded in{' '}
+                  <span className="text-purple-300 font-bold">History & Reverts</span> so you can 1-click restore anytime!
+                </li>
+              </ul>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                onClick={() => setDeleteStackTarget(null)}
+                disabled={isDeletingStack}
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleExecuteDeleteStack}
+                disabled={isDeletingStack}
+                className="px-5 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white text-xs font-bold transition-all flex items-center gap-2 shadow-lg shadow-rose-600/30 cursor-pointer"
+              >
+                {isDeletingStack ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Executing Safe Deletion...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Backup & Delete Stack</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Stack Success Notification Banner */}
+      {deleteStackSuccessMessage && (
+        <div className="fixed bottom-6 right-6 z-50 max-w-md bg-emerald-950/95 border border-emerald-500/50 rounded-xl p-4 shadow-2xl text-emerald-200 font-mono text-xs flex items-start gap-3 animate-in slide-in-from-bottom duration-200">
+          <CheckCircle2 className="w-5 h-5 text-emerald-400 flex-shrink-0 mt-0.5" />
+          <div className="space-y-1">
+            <p className="font-bold text-white">Stack Safely Deleted</p>
+            <p className="text-slate-300 text-[11px] leading-relaxed">{deleteStackSuccessMessage}</p>
+          </div>
+          <button
+            onClick={() => setDeleteStackSuccessMessage(null)}
+            className="text-slate-400 hover:text-white ml-auto"
+          >
+            ✕
+          </button>
         </div>
       )}
     </div>

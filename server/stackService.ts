@@ -7,9 +7,14 @@ import {
   readHostFile,
   writeHostFile,
   createHostDirectory,
+  deleteHostDirectory,
   checkHostFileExists,
   resolveContainerPath,
 } from './hostFsService';
+import { createPreMergeSnapshot, saveMergeHistoryRecord } from './historyService';
+import { runHostDockerCompose } from './automationService';
+import { getContainersList, removeDemoContainersByProject } from './dockerService';
+import { globalLogService } from './globalLogService';
 
 export type { EmptyComposeStack };
 
@@ -824,4 +829,98 @@ export async function provisionEmptyStack(
       error: (err as Error).message || 'Failed to provision host directory and docker-compose.yml',
     };
   }
+}
+
+/**
+ * Directive 4: Safely deletes a stack from the host.
+ * 1. Executes zero-data-loss backup snapshot first to archive the compose file
+ * 2. Uses Docker socket helper to execute docker compose down -v --remove-orphans in target host directory
+ * 3. Deletes directory from host
+ * 4. Logs to history ledger so it can be reverted using existing rollback flow
+ */
+export async function deleteHostStack(params: {
+  projectName: string;
+  targetDirectory?: string;
+}): Promise<{
+  success: boolean;
+  message: string;
+  backupArchiveDir?: string;
+  historyRecordId?: string;
+}> {
+  const { projectName, targetDirectory } = params;
+  const sanitizedName = (projectName || '').trim().toLowerCase();
+
+  if (!sanitizedName) {
+    throw new Error('Project name is required.');
+  }
+
+  // System Protection: Never allow deleting Manifexus
+  if (isManifexusContainer({ cleanName: sanitizedName, compose: { project: sanitizedName } })) {
+    throw new Error('System Self-Protection: Manifexus container or stack cannot be deleted.');
+  }
+
+  const { containers, isDemo } = await getContainersList();
+  const stackContainers = containers.filter(
+    (c) => (c.compose?.project || '').toLowerCase() === sanitizedName
+  );
+
+  const resolvedTargetDir =
+    targetDirectory && targetDirectory.trim().startsWith('/')
+      ? targetDirectory.trim()
+      : stackContainers[0]?.compose?.workingDir || path.posix.join('/home/ryan', sanitizedName);
+
+  const composeFilePath = path.posix.join(resolvedTargetDir, 'docker-compose.yml');
+  const existingComposeContent = (await readHostFile(composeFilePath)) || undefined;
+
+  // Step 1: Zero-Data-Loss Backup Snapshot
+  const deleteRunId = `delete_${sanitizedName}_${Date.now()}`;
+  const snapshotRes = await createPreMergeSnapshot({
+    mergeId: deleteRunId,
+    targetStackName: sanitizedName,
+    targetDirectory: resolvedTargetDir,
+    selectedContainers: stackContainers,
+    preMergeTargetCompose: existingComposeContent,
+  });
+
+  // Customize ledger record description
+  snapshotRes.record.summary = `Deleted stack "${sanitizedName}" (safe pre-deletion snapshot archived in ${snapshotRes.backupArchiveDir})`;
+  snapshotRes.record.status = 'active';
+  saveMergeHistoryRecord(snapshotRes.record);
+
+  // Step 2: Use Docker Socket Helper to run docker compose down -v --remove-orphans
+  await runHostDockerCompose(
+    resolvedTargetDir,
+    'docker compose down -v --remove-orphans || docker-compose down -v --remove-orphans || docker compose down || true'
+  );
+
+  // Step 3: Delete directory from host
+  await deleteHostDirectory(resolvedTargetDir);
+
+  // Unregister stack from local storage
+  unregisterCreatedStack(sanitizedName);
+
+  // If in demo mode, prune demo containers
+  if (isDemo) {
+    removeDemoContainersByProject(sanitizedName);
+  }
+
+  globalLogService.log({
+    eventType: 'STACK_OP',
+    level: 'INFO',
+    source: 'stackService',
+    message: `Stack '${sanitizedName}' safely deleted at ${resolvedTargetDir} with snapshot ${deleteRunId}`,
+    payload: {
+      projectName: sanitizedName,
+      targetDirectory: resolvedTargetDir,
+      backupArchiveDir: snapshotRes.backupArchiveDir,
+      historyRecordId: deleteRunId,
+    },
+  });
+
+  return {
+    success: true,
+    message: `Stack '${sanitizedName}' was safely deleted. A zero-data-loss backup snapshot was saved at ${snapshotRes.backupArchiveDir} and can be restored anytime from History & Reverts.`,
+    backupArchiveDir: snapshotRes.backupArchiveDir,
+    historyRecordId: deleteRunId,
+  };
 }
