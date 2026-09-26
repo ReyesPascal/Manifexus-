@@ -14,6 +14,7 @@ import {
 import { createPreMergeSnapshot, saveMergeHistoryRecord } from './historyService';
 import { getContainersList, removeDemoContainersByProject } from './dockerService';
 import { globalLogService } from './globalLogService';
+import { getConfig } from './storageService';
 import {
   archiveStackData,
   runComposeInDir,
@@ -162,7 +163,9 @@ export function generateStackMergePlan(
   // Directive 1: Programmatically filter out Manifexus from all merge calculations
   const selectedContainers = rawSelectedContainers.filter((c) => !isManifexusContainer(c));
 
-  const targetDirClean = targetDirectory.trim().replace(/\/+$/, '') || `/home/ubuntu/${targetStackName}`;
+  const targetDirClean =
+    targetDirectory.trim().replace(/\/+$/, '') ||
+    path.posix.join(getDefaultHostStacksBaseDir(rawSelectedContainers), targetStackName);
   const stackNameClean = targetStackName.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '-') || 'combined-stack';
 
   const sourceStacksSet = new Set<string>();
@@ -625,13 +628,21 @@ export function unregisterCreatedStack(projectName: string): void {
  * by inspecting existing compose containers' working directories.
  */
 export function getDefaultHostStacksBaseDir(containers: DeepContainerMetadata[] = []): string {
-  if (process.env.DEFAULT_STACKS_DIR && process.env.DEFAULT_STACKS_DIR.trim().length > 0) {
-    return process.env.DEFAULT_STACKS_DIR.trim();
+  // 1. The location saved in Settings
+  const saved = (getConfig().stacksDir || '').trim();
+  if (saved.startsWith('/')) {
+    return saved.replace(/\/+$/, '') || '/';
   }
 
-  // Count parent directories of existing compose containers
+  // 2. Environment override for deployments
+  if (process.env.DEFAULT_STACKS_DIR && process.env.DEFAULT_STACKS_DIR.trim().startsWith('/')) {
+    return process.env.DEFAULT_STACKS_DIR.trim().replace(/\/+$/, '');
+  }
+
+  // 3. The folder most existing stacks live in (Manifexus's own folder doesn't count)
   const dirCounts: Record<string, number> = {};
   for (const c of containers) {
+    if (isManifexusContainer(c)) continue;
     if (c.compose?.workingDir) {
       const parent = path.dirname(c.compose.workingDir);
       if (parent && parent !== '/' && parent !== '.') {
@@ -645,8 +656,16 @@ export function getDefaultHostStacksBaseDir(containers: DeepContainerMetadata[] 
     return sortedDirs[0][0];
   }
 
-  // Safe defaults
-  return '/home/ubuntu/docker';
+  // 4. Previously created stacks remembered by Manifexus
+  const registeredParents = getRegisteredCreatedStacks()
+    .map((s) => path.posix.dirname(s.workingDir || ''))
+    .filter((d) => d && d !== '/' && d !== '.');
+  if (registeredParents.length > 0) {
+    return registeredParents[0];
+  }
+
+  // 5. Nothing to learn from yet: a neutral location (set your own in Settings)
+  return '/opt/stacks';
 }
 
 /**
@@ -684,7 +703,7 @@ export async function discoverHostComposeStacks(
   }
 
   // Add standard user and docker directories if mounted or accessible
-  const standardMounts = ['/host/home', '/host', '/home/ubuntu/docker', '/home/ryan'];
+  const standardMounts = ['/host/home', '/host'];
   for (const m of standardMounts) {
     if (fs.existsSync(m)) {
       baseCandidates.add(m);

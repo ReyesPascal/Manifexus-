@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { X, Settings, Server, Globe, Save } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { X, Settings, Server, Globe, Save, FolderOpen } from 'lucide-react';
 import { ManifexusConfig } from '../types';
 
 interface SettingsModalProps {
@@ -7,6 +7,8 @@ interface SettingsModalProps {
   onClose: () => void;
   config: ManifexusConfig | null;
   onSaveConfig: (updated: Partial<ManifexusConfig>) => Promise<void>;
+  /** The folder Manifexus would use if no location is saved (shown as the placeholder) */
+  detectedStacksDir?: string;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -14,20 +16,39 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onClose,
   config,
   onSaveConfig,
+  detectedStacksDir,
 }) => {
-  if (!isOpen) return null;
-
+  // Hooks must run on every render, so they come before the early return
   const [hostAddress, setHostAddress] = useState(config?.hostAddress || 'localhost');
   const [refreshInterval, setRefreshInterval] = useState(config?.refreshIntervalSeconds || 10);
+  const [stacksDir, setStacksDir] = useState(config?.stacksDir || '');
   const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (isOpen) {
+      setHostAddress(config?.hostAddress || 'localhost');
+      setRefreshInterval(config?.refreshIntervalSeconds || 10);
+      setStacksDir(config?.stacksDir || '');
+      setSaveError(null);
+    }
+  }, [isOpen]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (!isOpen) return null;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    const dir = stacksDir.trim().replace(/\/+$/, '');
+    if (dir && !dir.startsWith('/')) {
+      setSaveError('The stack location must be a full path starting with /, like /home/you/stacks.');
+      return;
+    }
     setIsSaving(true);
     try {
       await onSaveConfig({
         hostAddress: hostAddress.trim() || 'localhost',
         refreshIntervalSeconds: Number(refreshInterval) || 10,
+        stacksDir: dir,
       });
       onClose();
     } finally {
@@ -73,6 +94,30 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <p className="text-[11px] text-slate-400">
               When clicking port links on app cards, this address is used (e.g. <code className="text-cyan-300">http://{hostAddress || 'localhost'}:PORT</code>).
             </p>
+          </div>
+
+          {/* Default stack location */}
+          <div className="space-y-1.5">
+            <label htmlFor="settings-stacks-dir" className="flex items-center gap-1.5 text-slate-300 font-bold">
+              <FolderOpen className="w-4 h-4 text-cyan-400" />
+              <span>Default Stack Location</span>
+            </label>
+            <input
+              id="settings-stacks-dir"
+              type="text"
+              value={stacksDir}
+              onChange={(e) => {
+                setStacksDir(e.target.value);
+                setSaveError(null);
+              }}
+              placeholder={detectedStacksDir ? `Automatic: ${detectedStacksDir}` : 'Automatic'}
+              spellCheck={false}
+              className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-cyan-500 font-mono"
+            />
+            <p className="text-[11px] text-slate-400">
+              New stacks are created in this folder on the server. Leave it empty to use the folder your existing stacks are in.
+            </p>
+            {saveError && <p className="text-[11px] text-rose-300">{saveError}</p>}
           </div>
 
           {/* Auto Refresh Interval */}

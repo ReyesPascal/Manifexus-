@@ -918,6 +918,7 @@ export default function App() {
         onClose={() => setIsSettingsOpen(false)}
         config={config}
         onSaveConfig={handleSaveConfig}
+        detectedStacksDir={config?.stacksDir ? undefined : defaultStacksDir}
       />
 
       {/* Simulate Container Modal */}

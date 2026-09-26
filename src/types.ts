@@ -81,6 +81,8 @@ export interface ManifexusConfig {
   hostAddress: string; // e.g., 'localhost' or '192.168.1.50'
   defaultViewMode: 'groups' | 'compose';
   refreshIntervalSeconds: number;
+  /** Folder new stacks are created in. Empty = use the folder existing stacks share. */
+  stacksDir?: string;
 }
 
 export interface EmptyComposeStack {

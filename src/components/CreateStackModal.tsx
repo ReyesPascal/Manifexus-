@@ -1,4 +1,4 @@
-import React, { useState, useId } from 'react';
+import React, { useEffect, useState, useId } from 'react';
 import {
   X,
   Layers,
@@ -22,7 +22,7 @@ export const CreateStackModal: React.FC<CreateStackModalProps> = ({
   isOpen,
   onClose,
   onSuccess,
-  defaultBaseDir = '/home/ubuntu/docker',
+  defaultBaseDir = '',
 }) => {
   const stackNameInputId = useId();
   const baseDirInputId = useId();
@@ -31,6 +31,18 @@ export const CreateStackModal: React.FC<CreateStackModalProps> = ({
   const [showAdvancedDir, setShowAdvancedDir] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // Follow the server's default location (it loads after the dashboard's first fetch) until the
+  // user chooses a different one; start fresh each time the dialog opens.
+  useEffect(() => {
+    if (isOpen) {
+      setShowAdvancedDir(false);
+      setCustomBaseDir(defaultBaseDir);
+    }
+  }, [isOpen]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!showAdvancedDir) setCustomBaseDir(defaultBaseDir);
+  }, [defaultBaseDir, showAdvancedDir]);
 
   if (!isOpen) return null;
 
@@ -159,20 +171,22 @@ export const CreateStackModal: React.FC<CreateStackModalProps> = ({
                 onClick={() => setShowAdvancedDir(!showAdvancedDir)}
                 className="text-[11px] font-mono text-cyan-400 hover:text-cyan-300 transition-colors underline"
               >
-                {showAdvancedDir ? 'Use Default Parent Dir' : 'Customize Parent Dir'}
+                {showAdvancedDir ? 'Use default location' : 'Use a different location'}
               </button>
             </div>
 
             {showAdvancedDir && (
               <div className="pt-1">
                 <label htmlFor={baseDirInputId} className="block text-[11px] font-mono text-slate-400 mb-1">
-                  Parent Base Directory:
+                  Create the stack folder inside:
                 </label>
                 <input
                   id={baseDirInputId}
                   type="text"
                   value={customBaseDir}
                   onChange={(e) => setCustomBaseDir(e.target.value)}
+                  placeholder="/home/you/stacks"
+                  spellCheck={false}
                   className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs font-mono text-slate-200 focus:outline-none focus:border-cyan-400"
                 />
               </div>
@@ -196,7 +210,7 @@ export const CreateStackModal: React.FC<CreateStackModalProps> = ({
 {`services: {}`}
             </pre>
             <p className="text-[11px] font-mono text-slate-400">
-              Once provisioned, you can merge existing standalone containers into this stack or edit it at any time.
+              Add apps to it anytime with its Add apps button.
             </p>
           </div>
 

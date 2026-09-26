@@ -302,6 +302,13 @@ async function startServer() {
   // Save/update user configuration
   app.post('/api/config', (req, res) => {
     try {
+      if (typeof req.body?.stacksDir === 'string') {
+        const dir = req.body.stacksDir.trim().replace(/\/+$/, '');
+        if (dir && !dir.startsWith('/')) {
+          return res.status(400).json({ error: 'The stack location must be a full path starting with /.' });
+        }
+        req.body.stacksDir = dir;
+      }
       const updated = saveConfig(req.body);
       res.json(updated);
     } catch (err) {
@@ -434,10 +441,15 @@ async function startServer() {
         return res.status(400).json({ error: 'A valid stackName is required (at least 2 alphanumeric characters, dashes, or underscores).' });
       }
 
+      // A custom location must be a full path; otherwise we'd silently create it somewhere else
+      if (baseDir !== undefined && baseDir !== null && String(baseDir).trim() !== '' && !String(baseDir).trim().startsWith('/')) {
+        return res.status(400).json({ error: 'The location must be a full path starting with /, like /home/you/stacks.' });
+      }
       const { containers } = await getContainersList();
-      const resolvedBaseDir = baseDir && typeof baseDir === 'string' && baseDir.trim().startsWith('/')
-        ? baseDir.trim()
-        : getDefaultHostStacksBaseDir(containers);
+      const resolvedBaseDir =
+        baseDir && typeof baseDir === 'string' && baseDir.trim().startsWith('/')
+          ? baseDir.trim().replace(/\/+$/, '') || '/'
+          : getDefaultHostStacksBaseDir(containers);
 
       const targetHostDir = path.posix.join(resolvedBaseDir, sanitizedName);
       const composeFilePath = path.posix.join(targetHostDir, 'docker-compose.yml');
@@ -552,7 +564,9 @@ async function startServer() {
         return res.status(404).json({ error: 'None of the selected containers were found (or Manifexus was excluded for system self-protection).' });
       }
 
-      const targetDir = targetDirectory || `/home/ryan/${targetStackName || 'combined-stack'}`;
+      const targetDir =
+        targetDirectory ||
+        path.posix.join(getDefaultHostStacksBaseDir((await getContainersList()).containers), targetStackName || 'combined-stack');
       let existingComposeContent: string | undefined;
 
       // Directive 5: Check if target directory has existing docker-compose.yml for AST mutation
@@ -630,7 +644,9 @@ async function startServer() {
       await executeStreamingPipeline(
         {
           targetStackName: targetStackName || 'combined-stack',
-          targetDirectory: targetDirectory || `/home/ryan/${targetStackName || 'combined-stack'}`,
+          targetDirectory:
+            targetDirectory ||
+            path.posix.join(getDefaultHostStacksBaseDir((await getContainersList()).containers), targetStackName || 'combined-stack'),
           yamlContent: yamlContent || '',
           sourceContainerIds,
           backupData: backupData !== false,
@@ -725,7 +741,9 @@ async function startServer() {
         return res.status(400).json({ error: 'Source container IDs required' });
       }
 
-      const targetDir = targetDirectory || `/home/ryan/${targetStackName || 'combined-stack'}`;
+      const targetDir =
+        targetDirectory ||
+        path.posix.join(getDefaultHostStacksBaseDir((await getContainersList()).containers), targetStackName || 'combined-stack');
       const stackName = targetStackName || 'combined-stack';
       const privs = await checkPrivilegeStatus();
 
