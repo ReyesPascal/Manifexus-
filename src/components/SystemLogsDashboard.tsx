@@ -100,7 +100,16 @@ export const SystemLogsDashboard: React.FC<SystemLogsDashboardProps> = ({ onClos
       const data: LogQueryResult & { success: boolean } = await res.json();
 
       if (data.success) {
-        setLogs(data.logs);
+        // Guarantee unique entries by ID
+        const seenIds = new Set<string>();
+        const dedupedLogs: StructuredLogEntry[] = [];
+        for (const item of data.logs) {
+          if (!seenIds.has(item.id)) {
+            seenIds.add(item.id);
+            dedupedLogs.push(item);
+          }
+        }
+        setLogs(dedupedLogs);
         setMetadata({
           total: data.total,
           filteredCount: data.filteredCount,
@@ -131,7 +140,10 @@ export const SystemLogsDashboard: React.FC<SystemLogsDashboardProps> = ({ onClos
           if (parsed && parsed.id && parsed.timestamp) {
             const newEntry = parsed as StructuredLogEntry;
             setLogs((prev) => {
-              // Prepend if matches current criteria
+              // Deduplicate: If entry is already present in state, skip prepending
+              if (prev.some((l) => l.id === newEntry.id)) {
+                return prev;
+              }
               return [newEntry, ...prev.slice(0, limit - 1)];
             });
             setMetadata((prev) => ({
@@ -528,13 +540,13 @@ export const SystemLogsDashboard: React.FC<SystemLogsDashboardProps> = ({ onClos
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800/60">
-              {logs.map((entry) => {
+              {logs.map((entry, idx) => {
                 const isError = entry.level === 'ERROR' || entry.level === 'CRITICAL';
                 const isWarn = entry.level === 'WARN';
 
                 return (
                   <tr
-                    key={entry.id}
+                    key={`${entry.id}-${idx}`}
                     className={`hover:bg-slate-900/70 transition-colors group ${
                       isError ? 'bg-red-950/15' : isWarn ? 'bg-amber-950/10' : ''
                     }`}

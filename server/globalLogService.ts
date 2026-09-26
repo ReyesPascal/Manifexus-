@@ -368,6 +368,8 @@ class GlobalLogService extends EventEmitter {
         .reverse();
 
       const loaded: StructuredLogEntry[] = [];
+      const seenIds = new Set<string>();
+
       for (const file of files) {
         if (loaded.length >= this.maxMemoryBuffer) break;
         const filePath = path.join(this.logDirectory, file);
@@ -378,7 +380,10 @@ class GlobalLogService extends EventEmitter {
           if (loaded.length >= this.maxMemoryBuffer) break;
           try {
             const parsed = JSON.parse(lines[i]) as StructuredLogEntry;
-            loaded.push(parsed);
+            if (parsed && parsed.id && !seenIds.has(parsed.id)) {
+              seenIds.add(parsed.id);
+              loaded.push(parsed);
+            }
           } catch {
             // Ignore malformed line
           }
@@ -461,7 +466,16 @@ class GlobalLogService extends EventEmitter {
 
     const totalCount = this.memoryBuffer.length;
     const filteredCount = filtered.length;
-    const paginated = filtered.slice(offset, offset + limit);
+
+    // Defensively ensure returned slice is strictly unique by ID
+    const seenSliceIds = new Set<string>();
+    const paginated: StructuredLogEntry[] = [];
+    for (const item of filtered.slice(offset, offset + limit)) {
+      if (!seenSliceIds.has(item.id)) {
+        seenSliceIds.add(item.id);
+        paginated.push(item);
+      }
+    }
 
     const logFiles = this.getLogFilesList();
 
