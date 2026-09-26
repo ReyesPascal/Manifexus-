@@ -20,7 +20,7 @@ import {
   saveMergeHistoryRecord,
 } from './historyService';
 import { readHostFile, writeHostFile, checkHostFileExists, forceRemoveContainer, createHostDirectory } from './hostFsService';
-import { archiveStackData, restoreStackData, runComposeInDir, formatBytes } from './dataBackupService';
+import { archiveStackData, restoreStackData, runComposeInDir, formatBytes, provisionStackFolder } from './dataBackupService';
 
 const execAsync = util.promisify(exec);
 
@@ -422,11 +422,22 @@ export async function executeStreamingPipeline(
         log('[Demo mode] Skipping host changes.', 5);
         return;
       }
-      await createHostDirectory(targetDir);
-      const ok = await writeHostFile(path.posix.join(targetDir, 'docker-compose.yml'), req.yamlContent);
-      if (!ok) throw new Error(`Could not write ${targetDir}/docker-compose.yml.`);
+      // Creates the folder if needed and writes the compose file, verified on the host.
+      // A brand-new stack must not overwrite someone else's compose file in that folder.
+      await provisionStackFolder(targetDir, req.yamlContent, { overwrite: Boolean(preMergeTargetCompose) });
       targetComposeWritten = true;
       log(`Wrote ${targetDir}/docker-compose.yml.`, 5);
+      if (!preMergeTargetCompose) {
+        const { registerCreatedStack } = await import('./stackService');
+        registerCreatedStack({
+          project: req.targetStackName,
+          workingDir: targetDir,
+          configFiles: path.posix.join(targetDir, 'docker-compose.yml'),
+          serviceCount: movingContainers.length,
+          source: 'provisioned',
+        });
+        log(`Created new stack ${req.targetStackName} in ${targetDir}.`, 5);
+      }
       const up = await runComposeInDir(targetDir, 'up -d');
       if (!up) throw new Error(`docker compose up failed in ${targetDir}.`);
       log(`${req.targetStackName} is up.`, 5);

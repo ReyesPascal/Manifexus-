@@ -97,7 +97,8 @@ export async function getSelfContainerId(): Promise<string | null> {
 async function runHelper(
   script: string,
   binds: string[],
-  timeoutMs: number = DEFAULT_HELPER_TIMEOUT_MS
+  timeoutMs: number = DEFAULT_HELPER_TIMEOUT_MS,
+  env: string[] = []
 ): Promise<number> {
   const image = await getBestAvailableImage();
   const backupDir = resolveBackupDir();
@@ -118,6 +119,7 @@ async function runHelper(
     Entrypoint: [],
     User: '0:0', // must read/write files owned by any app user
     Cmd: ['sh', '-c', script],
+    Env: env,
     HostConfig: hostConfig,
   });
   if (!created || !created.Id) {
@@ -186,6 +188,45 @@ export async function removeHostDirectory(hostDir: string): Promise<boolean> {
     `${parent}:/parent`,
   ]);
   return code === 0;
+}
+
+export class StackFolderExistsError extends Error {}
+
+/**
+ * Creates a stack folder on the host and writes its compose file, owned by whoever owns the parent
+ * folder (so the user can edit it without sudo). Verifies the file really landed on disk.
+ * Refuses to overwrite an existing compose file unless `overwrite` is set.
+ */
+export async function provisionStackFolder(
+  hostDir: string,
+  composeText: string,
+  opts: { overwrite?: boolean } = {}
+): Promise<void> {
+  const normalized = path.posix.normalize(hostDir.trim()).replace(/\/+$/, '');
+  if (!normalized.startsWith('/') || normalized.split('/').filter(Boolean).length < 2) {
+    throw new Error(`"${hostDir}" is not a valid folder for a stack.`);
+  }
+  const parent = path.posix.dirname(normalized);
+  const name = shellQuote(path.posix.basename(normalized));
+  const script = [
+    `mkdir -p /parent/${name} || exit 20`,
+    opts.overwrite
+      ? ''
+      : `for f in docker-compose.yml docker-compose.yaml compose.yml compose.yaml; do [ -e /parent/${name}/$f ] && exit 17; done`,
+    `printf '%s' "$COMPOSE_DATA" > /parent/${name}/docker-compose.yml || exit 21`,
+    // Match the owner of the parent folder (e.g. your user rather than root)
+    `chown "$(stat -c %u:%g /parent)" /parent/${name} /parent/${name}/docker-compose.yml 2>/dev/null`,
+    `[ -s /parent/${name}/docker-compose.yml ] || exit 22`,
+  ]
+    .filter(Boolean)
+    .join('\n');
+  const code = await runHelper(script, [`${parent}:/parent`], 2 * 60 * 1000, [`COMPOSE_DATA=${composeText}`]);
+  if (code === 17) {
+    throw new StackFolderExistsError(`${normalized} already has a compose file. Pick another name or folder.`);
+  }
+  if (code !== 0) {
+    throw new Error(`Could not create ${normalized}/docker-compose.yml on the server (exit ${code}).`);
+  }
 }
 
 /** Size in bytes of a host directory or a named volume (0 if missing). */

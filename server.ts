@@ -1,4 +1,9 @@
-import { getStackDataFootprint, getBackupFreeBytes } from './server/dataBackupService';
+import {
+  getStackDataFootprint,
+  getBackupFreeBytes,
+  provisionStackFolder,
+  StackFolderExistsError,
+} from './server/dataBackupService';
 import express from 'express';
 import http from 'http';
 import path from 'path';
@@ -243,6 +248,7 @@ async function startServer() {
       res.json({
         containers: enriched,
         emptyStacks,
+        defaultStacksDir: getDefaultHostStacksBaseDir(containers),
         isDemo,
         dockerVersion,
         os,
@@ -436,12 +442,14 @@ async function startServer() {
       const targetHostDir = path.posix.join(resolvedBaseDir, sanitizedName);
       const composeFilePath = path.posix.join(targetHostDir, 'docker-compose.yml');
 
-      // 1. Provision the absolute path on the physical host using elevated helper
-      await createHostDirectory(targetHostDir);
-
-      // 2. Write baseline docker-compose.yml file directly into that host directory
-      const baselineComposeYaml = `services: {}\n`;
-      const writeOk = await writeHostFile(composeFilePath, baselineComposeYaml);
+      // Create the folder and baseline compose file on the host, verified on disk
+      try {
+        await provisionStackFolder(targetHostDir, 'services: {}\n');
+      } catch (provisionErr) {
+        const status = provisionErr instanceof StackFolderExistsError ? 409 : 500;
+        return res.status(status).json({ error: (provisionErr as Error).message });
+      }
+      const writeOk = true;
 
       const newStack: EmptyComposeStack = {
         project: sanitizedName,

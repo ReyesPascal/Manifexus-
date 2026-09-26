@@ -49,3 +49,35 @@
 ::-webkit-scrollbar-thumb:hover {
   background: #334155;
 }
+
+/* Apple-style inset grouped lists: hairline separators between rows, inset past the leading icon */
+.ios-group > .ios-row + .ios-row::before,
+.ios-group > * + .ios-row::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: var(--ios-inset, 16px);
+  height: 0.5px;
+  background: rgba(84, 84, 88, 0.65);
+  pointer-events: none;
+}
+.ios-group.ios-inset-icon > .ios-row + .ios-row::before {
+  --ios-inset: 58px;
+}
+.ios-group.ios-inset-select > .ios-row + .ios-row::before {
+  --ios-inset: 91px;
+}
+
+@keyframes ios-pop {
+  from { opacity: 0; transform: scale(1.08); }
+  to { opacity: 1; transform: scale(1); }
+}
+@keyframes ios-sheet-in {
+  from { opacity: 0; transform: translateY(12px) scale(0.99); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes ios-push-in {
+  from { opacity: 0; transform: translateX(24px); }
+  to { opacity: 1; transform: translateX(0); }
+}

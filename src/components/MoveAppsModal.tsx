@@ -1,29 +1,33 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  AlertTriangle,
-  ArrowLeft,
-  Check,
-  ChevronDown,
-  Copy,
-  Layers,
-  Loader2,
-  Plus,
-  Search,
-  ShieldCheck,
-  X,
-} from 'lucide-react';
 import { AutomationPrivileges, DeepContainerMetadata, EmptyComposeStack, StackMergePlan } from '../types';
 import { ExecutionPipelineConsole } from './ExecutionPipelineConsole';
+import {
+  Alert,
+  AppTile,
+  Button,
+  Checkmark,
+  FieldRow,
+  Group,
+  IconTile,
+  LinkButton,
+  Row,
+  SectionFooter,
+  SectionHeader,
+  SelectCircle,
+  StackGlyph,
+  Switch,
+  ios,
+} from './ui/ios';
 
 /**
- * Move apps between stacks.
+ * Move apps between stacks (Apple-style sheet).
  *
- * Entry points (each opens this modal already pointed at something):
- *   - Stack header "Add apps"        -> destination fixed to that stack, starts at the app picker
- *   - App card "Move to another stack" -> that app selected, starts at the destination picker
+ * Entry points:
+ *   - Stack "Add apps"               -> destination fixed to that stack, starts at the app list
+ *   - App card "Move to another stack" -> that app selected, starts at the stack list
  *
- * The sentence at the top ("Move <apps> into <stack>") is both the summary and the navigation.
- * Nothing is preselected except the app the user explicitly started from.
+ * Nothing is preselected except the app the user started from. Data is backed up by default;
+ * turning that off needs a confirmation and turns the backup row red.
  */
 
 interface MoveAppsModalProps {
@@ -31,20 +35,18 @@ interface MoveAppsModalProps {
   onClose: () => void;
   containers: DeepContainerMetadata[];
   emptyStacks?: EmptyComposeStack[];
-  /** Open with this stack as the destination (from a stack's "Add apps") */
+  /** Folder new stacks go in by default (reported by the server) */
+  defaultStacksDir?: string;
   initialDestination?: string;
-  /** Open with this app selected (from an app card's "Move") */
   initialAppId?: string;
   privileges?: AutomationPrivileges | null;
   onOpenAutomationModal?: () => void;
   onMoved?: () => void;
 }
 
-type Stage = 'destination' | 'apps' | 'review';
+type Page = 'destination' | 'apps' | 'review' | 'data' | 'compose';
 
-type Destination =
-  | { kind: 'existing'; project: string }
-  | { kind: 'new'; name: string; dir: string; dirEdited: boolean };
+type Destination = { kind: 'existing'; project: string } | { kind: 'new' };
 
 interface StackInfo {
   project: string;
@@ -54,9 +56,6 @@ interface StackInfo {
 
 interface Footprint {
   project: string;
-  directoryBytes: number;
-  volumes: { name: string; bytes: number }[];
-  externalMounts: string[];
   totalBytes: number;
 }
 
@@ -75,7 +74,7 @@ const slugify = (s: string) =>
     .replace(/^-+|-+$/g, '');
 
 function formatBytes(bytes: number): string {
-  if (!bytes || bytes < 1024) return `${bytes || 0} B`;
+  if (!bytes || bytes < 1024) return `${bytes || 0} bytes`;
   const units = ['KB', 'MB', 'GB', 'TB'];
   let v = bytes / 1024;
   let i = 0;
@@ -88,68 +87,29 @@ function formatBytes(bytes: number): string {
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
-/** Small square app icon with a letter fallback, matching the dashboard cards. */
-const AppIcon: React.FC<{ app: DeepContainerMetadata; size?: number }> = ({ app, size = 28 }) => {
-  const [failed, setFailed] = useState(false);
-  const label = (app.customName || app.cleanName || '?').replace(/^\//, '');
-  return (
-    <span
-      className="inline-flex items-center justify-center rounded-lg bg-slate-800/80 border border-slate-700/60 overflow-hidden flex-shrink-0 text-[11px] font-bold text-slate-300"
-      style={{ width: size, height: size }}
-      aria-hidden="true"
-    >
-      {app.iconUrl && !failed ? (
-        <img src={app.iconUrl} alt="" className="w-[70%] h-[70%] object-contain" onError={() => setFailed(true)} />
-      ) : (
-        label.slice(0, 2).toUpperCase()
-      )}
-    </span>
-  );
-};
+/** "a", "a and b", "a, b and c" */
+const listJoin = (items: string[]) =>
+  items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
 
-const Disclosure: React.FC<{ title: string; hint?: string; children: React.ReactNode }> = ({ title, hint, children }) => {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="rounded-xl border border-slate-800">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        aria-expanded={open}
-        className="w-full flex items-center justify-between gap-3 px-4 py-3 text-left text-sm text-slate-300 hover:text-white focus-visible:outline-2 focus-visible:outline-cyan-400 rounded-xl"
-      >
-        <span>
-          {title}
-          {hint && <span className="ml-2 text-slate-500">{hint}</span>}
-        </span>
-        <ChevronDown className={`w-4 h-4 text-slate-500 transition-transform ${open ? 'rotate-180' : ''}`} />
-      </button>
-      {open && <div className="px-4 pb-4">{children}</div>}
-    </div>
-  );
-};
+const appName = (a: DeepContainerMetadata) => (a.customName || a.cleanName || '').replace(/^\//, '');
 
-/** One clickable part of the header sentence (apps or destination). */
-const SentencePart: React.FC<{
-  active: boolean;
-  onClick: () => void;
-  empty: string;
-  children?: React.ReactNode;
-  tone: 'app' | 'stack';
-}> = ({ active, onClick, empty, children, tone }) => (
-  <button
-    type="button"
-    onClick={onClick}
-    aria-current={active ? 'step' : undefined}
-    className={`group inline-flex flex-wrap items-center gap-1.5 min-h-[40px] px-2.5 py-1.5 rounded-xl border text-left transition-colors focus-visible:outline-2 focus-visible:outline-cyan-400 ${
-      active
-        ? tone === 'stack'
-          ? 'border-purple-400/60 bg-purple-500/10'
-          : 'border-cyan-400/60 bg-cyan-500/10'
-        : 'border-slate-700/70 bg-slate-900/60 hover:border-slate-500'
-    }`}
-  >
-    {children || <span className="text-slate-500 italic px-1">{empty}</span>}
-  </button>
+const ShieldGlyph: React.FC<{ off?: boolean }> = ({ off }) => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M12 3 5 6v5c0 4.5 3 8 7 10 4-2 7-5.5 7-10V6l-7-3Z" />
+    {off ? <path d="m4 4 16 16" /> : <path d="m9 12 2 2 4-4" />}
+  </svg>
+);
+
+const BangGlyph: React.FC = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" aria-hidden="true">
+    <path d="M12 6v8M12 18.5v.01" />
+  </svg>
+);
+
+const PlusGlyph: React.FC = () => (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" aria-hidden="true">
+    <path d="M12 5v14M5 12h14" />
+  </svg>
 );
 
 export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
@@ -157,27 +117,29 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
   onClose,
   containers,
   emptyStacks = [],
+  defaultStacksDir,
   initialDestination,
   initialAppId,
   privileges,
   onOpenAutomationModal,
   onMoved,
 }) => {
-  const [stage, setStage] = useState<Stage>('destination');
+  const [page, setPage] = useState<Page>('destination');
   const [destination, setDestination] = useState<Destination | null>(null);
+  const [newName, setNewName] = useState('');
+  const [newDir, setNewDir] = useState('');
+  const [newDirEdited, setNewDirEdited] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
   const [query, setQuery] = useState('');
-  const [newStackName, setNewStackName] = useState('');
-  const [showFolderField, setShowFolderField] = useState(false);
 
   const [plan, setPlan] = useState<StackMergePlan | null>(null);
   const [planLoading, setPlanLoading] = useState(false);
   const [planError, setPlanError] = useState<string | null>(null);
 
   const [backupData, setBackupData] = useState(true);
+  const [confirmNoBackup, setConfirmNoBackup] = useState(false);
   const [footprints, setFootprints] = useState<Footprint[] | null>(null);
   const [freeBytes, setFreeBytes] = useState<number | null>(null);
-  const [footprintLoading, setFootprintLoading] = useState(false);
 
   const [copied, setCopied] = useState(false);
   const [consoleOpen, setConsoleOpen] = useState(false);
@@ -186,7 +148,7 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
   const [consolePayload, setConsolePayload] = useState<Record<string, unknown>>({});
   const [consoleMergeId, setConsoleMergeId] = useState<string | undefined>(undefined);
 
-  const searchRef = useRef<HTMLInputElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
 
   // ---------------------------------------------------------------------------
   // Derived data
@@ -210,8 +172,8 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
   }, [apps, emptyStacks]);
   const stackByName = useMemo(() => new Map(stacks.map((s) => [s.project, s])), [stacks]);
 
-  /** Where new stacks go: the folder most existing stacks share */
-  const defaultParentDir = useMemo(() => {
+  const parentDir = useMemo(() => {
+    if (defaultStacksDir) return defaultStacksDir.replace(/\/+$/, '');
     const counts = new Map<string, number>();
     for (const s of stacks) {
       if (!s.workingDir) continue;
@@ -227,19 +189,27 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
       }
     });
     return best;
-  }, [stacks]);
+  }, [defaultStacksDir, stacks]);
 
-  const destName = destination ? (destination.kind === 'existing' ? destination.project : slugify(destination.name)) : '';
+  const newSlug = slugify(newName);
+  const destName = destination ? (destination.kind === 'existing' ? destination.project : newSlug) : '';
   const destDir =
-    destination?.kind === 'existing'
-      ? stackByName.get(destination.project)?.workingDir
-      : destination?.kind === 'new'
-        ? destination.dir
-        : undefined;
+    destination?.kind === 'existing' ? stackByName.get(destination.project)?.workingDir : destination?.kind === 'new' ? newDir : undefined;
+
+  const newNameError = useMemo(() => {
+    if (destination?.kind !== 'new') return null;
+    if (!newSlug) return 'Enter a name for the new stack.';
+    if (newSlug.length < 2) return 'Use at least 2 letters or numbers.';
+    if (newSlug === 'manifexus') return 'That name is reserved.';
+    if (stackByName.has(newSlug)) return `${newSlug} already exists. Choose it from the list above.`;
+    if (!newDir.trim().startsWith('/')) return 'The location must be a full path, like /home/you/stacks/media.';
+    return null;
+  }, [destination, newSlug, newDir, stackByName]);
+  const destinationReady = Boolean(destination) && !newNameError;
 
   const isInDestination = useCallback(
     (a: DeepContainerMetadata) =>
-      destination?.kind === 'existing' && a.compose?.isCompose && a.compose.project === destination.project,
+      destination?.kind === 'existing' && Boolean(a.compose?.isCompose) && a.compose.project === destination.project,
     [destination]
   );
 
@@ -247,18 +217,6 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
     () => selected.map((id) => appById.get(id)).filter((a): a is DeepContainerMetadata => Boolean(a)),
     [selected, appById]
   );
-
-  const newNameError = useMemo(() => {
-    if (destination?.kind !== 'new') return null;
-    const slug = slugify(destination.name);
-    if (!slug) return 'Give the new stack a name.';
-    if (slug.length < 2) return 'Use at least 2 letters or numbers.';
-    if (stackByName.has(slug)) return `A stack called ${slug} already exists. Pick it from the list instead.`;
-    if (slug === 'manifexus') return 'That name is reserved.';
-    return null;
-  }, [destination, stackByName]);
-
-  const destinationReady = Boolean(destination) && !newNameError;
 
   // ---------------------------------------------------------------------------
   // Open / reset
@@ -271,42 +229,31 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
       setPlanError(null);
       setFootprints(null);
       setBackupData(true);
+      setConfirmNoBackup(false);
       setConsoleOpen(false);
-      setShowFolderField(false);
-      setNewStackName('');
+      setNewName('');
+      setNewDirEdited(false);
+      setNewDir('');
       if (initialDestination && stackByName.has(initialDestination)) {
         setDestination({ kind: 'existing', project: initialDestination });
         setSelected([]);
-        setStage('apps');
+        setPage('apps');
       } else {
         setDestination(null);
         setSelected(initialAppId && appById.has(initialAppId) ? [initialAppId] : []);
-        setStage('destination');
+        setPage('destination');
       }
     }
     wasOpen.current = isOpen;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
 
-  // Esc closes (unless the progress console is open)
+  // Keep the default folder in step with the name until the user edits it
   useEffect(() => {
-    if (!isOpen) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !consoleOpen) onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [isOpen, consoleOpen, onClose]);
+    if (!newDirEdited) setNewDir(`${parentDir}/${newSlug || 'new-stack'}`);
+  }, [newSlug, parentDir, newDirEdited]);
 
-  useEffect(() => {
-    if (!isOpen) return;
-    const t = setTimeout(() => {
-      if (stage === 'apps') searchRef.current?.focus();
-    }, 50);
-    return () => clearTimeout(t);
-  }, [stage, isOpen]);
-
-  // Selecting a destination drops any selected apps that already live there
+  // Apps already in the chosen stack can't be moved there
   useEffect(() => {
     if (destination?.kind === 'existing') {
       setSelected((prev) => prev.filter((id) => {
@@ -316,11 +263,15 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
     }
   }, [destination, appById, isInDestination]);
 
+  useEffect(() => {
+    bodyRef.current?.scrollTo({ top: 0 });
+  }, [page]);
+
   // ---------------------------------------------------------------------------
-  // Review: build the plan and measure the backup
+  // Review data
   // ---------------------------------------------------------------------------
   useEffect(() => {
-    if (!isOpen || stage !== 'review' || !destination || selected.length === 0) return;
+    if (!isOpen || page !== 'review' || !destination || selected.length === 0 || !destDir) return;
     let cancelled = false;
     setPlan(null);
     setPlanError(null);
@@ -338,7 +289,7 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
     })
       .then(async (res) => {
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Could not prepare the move.');
+        if (!res.ok) throw new Error(data.error || 'The move could not be prepared.');
         if (!cancelled) setPlan(data);
       })
       .catch((err) => !cancelled && setPlanError((err as Error).message))
@@ -346,7 +297,8 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [isOpen, stage, destination, selected, destName, destDir]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, page === 'review', destName, destDir, selected.join(',')]);
 
   const involvedStacks = useMemo(() => {
     const list: { project: string; workingDir?: string }[] = [];
@@ -363,9 +315,9 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
   }, [destination, destDir, selectedApps]);
 
   useEffect(() => {
-    if (!isOpen || stage !== 'review' || !backupData || involvedStacks.length === 0) return;
+    if (!isOpen || page !== 'review' || involvedStacks.length === 0) return;
     let cancelled = false;
-    setFootprintLoading(true);
+    setFootprints(null);
     fetch('/api/stacks/data-footprint', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -377,30 +329,28 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
         setFootprints(d.footprints || []);
         setFreeBytes(typeof d.freeBytes === 'number' ? d.freeBytes : null);
       })
-      .catch(() => !cancelled && setFootprints(null))
-      .finally(() => !cancelled && setFootprintLoading(false));
+      .catch(() => !cancelled && setFootprints([]));
     return () => {
       cancelled = true;
     };
-  }, [isOpen, stage, backupData, involvedStacks]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, page === 'review', involvedStacks.map((s) => s.project).join(',')]);
 
   const backupTotal = footprints?.reduce((s, f) => s + f.totalBytes, 0) ?? 0;
   const notEnoughSpace = backupData && freeBytes !== null && footprints !== null && backupTotal > freeBytes;
 
-  // Stacks that lose apps, and whether they end up empty
-  const sourceImpact = useMemo(() => {
-    const bySource = new Map<string, { moving: DeepContainerMetadata[]; staying: DeepContainerMetadata[] }>();
+  const emptiedStacks = useMemo(() => {
+    const out: string[] = [];
+    const bySource = new Map<string, number>();
     for (const a of selectedApps) {
       const p = a.compose?.isCompose ? a.compose.project : undefined;
-      if (!p) continue;
-      if (!bySource.has(p)) {
-        const all = stackByName.get(p)?.apps || [];
-        bySource.set(p, { moving: [], staying: all.filter((x) => !selected.includes(x.id)) });
-      }
-      bySource.get(p)!.moving.push(a);
+      if (p) bySource.set(p, (bySource.get(p) || 0) + 1);
     }
-    return Array.from(bySource.entries()).map(([project, v]) => ({ project, ...v }));
-  }, [selectedApps, stackByName, selected]);
+    bySource.forEach((n, p) => {
+      if ((stackByName.get(p)?.apps.length || 0) === n) out.push(p);
+    });
+    return out;
+  }, [selectedApps, stackByName]);
 
   const portConflicts = plan?.portConflicts?.filter((c) => c.conflict) || [];
   const canRun = Boolean(privileges?.isSocketWritable ?? true);
@@ -408,26 +358,9 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
   // ---------------------------------------------------------------------------
   // Actions
   // ---------------------------------------------------------------------------
-  const toggleApp = (id: string) =>
-    setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  const entryPage: Page = initialDestination ? 'apps' : 'destination';
 
-  const chooseExisting = (project: string) => {
-    setDestination({ kind: 'existing', project });
-  };
-
-  const chooseNew = () => {
-    const name = newStackName;
-    setDestination({ kind: 'new', name, dir: `${defaultParentDir}/${slugify(name) || 'new-stack'}`, dirEdited: false });
-  };
-
-  const updateNewName = (name: string) => {
-    setNewStackName(name);
-    setDestination((d) =>
-      d && d.kind === 'new'
-        ? { ...d, name, dir: d.dirEdited ? d.dir : `${defaultParentDir}/${slugify(name) || 'new-stack'}` }
-        : d
-    );
-  };
+  const toggleApp = (id: string) => setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
 
   const startMove = () => {
     if (!plan) return;
@@ -444,48 +377,90 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
     setConsoleOpen(true);
   };
 
-  const primary = (() => {
-    if (stage === 'destination') {
-      if (selected.length > 0) return { label: 'Review move', disabled: !destinationReady, go: () => setStage('review') };
-      return { label: 'Choose apps', disabled: !destinationReady, go: () => setStage('apps') };
+  const setBackup = (on: boolean) => {
+    if (on) setBackupData(true);
+    else setConfirmNoBackup(true);
+  };
+
+  const back: { label: string; go: () => void } | null = (() => {
+    switch (page) {
+      case 'data':
+      case 'compose':
+        return { label: 'Review', go: () => setPage('review') };
+      case 'review':
+        return { label: 'Apps', go: () => setPage('apps') };
+      case 'apps':
+        return entryPage === 'apps' ? null : { label: 'Stacks', go: () => setPage('destination') };
+      case 'destination':
+        return entryPage === 'destination' ? null : { label: 'Apps', go: () => setPage('apps') };
+      default:
+        return null;
     }
-    if (stage === 'apps') {
-      if (!destination) return { label: 'Choose a stack', disabled: selected.length === 0, go: () => setStage('destination') };
-      return { label: 'Review move', disabled: selected.length === 0, go: () => setStage('review') };
-    }
-    return {
-      label: planLoading ? 'Preparing…' : `Move ${plural(selected.length, 'app')}`,
-      disabled: planLoading || !plan || Boolean(planError) || !canRun,
-      go: startMove,
-    };
   })();
 
-  const back = (() => {
-    if (stage === 'review') return () => setStage('apps');
-    if (stage === 'apps' && !initialDestination) return () => setStage('destination');
-    if (stage === 'destination' && initialDestination) return () => setStage('apps');
+  const primary = (() => {
+    if (page === 'destination') {
+      return {
+        label: 'Next',
+        disabled: !destinationReady,
+        go: () => setPage(selected.length > 0 ? 'review' : 'apps'),
+      };
+    }
+    if (page === 'apps') {
+      return {
+        label: 'Next',
+        disabled: selected.length === 0,
+        go: () => setPage(destinationReady ? 'review' : 'destination'),
+      };
+    }
+    if (page === 'review') {
+      return {
+        label: planLoading ? 'Preparing…' : `Move ${plural(selected.length, 'App')}`,
+        disabled: planLoading || !plan || Boolean(planError) || !canRun,
+        go: startMove,
+      };
+    }
     return null;
   })();
+
+  const titles: Record<Page, string> = {
+    destination: 'Choose a Stack',
+    apps: 'Choose Apps',
+    review: 'Review',
+    data: 'Data Locations',
+    compose: 'Compose File',
+  };
+  const title = titles[page as Page];
+
+  // Esc goes back, or closes on the first page (alerts handle their own Esc)
+  useEffect(() => {
+    if (!isOpen || consoleOpen || confirmNoBackup) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (back) back.go();
+      else onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isOpen, consoleOpen, confirmNoBackup, back, onClose]);
 
   if (!isOpen) return null;
 
   // ---------------------------------------------------------------------------
-  // Render helpers
+  // Pieces
   // ---------------------------------------------------------------------------
   const filterApp = (a: DeepContainerMetadata) => {
     const q = query.trim().toLowerCase();
     if (!q) return true;
-    return [a.cleanName, a.customName, a.image, a.compose?.project, a.compose?.service]
-      .filter(Boolean)
-      .some((v) => String(v).toLowerCase().includes(q));
+    return [a.cleanName, a.customName, a.image, a.compose?.project].filter(Boolean).some((v) => String(v).toLowerCase().includes(q));
   };
 
   const appGroups = (() => {
-    const groups: { key: string; title: string; path?: string; apps: DeepContainerMetadata[] }[] = [];
+    const groups: { key: string; title: string; apps: DeepContainerMetadata[] }[] = [];
     for (const s of stacks) {
       if (destination?.kind === 'existing' && s.project === destination.project) continue;
       const list = s.apps.filter(filterApp);
-      if (list.length) groups.push({ key: s.project, title: s.project, path: s.workingDir, apps: list });
+      if (list.length) groups.push({ key: s.project, title: s.project, apps: list });
     }
     const loose = apps.filter((a) => !(a.compose?.isCompose && a.compose.project)).filter(filterApp);
     if (loose.length) groups.push({ key: '__standalone', title: 'Not in a stack', apps: loose });
@@ -493,565 +468,440 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
   })();
   const alreadyHere = destination?.kind === 'existing' ? stackByName.get(destination.project)?.apps.length || 0 : 0;
 
+  /** The summary under the title: "qbittorrent and lidarr → utilities-stack" */
+  const summary = page === 'destination' || page === 'apps' || page === 'review' ? (
+    <p className="mt-1 text-[13px] text-center truncate px-10" style={{ color: ios.secondary }}>
+      <button
+        type="button"
+        onClick={() => setPage('apps')}
+        className="hover:underline underline-offset-2 rounded focus-visible:outline-2 focus-visible:outline-[#0A84FF]"
+        style={{ color: selectedApps.length ? ios.label : ios.tertiary }}
+      >
+        {selectedApps.length === 0
+          ? 'No apps yet'
+          : selectedApps.length <= 2
+            ? listJoin(selectedApps.map(appName))
+            : `${appName(selectedApps[0])} and ${selectedApps.length - 1} more`}
+      </button>
+      <span className="mx-1.5" aria-hidden="true">→</span>
+      <span className="sr-only">into</span>
+      <button
+        type="button"
+        onClick={() => setPage('destination')}
+        className="hover:underline underline-offset-2 rounded focus-visible:outline-2 focus-visible:outline-[#0A84FF]"
+        style={{ color: destName ? ios.purple : ios.tertiary }}
+      >
+        {destName || 'No stack yet'}
+      </button>
+    </p>
+  ) : null;
+
   // ---------------------------------------------------------------------------
-  // UI
+  // Pages
+  // ---------------------------------------------------------------------------
+  const destinationPage = (
+    <div className="space-y-7">
+      <section>
+        <SectionHeader>Stacks</SectionHeader>
+        <Group className="ios-inset-icon">
+          {stacks.map((s) => {
+            const chosen = destination?.kind === 'existing' && destination.project === s.project;
+            const current = selectedApps.length > 0 && selectedApps.every((a) => a.compose?.isCompose && a.compose.project === s.project);
+            return (
+              <Row
+                key={s.project}
+                onClick={() => setDestination({ kind: 'existing', project: s.project })}
+                disabled={current}
+                role="radio"
+                ariaChecked={chosen}
+                leading={
+                  <IconTile color={ios.purple}>
+                    <StackGlyph />
+                  </IconTile>
+                }
+                title={s.project}
+                trailing={
+                  <>
+                    <span className="text-[15px]">{current ? 'Current' : s.apps.length === 0 ? 'Empty' : plural(s.apps.length, 'app')}</span>
+                    <span className="w-[15px] flex justify-center">{chosen && <Checkmark />}</span>
+                  </>
+                }
+              />
+            );
+          })}
+        </Group>
+      </section>
+
+      <section>
+        {destination?.kind === 'new' ? (
+          <>
+            <SectionHeader>New Stack</SectionHeader>
+            <Group>
+              <FieldRow id="new-stack-name" label="Name" value={newName} onChange={setNewName} placeholder="media" autoFocus />
+              <FieldRow
+                id="new-stack-dir"
+                label="Location"
+                value={newDir}
+                mono
+                onChange={(v) => {
+                  setNewDir(v);
+                  setNewDirEdited(true);
+                }}
+              />
+            </Group>
+            {newNameError && newName ? (
+              <SectionFooter>
+                <span style={{ color: ios.orange }}>{newNameError}</span>
+              </SectionFooter>
+            ) : (
+              <SectionFooter>The folder and its compose file are created on the server when you move apps into it.</SectionFooter>
+            )}
+          </>
+        ) : (
+          <Group className="ios-inset-icon">
+            <Row
+              onClick={() => setDestination({ kind: 'new' })}
+              leading={
+                <IconTile color={ios.blue}>
+                  <PlusGlyph />
+                </IconTile>
+              }
+              title="New Stack"
+              titleColor={ios.blue}
+            />
+          </Group>
+        )}
+      </section>
+    </div>
+  );
+
+  const appsPage = (
+    <div className="space-y-6">
+      <div className="relative">
+        <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={ios.secondary} strokeWidth="2.4" strokeLinecap="round" aria-hidden="true">
+          <circle cx="11" cy="11" r="7" />
+          <path d="m20 20-3.5-3.5" />
+        </svg>
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search"
+          aria-label="Search apps"
+          className="w-full h-9 pl-8 pr-3 rounded-[10px] text-[15px] text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0A84FF] placeholder:text-[rgba(235,235,245,0.6)]"
+          style={{ background: ios.fill }}
+        />
+      </div>
+
+      {appGroups.length === 0 && (
+        <p className="text-[15px] text-center py-10" style={{ color: ios.secondary }}>
+          {query ? `No apps match “${query}”.` : 'There are no other apps to move.'}
+        </p>
+      )}
+
+      {appGroups.map((g) => {
+        const ids = g.apps.map((a) => a.id);
+        const allOn = ids.every((id) => selected.includes(id));
+        return (
+          <section key={g.key}>
+            <SectionHeader
+              action={
+                g.apps.length > 1 ? (
+                  <LinkButton
+                    onClick={() =>
+                      setSelected((prev) => (allOn ? prev.filter((id) => !ids.includes(id)) : Array.from(new Set([...prev, ...ids]))))
+                    }
+                  >
+                    {allOn ? 'Deselect All' : 'Select All'}
+                  </LinkButton>
+                ) : undefined
+              }
+            >
+              {g.title}
+            </SectionHeader>
+            <Group className="ios-inset-select">
+              {g.apps.map((a) => {
+                const on = selected.includes(a.id);
+                return (
+                  <Row
+                    key={a.id}
+                    onClick={() => toggleApp(a.id)}
+                    role="checkbox"
+                    ariaChecked={on}
+                    leading={
+                      <span className="flex items-center gap-3">
+                        <SelectCircle on={on} />
+                        <AppTile name={appName(a)} iconUrl={a.iconUrl} />
+                      </span>
+                    }
+                    title={appName(a)}
+                    trailing={a.state !== 'running' ? <span style={{ color: ios.tertiary }}>Stopped</span> : undefined}
+                  />
+                );
+              })}
+            </Group>
+          </section>
+        );
+      })}
+
+      {alreadyHere > 0 && !query && (
+        <p className="px-4 text-[13px]" style={{ color: ios.secondary }}>
+          {plural(alreadyHere, 'app')} already in {destName} {alreadyHere === 1 ? 'isn’t' : 'aren’t'} shown.
+        </p>
+      )}
+    </div>
+  );
+
+  const summaryFooter = (() => {
+    const parts: string[] = [`${selectedApps.length === 1 ? 'It restarts' : 'They restart'} once and keep${selectedApps.length === 1 ? 's' : ''} ${selectedApps.length === 1 ? 'its' : 'their'} data where it is.`];
+    if (destination?.kind === 'new') parts.push(`A new folder is created at ${destDir}.`);
+    if (emptiedStacks.length) parts.push(`${listJoin(emptiedStacks)} will be empty afterward.`);
+    return parts.join(' ');
+  })();
+
+  const reviewPage = (
+    <div className="space-y-7">
+      <section>
+        <SectionHeader>
+          Moving to {destName}
+          {destination?.kind === 'new' ? ' (new)' : ''}
+        </SectionHeader>
+        <Group className="ios-inset-icon">
+          {selectedApps.map((a) => (
+            <Row
+              key={a.id}
+              leading={<AppTile name={appName(a)} iconUrl={a.iconUrl} />}
+              title={appName(a)}
+              trailing={<span className="text-[15px]">{a.compose?.isCompose ? `from ${a.compose.project}` : 'standalone'}</span>}
+            />
+          ))}
+        </Group>
+        <SectionFooter>{summaryFooter}</SectionFooter>
+      </section>
+
+      {portConflicts.length > 0 && (
+        <section>
+          <Group className="ios-inset-icon">
+            {portConflicts.map((c) => (
+              <Row
+                key={c.port}
+                leading={
+                  <IconTile color={ios.orange}>
+                    <BangGlyph />
+                  </IconTile>
+                }
+                title={`Port ${c.port} is used twice`}
+                subtitle={`${listJoin(c.services)} can’t both use it. One won’t start until you change a port.`}
+              />
+            ))}
+          </Group>
+        </section>
+      )}
+
+      <section>
+        <Group className="ios-inset-icon">
+          <Row
+            leading={
+              <IconTile color={backupData ? ios.green : ios.red}>
+                <ShieldGlyph off={!backupData} />
+              </IconTile>
+            }
+            title={backupData ? 'Back Up Data First' : 'Backup Off'}
+            titleColor={backupData ? ios.label : ios.red}
+            trailing={<Switch checked={backupData} onChange={setBackup} label="Back up data first" />}
+          />
+        </Group>
+        {backupData ? (
+          <SectionFooter>
+            {footprints === null
+              ? 'Measuring stack folders and volumes…'
+              : `Saves about ${formatBytes(backupTotal)} from ${plural(footprints.length, 'stack')}${freeBytes !== null ? `. ${formatBytes(freeBytes)} free` : ''}.`}
+            {notEnoughSpace && (
+              <span className="block mt-1" style={{ color: ios.orange }}>
+                There may not be enough space for this backup.
+              </span>
+            )}
+          </SectionFooter>
+        ) : (
+          <SectionFooter tone="danger">
+            App data won’t be backed up. If something goes wrong, only the compose files can be restored.{' '}
+            <LinkButton onClick={() => setBackupData(true)}>Turn On Backup</LinkButton>
+          </SectionFooter>
+        )}
+      </section>
+
+      <section>
+        <Group>
+          <Row
+            onClick={() => setPage('data')}
+            disabled={!plan}
+            title="Data Locations"
+            trailing={plan ? <span>{plan.volumeSafetyAudit?.length || 0}</span> : undefined}
+            chevron
+          />
+          <Row onClick={() => setPage('compose')} disabled={!plan} title="Compose File" chevron />
+        </Group>
+      </section>
+
+      {!canRun && (
+        <section>
+          <Group className="ios-inset-icon">
+            <Row
+              leading={
+                <IconTile color={ios.orange}>
+                  <BangGlyph />
+                </IconTile>
+              }
+              title="Docker access needed"
+              subtitle="Manifexus needs write access to Docker to move apps."
+              trailing={onOpenAutomationModal ? <LinkButton onClick={onOpenAutomationModal}>Set Up</LinkButton> : undefined}
+            />
+          </Group>
+        </section>
+      )}
+
+      {planError && (
+        <p role="alert" className="px-4 text-[13px]" style={{ color: ios.red }}>
+          {planError}
+        </p>
+      )}
+    </div>
+  );
+
+  const dataPage = plan && (
+    <div className="space-y-7">
+      <section>
+        <Group>
+          {(plan.volumeSafetyAudit || []).map((v, i) => (
+            <Row
+              key={`${v.service}-${i}`}
+              title={
+                <>
+                  {v.service}
+                  <span style={{ color: ios.secondary }}> · {v.type === 'named_volume' ? 'volume' : 'folder'}</span>
+                </>
+              }
+              subtitle={
+                <span className="font-mono text-[12px]">
+                  {v.source} <span style={{ color: ios.tertiary }}>→</span> {v.destination}
+                </span>
+              }
+              trailing={v.verdict === 'requires_migration' ? <span style={{ color: ios.orange }}>Check</span> : undefined}
+            />
+          ))}
+        </Group>
+        <SectionFooter>Moved apps keep using these same locations. Nothing is copied or deleted.</SectionFooter>
+      </section>
+    </div>
+  );
+
+  const composePage = plan && (
+    <section>
+      <SectionHeader
+        action={
+          <LinkButton
+            onClick={() => {
+              navigator.clipboard.writeText(plan.generatedComposeYaml);
+              setCopied(true);
+              setTimeout(() => setCopied(false), 2000);
+            }}
+          >
+            {copied ? 'Copied' : 'Copy'}
+          </LinkButton>
+        }
+      >
+        {destDir}/docker-compose.yml
+      </SectionHeader>
+      <Group>
+        <pre className="p-4 text-[12px] leading-[18px] font-mono overflow-x-auto" style={{ color: ios.secondary }}>
+          {plan.generatedComposeYaml}
+        </pre>
+      </Group>
+    </section>
+  );
+
+  const content =
+    page === 'destination' ? destinationPage : page === 'apps' ? appsPage : page === 'review' ? reviewPage : page === 'data' ? dataPage : composePage;
+
+  // ---------------------------------------------------------------------------
+  // Sheet
   // ---------------------------------------------------------------------------
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-6 bg-black/70 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-6 bg-black/55"
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
+        if (e.target === e.currentTarget && !confirmNoBackup) onClose();
       }}
+      style={{ fontFamily: ios.font }}
     >
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="move-apps-title"
-        className="w-full sm:max-w-3xl h-[92vh] sm:h-[min(820px,88vh)] flex flex-col bg-[#0d1220] border border-slate-800 sm:rounded-2xl rounded-t-2xl shadow-2xl shadow-black/60 text-slate-200"
+        className="w-full sm:max-w-[600px] h-[94vh] sm:h-[min(760px,88vh)] flex flex-col rounded-t-[14px] sm:rounded-[14px] overflow-hidden motion-safe:animate-[ios-sheet-in_220ms_ease-out]"
+        style={{ background: ios.sheet, boxShadow: '0 30px 80px rgba(0,0,0,0.55)', WebkitFontSmoothing: 'antialiased' }}
       >
-        {/* Header: the move sentence */}
-        <div className="px-5 sm:px-7 pt-5 pb-4 border-b border-slate-800/80">
-          <div className="flex items-start justify-between gap-4">
-            <h2 id="move-apps-title" className="text-lg font-semibold text-white">
-              Move apps
-            </h2>
-            <button
-              type="button"
-              onClick={onClose}
-              aria-label="Close"
-              className="-mr-2 -mt-1 p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 focus-visible:outline-2 focus-visible:outline-cyan-400"
-            >
-              <X className="w-5 h-5" />
-            </button>
-          </div>
-
-          <div className="mt-3 flex flex-wrap items-center gap-x-2.5 gap-y-2 text-[15px] text-slate-400">
-            <span>Move</span>
-            <SentencePart tone="app" active={stage === 'apps'} onClick={() => setStage('apps')} empty="choose apps">
-              {selectedApps.length > 0 &&
-                (selectedApps.length <= 3 ? (
-                  selectedApps.map((a) => (
-                    <span key={a.id} className="inline-flex items-center gap-1.5 pl-1 pr-2 py-0.5 rounded-lg bg-slate-800 text-slate-100 text-sm">
-                      <AppIcon app={a} size={20} />
-                      {a.customName || a.cleanName}
-                    </span>
-                  ))
-                ) : (
-                  <span className="inline-flex items-center gap-1.5 px-2 py-0.5 text-slate-100 text-sm">
-                    <span className="flex -space-x-1.5">
-                      {selectedApps.slice(0, 4).map((a) => (
-                        <AppIcon key={a.id} app={a} size={20} />
-                      ))}
-                    </span>
-                    {plural(selectedApps.length, 'app')}
-                  </span>
-                ))}
-            </SentencePart>
-            <span>into</span>
-            <SentencePart
-              tone="stack"
-              active={stage === 'destination'}
-              onClick={() => setStage('destination')}
-              empty="choose a stack"
-            >
-              {destination && destName && (
-                <span className="inline-flex items-center gap-1.5 px-1.5 text-sm text-slate-100">
-                  <Layers className="w-4 h-4 text-purple-400" />
-                  {destName}
-                  {destination.kind === 'new' && (
-                    <span className="text-[11px] px-1.5 py-0.5 rounded-md bg-purple-500/15 text-purple-300">new</span>
-                  )}
-                </span>
-              )}
-            </SentencePart>
-          </div>
-        </div>
-
-        {/* Body */}
-        <div className="flex-1 overflow-y-auto px-5 sm:px-7 py-5">
-          {/* ------------------------------ Destination ------------------------------ */}
-          {stage === 'destination' && (
-            <section aria-labelledby="dest-heading" className="space-y-4">
-              <div>
-                <h3 id="dest-heading" className="text-base font-semibold text-white">
-                  Where should {selectedApps.length === 1 ? (selectedApps[0].customName || selectedApps[0].cleanName) : 'they'} go?
-                </h3>
-                <p className="text-sm text-slate-400 mt-1">Pick a stack, or start a new one.</p>
-              </div>
-
-              <ul className="space-y-2" role="list">
-                {stacks.map((s) => {
-                  const chosen = destination?.kind === 'existing' && destination.project === s.project;
-                  const allAlreadyHere =
-                    selectedApps.length > 0 && selectedApps.every((a) => a.compose?.isCompose && a.compose.project === s.project);
-                  return (
-                    <li key={s.project}>
-                      <button
-                        type="button"
-                        disabled={allAlreadyHere}
-                        onClick={() => chooseExisting(s.project)}
-                        aria-pressed={chosen}
-                        className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl border text-left transition-colors focus-visible:outline-2 focus-visible:outline-purple-400 ${
-                          chosen
-                            ? 'border-purple-400/70 bg-purple-500/10'
-                            : allAlreadyHere
-                              ? 'border-slate-800 opacity-45 cursor-not-allowed'
-                              : 'border-slate-800 hover:border-slate-600 hover:bg-slate-900/60'
-                        }`}
-                      >
-                        <span
-                          className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${
-                            chosen ? 'bg-purple-500/20 text-purple-300' : 'bg-slate-800/80 text-purple-400/80'
-                          }`}
-                        >
-                          <Layers className="w-[18px] h-[18px]" />
-                        </span>
-                        <span className="min-w-0 flex-1">
-                          <span className="flex items-center gap-2">
-                            <span className="text-[15px] font-medium text-slate-100 truncate">{s.project}</span>
-                            <span className="text-xs text-slate-500 flex-shrink-0">
-                              {s.apps.length === 0 ? 'empty' : plural(s.apps.length, 'app')}
-                            </span>
-                          </span>
-                          {s.workingDir && (
-                            <span className="block text-xs font-mono text-slate-500 truncate mt-0.5">{s.workingDir}</span>
-                          )}
-                        </span>
-                        {allAlreadyHere ? (
-                          <span className="text-xs text-slate-500">Already here</span>
-                        ) : (
-                          <span
-                            className={`w-5 h-5 rounded-full border flex items-center justify-center flex-shrink-0 ${
-                              chosen ? 'bg-purple-400 border-purple-400 text-slate-950' : 'border-slate-600'
-                            }`}
-                          >
-                            {chosen && <Check className="w-3.5 h-3.5" strokeWidth={3} />}
-                          </span>
-                        )}
-                      </button>
-                    </li>
-                  );
-                })}
-
-                {/* New stack */}
-                <li>
-                  {destination?.kind === 'new' ? (
-                    <div className="px-4 py-4 rounded-xl border border-purple-400/70 bg-purple-500/10 space-y-3">
-                      <label htmlFor="new-stack-name" className="block text-sm font-medium text-slate-100">
-                        New stack name
-                      </label>
-                      <input
-                        id="new-stack-name"
-                        autoFocus
-                        value={newStackName}
-                        onChange={(e) => updateNewName(e.target.value)}
-                        placeholder="e.g. media"
-                        autoComplete="off"
-                        spellCheck={false}
-                        aria-invalid={Boolean(newNameError && newStackName)}
-                        aria-describedby="new-stack-help"
-                        className="w-full px-3.5 py-2.5 rounded-lg bg-slate-950 border border-slate-700 text-white text-[15px] placeholder:text-slate-600 focus:border-purple-400 focus:outline-none"
-                      />
-                      <p id="new-stack-help" className={`text-xs ${newNameError && newStackName ? 'text-amber-300' : 'text-slate-500'}`}>
-                        {newNameError && newStackName ? (
-                          newNameError
-                        ) : (
-                          <>
-                            Created in <span className="font-mono text-slate-400">{destination.dir}</span>{' '}
-                            {!showFolderField && (
-                              <button
-                                type="button"
-                                onClick={() => setShowFolderField(true)}
-                                className="text-purple-300 hover:text-purple-200 underline underline-offset-2"
-                              >
-                                Change folder
-                              </button>
-                            )}
-                          </>
-                        )}
-                      </p>
-                      {showFolderField && (
-                        <div>
-                          <label htmlFor="new-stack-dir" className="block text-xs text-slate-400 mb-1">
-                            Folder on the server
-                          </label>
-                          <input
-                            id="new-stack-dir"
-                            value={destination.dir}
-                            onChange={(e) =>
-                              setDestination({ ...destination, dir: e.target.value, dirEdited: true })
-                            }
-                            spellCheck={false}
-                            className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-slate-200 text-sm font-mono focus:border-purple-400 focus:outline-none"
-                          />
-                        </div>
-                      )}
-                    </div>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={chooseNew}
-                      className="w-full flex items-center gap-3 px-4 py-3 rounded-xl border border-dashed border-slate-700 text-left text-slate-300 hover:border-purple-400/60 hover:text-white transition-colors focus-visible:outline-2 focus-visible:outline-purple-400"
-                    >
-                      <span className="w-9 h-9 rounded-lg flex items-center justify-center bg-slate-800/60 text-purple-300">
-                        <Plus className="w-[18px] h-[18px]" />
-                      </span>
-                      <span className="text-[15px]">New stack</span>
-                    </button>
-                  )}
-                </li>
-              </ul>
-            </section>
-          )}
-
-          {/* --------------------------------- Apps --------------------------------- */}
-          {stage === 'apps' && (
-            <section aria-labelledby="apps-heading" className="space-y-4">
-              <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3">
-                <div>
-                  <h3 id="apps-heading" className="text-base font-semibold text-white">
-                    {destination ? `Which apps should move into ${destName}?` : 'Which apps do you want to move?'}
-                  </h3>
-                  <p className="text-sm text-slate-400 mt-1">
-                    Other apps in their current stacks keep running.
-                  </p>
-                </div>
-                {selected.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => setSelected([])}
-                    className="self-start sm:self-auto text-sm text-slate-400 hover:text-white"
-                  >
-                    Clear selection
-                  </button>
-                )}
-              </div>
-
-              <div className="relative">
-                <Search className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-                <input
-                  ref={searchRef}
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Search apps, images or stacks"
-                  aria-label="Search apps"
-                  className="w-full pl-10 pr-3 py-2.5 rounded-xl bg-slate-950/70 border border-slate-800 text-[15px] text-white placeholder:text-slate-600 focus:border-cyan-500/70 focus:outline-none"
-                />
-              </div>
-
-              {appGroups.length === 0 && (
-                <p className="text-sm text-slate-500 py-8 text-center">
-                  {query ? `No apps match “${query}”.` : 'There are no other apps to move.'}
-                </p>
-              )}
-
-              <div className="space-y-5">
-                {appGroups.map((g) => {
-                  const ids = g.apps.map((a) => a.id);
-                  const allOn = ids.every((id) => selected.includes(id));
-                  return (
-                    <fieldset key={g.key}>
-                      <div className="flex items-baseline justify-between gap-3 mb-2">
-                        <legend className="flex items-baseline gap-2 min-w-0">
-                          <span className="text-sm font-medium text-slate-300">{g.title}</span>
-                          {g.path && <span className="text-xs font-mono text-slate-600 truncate">{g.path}</span>}
-                        </legend>
-                        {g.apps.length > 1 && (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setSelected((prev) =>
-                                allOn ? prev.filter((id) => !ids.includes(id)) : Array.from(new Set([...prev, ...ids]))
-                              )
-                            }
-                            className="text-xs text-cyan-300/90 hover:text-cyan-200 flex-shrink-0"
-                          >
-                            {allOn ? 'Deselect all' : 'Select all'}
-                          </button>
-                        )}
-                      </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                        {g.apps.map((a) => {
-                          const on = selected.includes(a.id);
-                          const port = a.ports?.find((p) => p.publicPort)?.publicPort;
-                          return (
-                            <label
-                              key={a.id}
-                              className={`flex items-center gap-3 px-3 py-2.5 rounded-xl border cursor-pointer transition-colors has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-cyan-400 ${
-                                on ? 'border-cyan-400/60 bg-cyan-500/[0.07]' : 'border-slate-800 hover:border-slate-600'
-                              }`}
-                            >
-                              <input type="checkbox" className="sr-only" checked={on} onChange={() => toggleApp(a.id)} />
-                              <span
-                                aria-hidden="true"
-                                className={`w-[18px] h-[18px] rounded-md border flex items-center justify-center flex-shrink-0 ${
-                                  on ? 'bg-cyan-400 border-cyan-400 text-slate-950' : 'border-slate-600'
-                                }`}
-                              >
-                                {on && <Check className="w-3 h-3" strokeWidth={3.5} />}
-                              </span>
-                              <AppIcon app={a} />
-                              <span className="min-w-0 flex-1">
-                                <span className="flex items-center gap-2">
-                                  <span className="text-[15px] text-slate-100 truncate">{a.customName || a.cleanName}</span>
-                                  <span
-                                    className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${a.state === 'running' ? 'bg-emerald-400' : 'bg-slate-600'}`}
-                                    title={a.state === 'running' ? 'Running' : 'Stopped'}
-                                  />
-                                </span>
-                                <span className="block text-xs font-mono text-slate-500 truncate">
-                                  {a.image}
-                                  {port ? ` · :${port}` : ''}
-                                </span>
-                              </span>
-                            </label>
-                          );
-                        })}
-                      </div>
-                    </fieldset>
-                  );
-                })}
-              </div>
-
-              {alreadyHere > 0 && !query && (
-                <p className="text-xs text-slate-500">
-                  {plural(alreadyHere, 'app')} already in {destName} {alreadyHere === 1 ? 'is' : 'are'} not listed.
-                </p>
-              )}
-            </section>
-          )}
-
-          {/* -------------------------------- Review -------------------------------- */}
-          {stage === 'review' && (
-            <section aria-label="Review the move" className="space-y-5">
-
-              {/* What moves */}
-              <div className="rounded-xl border border-slate-800 divide-y divide-slate-800/80">
-                {selectedApps.map((a) => {
-                  const from = a.compose?.isCompose ? a.compose.project : 'not in a stack';
-                  return (
-                    <div key={a.id} className="flex items-center gap-3 px-4 py-3">
-                      <AppIcon app={a} size={32} />
-                      <div className="min-w-0 flex-1">
-                        <div className="text-[15px] text-slate-100 truncate">{a.customName || a.cleanName}</div>
-                        <div className="text-xs text-slate-500 truncate">
-                          from <span className="text-slate-300">{from}</span>
-                        </div>
-                      </div>
-                      <div className="text-xs font-mono text-slate-500 hidden sm:block">
-                        {a.ports
-                          ?.filter((p) => p.publicPort)
-                          .slice(0, 3)
-                          .map((p) => `:${p.publicPort}`)
-                          .join(' ')}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-
-              {/* What else happens */}
-              <ul className="space-y-2.5 text-sm text-slate-300" role="list">
-                <li className="flex gap-2.5">
-                  <Check className="w-4 h-4 text-emerald-400 mt-0.5 flex-shrink-0" />
-                  <span>
-                    {destination?.kind === 'new' ? (
-                      <>
-                        A new stack <b className="text-white font-medium">{destName}</b> is created in{' '}
-                        <span className="font-mono text-slate-400">{destDir}</span>.
-                      </>
-                    ) : (
-                      <>
-                        The apps are added to <b className="text-white font-medium">{destName}</b>’s compose file. Its current apps are not
-                        changed.
-                      </>
-                    )}
-                  </span>
-                </li>
-                <li className="flex gap-2.5">
-                  <Check className="w-4 h-4 text-emerald-400 mt-0.5 flex-shrink-0" />
-                  <span>Each app keeps using its current data where it is. Nothing is copied or deleted.</span>
-                </li>
-                {sourceImpact.map((s) =>
-                  s.staying.length === 0 ? (
-                    <li key={s.project} className="flex gap-2.5">
-                      <AlertTriangle className="w-4 h-4 text-amber-400 mt-0.5 flex-shrink-0" />
-                      <span>
-                        <b className="text-white font-medium">{s.project}</b> will have no apps left. It stays as an empty stack you can
-                        reuse or delete.
-                      </span>
-                    </li>
-                  ) : (
-                    <li key={s.project} className="flex gap-2.5">
-                      <Check className="w-4 h-4 text-emerald-400 mt-0.5 flex-shrink-0" />
-                      <span>
-                        In <b className="text-white font-medium">{s.project}</b>,{' '}
-                        {s.staying.map((x) => x.customName || x.cleanName).join(', ')} keep{s.staying.length === 1 ? 's' : ''} running.
-                      </span>
-                    </li>
-                  )
-                )}
-                <li className="flex gap-2.5">
-                  <Check className="w-4 h-4 text-emerald-400 mt-0.5 flex-shrink-0" />
-                  <span>Moved apps restart once. You can undo the whole move from History.</span>
-                </li>
-              </ul>
-
-              {portConflicts.length > 0 && (
-                <div className="rounded-xl border border-amber-500/40 bg-amber-500/[0.06] px-4 py-3 text-sm text-amber-100">
-                  <div className="flex items-center gap-2 font-medium text-amber-300">
-                    <AlertTriangle className="w-4 h-4" />
-                    {portConflicts.length === 1 ? 'Two apps use the same port' : 'Some apps use the same ports'}
-                  </div>
-                  <ul className="mt-1.5 space-y-1 text-amber-100/80">
-                    {portConflicts.map((c) => (
-                      <li key={c.port}>
-                        Port <span className="font-mono">{c.port}</span>: {c.services.join(', ')}.{' '}
-                        {c.recommendation ? c.recommendation : 'Only one of them can start until one port is changed.'}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-
-              {/* Backup */}
-              <div className={`rounded-xl border px-4 py-3.5 ${backupData ? 'border-emerald-500/30 bg-emerald-500/[0.04]' : 'border-slate-800'}`}>
-                <label className="flex items-start gap-3 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={backupData}
-                    onChange={(e) => setBackupData(e.target.checked)}
-                    className="mt-1 w-4 h-4 accent-emerald-400"
-                  />
-                  <span className="flex-1 min-w-0">
-                    <span className="flex items-center gap-2 text-[15px] text-slate-100">
-                      <ShieldCheck className="w-4 h-4 text-emerald-400" />
-                      Back up app data first
-                    </span>
-                    <span className="block text-sm text-slate-400 mt-1">
-                      {!backupData ? (
-                        'Compose files are still saved, so the move can be undone. App data is not copied.'
-                      ) : footprintLoading || !footprints ? (
-                        <span className="inline-flex items-center gap-2">
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" /> Measuring stack folders and volumes…
-                        </span>
-                      ) : (
-                        <>
-                          Saves {footprints.length === 1 ? 'the stack folder' : 'the stack folders'} and volumes of{' '}
-                          {footprints.map((f) => f.project).join(', ')}: about{' '}
-                          <b className="text-slate-200 font-medium">{formatBytes(backupTotal)}</b> before compression
-                          {freeBytes !== null && <> ({formatBytes(freeBytes)} free)</>}.
-                        </>
-                      )}
-                    </span>
-                    {notEnoughSpace && (
-                      <span className="block text-sm text-amber-300 mt-1.5">
-                        There may not be enough free space for this backup. Free up space or turn the backup off.
-                      </span>
-                    )}
-                  </span>
-                </label>
-              </div>
-
-              {planError && (
-                <div role="alert" className="rounded-xl border border-rose-500/40 bg-rose-500/[0.06] px-4 py-3 text-sm text-rose-200">
-                  {planError}
-                </div>
-              )}
-
-              {!canRun && (
-                <div className="rounded-xl border border-amber-500/40 bg-amber-500/[0.06] px-4 py-3 text-sm text-amber-100 flex flex-col sm:flex-row sm:items-center gap-3 justify-between">
-                  <span>Manifexus needs write access to Docker to move apps.</span>
-                  {onOpenAutomationModal && (
-                    <button
-                      type="button"
-                      onClick={onOpenAutomationModal}
-                      className="px-3 py-1.5 rounded-lg bg-amber-400 text-slate-950 text-sm font-medium hover:bg-amber-300"
-                    >
-                      Set up access
-                    </button>
-                  )}
-                </div>
-              )}
-
-              {plan && (
-                <div className="space-y-2">
-                  {plan.volumeSafetyAudit?.length > 0 && (
-                    <Disclosure title="Where each app’s data lives" hint={plural(plan.volumeSafetyAudit.length, 'mount')}>
-                      <ul className="space-y-2 text-xs">
-                        {plan.volumeSafetyAudit.map((v, i) => (
-                          <li key={`${v.service}-${i}`} className="flex flex-col gap-0.5">
-                            <span className="text-slate-300">
-                              {v.service}
-                              <span className="text-slate-500"> · {v.type === 'named_volume' ? 'volume' : 'folder'}</span>
-                              {v.verdict === 'requires_migration' && <span className="text-amber-300"> · needs attention</span>}
-                            </span>
-                            <span className="font-mono text-slate-500 break-all">
-                              {v.source} <span className="text-slate-600">→</span> {v.destination}
-                            </span>
-                          </li>
-                        ))}
-                      </ul>
-                    </Disclosure>
-                  )}
-                  <Disclosure title="New compose file" hint={`for ${plan.targetStackName}`}>
-                    <div className="relative">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          navigator.clipboard.writeText(plan.generatedComposeYaml);
-                          setCopied(true);
-                          setTimeout(() => setCopied(false), 2000);
-                        }}
-                        className="absolute right-2 top-2 inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-slate-800 text-xs text-slate-300 hover:text-white"
-                      >
-                        {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                        {copied ? 'Copied' : 'Copy'}
-                      </button>
-                      <pre className="p-3 pr-20 rounded-lg bg-black/40 text-[12px] leading-relaxed font-mono text-slate-300 overflow-x-auto max-h-72">
-                        {plan.generatedComposeYaml}
-                      </pre>
-                    </div>
-                  </Disclosure>
-                </div>
-              )}
-
-              {planLoading && (
-                <p className="flex items-center gap-2 text-sm text-slate-400">
-                  <Loader2 className="w-4 h-4 animate-spin" /> Preparing the new compose file…
-                </p>
-              )}
-            </section>
-          )}
-        </div>
-
-        {/* Footer */}
-        <div className="px-5 sm:px-7 py-4 border-t border-slate-800/80 flex items-center justify-between gap-3">
-          <div className="min-w-0 text-sm text-slate-500 truncate">
+        {/* Navigation bar */}
+        <div className="relative px-4 pt-3.5 pb-3" style={{ borderBottom: `0.5px solid ${ios.separator}` }}>
+          <div className="h-[28px] flex items-center justify-between">
             {back ? (
               <button
                 type="button"
-                onClick={back}
-                className="inline-flex items-center gap-1.5 px-3 py-2 -ml-3 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800/70"
+                onClick={back.go}
+                className="-ml-1 inline-flex items-center gap-1 text-[17px] rounded focus-visible:outline-2 focus-visible:outline-[#0A84FF] hover:opacity-80"
+                style={{ color: ios.blue }}
               >
-                <ArrowLeft className="w-4 h-4" /> Back
+                <svg width="11" height="18" viewBox="0 0 11 18" aria-hidden="true">
+                  <path d="M9 2 2 9l7 7" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+                {back.label}
               </button>
-            ) : stage === 'apps' && selected.length > 0 ? (
-              <span>{plural(selected.length, 'app')} selected</span>
-            ) : null}
+            ) : (
+              <button
+                type="button"
+                onClick={onClose}
+                className="text-[17px] rounded focus-visible:outline-2 focus-visible:outline-[#0A84FF] hover:opacity-80"
+                style={{ color: ios.blue }}
+              >
+                Cancel
+              </button>
+            )}
+            <span className="w-[60px]" />
           </div>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={primary.go}
-              disabled={primary.disabled}
-              className="px-5 py-2.5 rounded-xl text-[15px] font-semibold transition-colors bg-cyan-400 text-slate-950 hover:bg-cyan-300 disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-300"
-            >
-              {primary.label}
-            </button>
+          <h2 id="move-apps-title" className="absolute left-1/2 top-3.5 -translate-x-1/2 h-[28px] flex items-center text-[17px] font-semibold text-white whitespace-nowrap">
+            {title}
+          </h2>
+          {summary}
+        </div>
+
+        {/* Body */}
+        <div ref={bodyRef} className="flex-1 overflow-y-auto px-4 sm:px-5 pt-5 pb-8">
+          <div key={page} className={page === 'data' || page === 'compose' ? 'motion-safe:animate-[ios-push-in_200ms_ease-out]' : ''}>
+            {content}
           </div>
         </div>
+
+        {/* Action bar */}
+        {primary && (
+          <div className="px-4 sm:px-5 py-3 flex justify-end" style={{ borderTop: `0.5px solid ${ios.separator}` }}>
+            <Button onClick={primary.go} disabled={primary.disabled} className="w-full sm:w-auto sm:min-w-[160px]">
+              {primary.label}
+            </Button>
+          </div>
+        )}
       </div>
+
+      <Alert
+        open={confirmNoBackup}
+        title="Move without a backup?"
+        message="If something goes wrong, the apps’ data can’t be restored. Compose files are still saved so you can undo the move."
+        confirmLabel="Turn Off"
+        destructive
+        onCancel={() => setConfirmNoBackup(false)}
+        onConfirm={() => {
+          setBackupData(false);
+          setConfirmNoBackup(false);
+        }}
+      />
 
       <ExecutionPipelineConsole
         isOpen={consoleOpen}

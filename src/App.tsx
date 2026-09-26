@@ -34,7 +34,7 @@ import { GroupManagerModal } from './components/GroupManagerModal';
 import { SettingsModal } from './components/SettingsModal';
 import { SimulateContainerModal } from './components/SimulateContainerModal';
 import { MoveAppsModal } from './components/MoveAppsModal';
-import { DeleteStackDialog } from './components/DeleteStackDialog';
+import { DeleteStackDialog, DeleteStackTarget } from './components/DeleteStackDialog';
 import { HostAutomationModal } from './components/HostAutomationModal';
 import { ManifexusHeroHeader } from './components/ManifexusHeroHeader';
 import { MergeHistoryModal } from './components/MergeHistoryModal';
@@ -71,6 +71,8 @@ export default function App() {
   const [isLogsDashboardOpen, setIsLogsDashboardOpen] = useState(false);
   const [isCreateStackModalOpen, setIsCreateStackModalOpen] = useState(false);
   const [emptyStacks, setEmptyStacks] = useState<EmptyComposeStack[]>([]);
+  // Folder the server puts new stacks in (the parent most existing stacks share)
+  const [defaultStacksDir, setDefaultStacksDir] = useState<string | undefined>(undefined);
   const [revertRecordToStream, setRevertRecordToStream] = useState<any | null>(null);
   // Move apps flow: opened either for a destination stack ("Add apps") or for one app ("Move")
   const [moveInitialDestination, setMoveInitialDestination] = useState<string | undefined>(undefined);
@@ -97,11 +99,7 @@ export default function App() {
   const [isUpdatingModalOpen, setIsUpdatingModalOpen] = useState(false);
 
   // Directive 4: Safe Delete Stack state
-  const [deleteStackTarget, setDeleteStackTarget] = useState<{
-    projectName: string;
-    targetDirectory?: string;
-    servicesCount: number;
-  } | null>(null);
+  const [deleteStackTarget, setDeleteStackTarget] = useState<DeleteStackTarget | null>(null);
   const [deleteStackSuccessMessage, setDeleteStackSuccessMessage] = useState<string | null>(null);
 
   // Check for updates
@@ -177,6 +175,7 @@ export default function App() {
 
       setContainers(containersData.containers || []);
       setEmptyStacks(containersData.emptyStacks || []);
+      if (containersData.defaultStacksDir) setDefaultStacksDir(containersData.defaultStacksDir);
       setSystemStatus(statusData);
       setConfig(configData);
       setError(null);
@@ -781,6 +780,11 @@ export default function App() {
                             projectName,
                             targetDirectory: stackData.workingDir,
                             servicesCount: stackData.containers.length,
+                            apps: stackData.containers.map((c) => ({
+                              id: c.id,
+                              name: (c.customName || c.cleanName).replace(/^\//, ''),
+                              iconUrl: c.iconUrl,
+                            })),
                           });
                         }}
                         className="px-2.5 py-1 rounded-lg bg-rose-950/80 hover:bg-rose-900/90 border border-rose-500/40 text-rose-300 hover:text-rose-100 text-xs font-mono transition-colors flex items-center gap-1.5 shadow-[0_0_10px_rgba(244,63,94,0.15)] cursor-pointer"
@@ -929,6 +933,7 @@ export default function App() {
         onClose={() => setIsMergeModalOpen(false)}
         containers={containers}
         emptyStacks={emptyStacks}
+        defaultStacksDir={defaultStacksDir}
         initialDestination={moveInitialDestination}
         initialAppId={moveInitialAppId}
         privileges={privileges}
@@ -991,9 +996,8 @@ export default function App() {
           fetchData(true);
         }}
         defaultBaseDir={
-          containers.find((c) => c.compose?.workingDir)?.compose?.workingDir
-            ? containers.find((c) => c.compose?.workingDir)!.compose.workingDir!.split('/').slice(0, -1).join('/')
-            : '/home/ubuntu/docker'
+          defaultStacksDir ||
+          (containers.find((c) => c.compose?.workingDir)?.compose?.workingDir || '/opt/stacks/x').split('/').slice(0, -1).join('/')
         }
       />
 
