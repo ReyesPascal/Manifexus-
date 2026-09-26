@@ -13,7 +13,13 @@ import {
   saveConfig,
   updateAppOverride,
 } from './server/storageService';
-import { generateStackMergePlan, MergePlanRequest, isManifexusContainer } from './server/stackService';
+import {
+  generateStackMergePlan,
+  MergePlanRequest,
+  isManifexusContainer,
+  discoverHostComposeStacks,
+  provisionEmptyStack,
+} from './server/stackService';
 import {
   checkPrivilegeStatus,
   executeAutomatedStackMerge,
@@ -174,10 +180,15 @@ async function startServer() {
       const socketPath = process.env.DOCKER_SOCKET_PATH || '/var/run/docker.sock';
       const available = isDockerSocketAvailable();
       const { containers, isDemo, dockerVersion, os } = await getContainersList();
+      const emptyStacks = await discoverHostComposeStacks(containers);
 
       const runningCount = containers.filter((c) => c.state === 'running').length;
       const stoppedCount = containers.length - runningCount;
-      const stacks = new Set(containers.filter((c) => c.compose?.isCompose && c.compose.project).map((c) => c.compose.project)).size;
+      const stackNames = new Set([
+        ...containers.filter((c) => c.compose?.isCompose && c.compose.project).map((c) => c.compose.project as string),
+        ...emptyStacks.map((s) => s.project),
+      ]);
+      const stacks = stackNames.size;
 
       res.json({
         dockerConnected: available && !isDemo,
@@ -196,11 +207,12 @@ async function startServer() {
     }
   });
 
-  // Get containers list enriched with user customizations
+  // Get containers list enriched with user customizations and discovered empty compose stacks
   app.get('/api/containers', async (req, res) => {
     try {
       const { containers, isDemo, dockerVersion, os } = await getContainersList();
       const config = getConfig();
+      const emptyStacks = await discoverHostComposeStacks(containers);
 
       // Merge user overrides (custom group, custom name, custom port, custom icon, custom URL, hidden status)
       const enriched: DeepContainerMetadata[] = containers.map((c) => {
@@ -222,6 +234,7 @@ async function startServer() {
 
       res.json({
         containers: enriched,
+        emptyStacks,
         isDemo,
         dockerVersion,
         os,
@@ -390,6 +403,43 @@ async function startServer() {
 
     addDemoContainer(mockContainer);
     res.json({ success: true, container: mockContainer });
+  });
+
+  // Directive 1: Create New Stack - Provision directory and write baseline docker-compose.yml
+  app.post('/api/stacks/create', async (req, res) => {
+    try {
+      const { stackName, baseDir } = req.body;
+      if (!stackName || typeof stackName !== 'string' || !stackName.trim()) {
+        return res.status(400).json({ error: 'A valid stackName is required.' });
+      }
+
+      const { containers } = await getContainersList();
+      const result = await provisionEmptyStack(stackName, baseDir, containers);
+
+      if (!result.success || !result.stack) {
+        return res.status(400).json({ error: result.error || 'Failed to create stack.' });
+      }
+
+      globalLogService.log({
+        eventType: 'STACK_OP',
+        level: 'INFO',
+        source: 'stackService',
+        message: `Empty stack '${result.stack.project}' provisioned at ${result.stack.workingDir}`,
+        payload: {
+          project: result.stack.project,
+          workingDir: result.stack.workingDir,
+          configFiles: result.stack.configFiles,
+        },
+      });
+
+      res.status(201).json({
+        success: true,
+        message: `Stack '${result.stack.project}' successfully provisioned.`,
+        stack: result.stack,
+      });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
   });
 
   // Generate safe Docker Compose stack merge plan

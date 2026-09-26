@@ -12,6 +12,7 @@ import {
   Server,
   History,
   Terminal,
+  FolderPlus,
 } from 'lucide-react';
 import { SystemStatus, AutomationPrivileges } from '../types';
 import { Zap, ShieldAlert } from 'lucide-react';
@@ -30,6 +31,7 @@ interface NavbarProps {
   onOpenSettings: () => void;
   onOpenGroupManager: () => void;
   onOpenSimulateModal: () => void;
+  onOpenCreateStack?: () => void;
   onOpenStackMerger?: () => void;
   onOpenHistory?: () => void;
   onOpenLogs?: () => void;
@@ -51,6 +53,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenSettings,
   onOpenGroupManager,
   onOpenSimulateModal,
+  onOpenCreateStack,
   onOpenStackMerger,
   onOpenHistory,
   onOpenLogs,
@@ -265,6 +268,18 @@ export const Navbar: React.FC<NavbarProps> = ({
 
           {/* Action buttons */}
           <div className="hidden md:flex items-center gap-1.5">
+            {/* Create New Empty Stack */}
+            {onOpenCreateStack && (
+              <button
+                onClick={onOpenCreateStack}
+                className="px-2.5 py-1.5 rounded-lg bg-cyan-950/80 border border-cyan-500/40 text-xs font-mono text-cyan-300 hover:bg-cyan-900/60 transition-colors flex items-center gap-1.5 shadow-[0_0_12px_rgba(6,182,212,0.15)] cursor-pointer"
+                title="Create a new empty compose stack directory"
+              >
+                <FolderPlus className="w-3.5 h-3.5 text-cyan-400" />
+                <span>+ New Stack</span>
+              </button>
+            )}
+
             {/* Combine / Merge Stacks Studio */}
             {onOpenStackMerger && (
               <button

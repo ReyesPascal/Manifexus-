@@ -11,6 +11,7 @@ import {
   PlusCircle,
   ChevronRight,
   ShieldAlert,
+  FolderPlus,
 } from 'lucide-react';
 import {
   DeepContainerMetadata,
@@ -18,6 +19,7 @@ import {
   ManifexusConfig,
   UserGroup,
   AppOverride,
+  EmptyComposeStack,
 } from './types';
 import { Navbar } from './components/Navbar';
 import { StatsBar } from './components/StatsBar';
@@ -33,6 +35,7 @@ import { ManifexusHeroHeader } from './components/ManifexusHeroHeader';
 import { MergeHistoryModal } from './components/MergeHistoryModal';
 import { ExecutionPipelineConsole } from './components/ExecutionPipelineConsole';
 import { SystemLogsDashboard } from './components/SystemLogsDashboard';
+import { CreateStackModal } from './components/CreateStackModal';
 import { AutomationPrivileges } from './types';
 import { History } from 'lucide-react';
 
@@ -60,6 +63,8 @@ export default function App() {
   const [isMergeModalOpen, setIsMergeModalOpen] = useState(false);
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
   const [isLogsDashboardOpen, setIsLogsDashboardOpen] = useState(false);
+  const [isCreateStackModalOpen, setIsCreateStackModalOpen] = useState(false);
+  const [emptyStacks, setEmptyStacks] = useState<EmptyComposeStack[]>([]);
   const [revertRecordToStream, setRevertRecordToStream] = useState<any | null>(null);
   const [mergeModalInitialIds, setMergeModalInitialIds] = useState<string[]>([]);
   const [mergeModalInitialStack, setMergeModalInitialStack] = useState<string | undefined>(undefined);
@@ -83,6 +88,7 @@ export default function App() {
       const configData = await configRes.json();
 
       setContainers(containersData.containers || []);
+      setEmptyStacks(containersData.emptyStacks || []);
       setSystemStatus(statusData);
       setConfig(configData);
       setError(null);
@@ -333,10 +339,29 @@ export default function App() {
     return { groupsMap, uncategorized };
   }, [filteredContainers, config?.groups]);
 
-  // Grouped containers by Docker Compose Stacks
+  // Grouped containers by Docker Compose Stacks (including discovered empty stacks)
   const groupedByComposeStacks = useMemo(() => {
-    const stacksMap: Record<string, { containers: DeepContainerMetadata[]; workingDir?: string; configFiles?: string }> = {};
+    const stacksMap: Record<
+      string,
+      { containers: DeepContainerMetadata[]; workingDir?: string; configFiles?: string; isEmpty?: boolean }
+    > = {};
     const standalone: DeepContainerMetadata[] = [];
+
+    // Pre-populate with discovered or provisioned empty stacks
+    for (const es of emptyStacks) {
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase();
+        if (!es.project.toLowerCase().includes(q)) {
+          continue;
+        }
+      }
+      stacksMap[es.project] = {
+        containers: [],
+        workingDir: es.workingDir,
+        configFiles: es.configFiles,
+        isEmpty: true,
+      };
+    }
 
     for (const c of filteredContainers) {
       if (c.compose.isCompose && c.compose.project) {
@@ -349,13 +374,14 @@ export default function App() {
           };
         }
         stacksMap[proj].containers.push(c);
+        stacksMap[proj].isEmpty = false;
       } else {
         standalone.push(c);
       }
     }
 
     return { stacksMap, standalone };
-  }, [filteredContainers]);
+  }, [filteredContainers, emptyStacks, searchQuery]);
 
   const hostAddress = config?.hostAddress || 'localhost';
 
@@ -376,6 +402,7 @@ export default function App() {
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenGroupManager={() => setIsGroupManagerOpen(true)}
         onOpenSimulateModal={() => setIsSimulateOpen(true)}
+        onOpenCreateStack={() => setIsCreateStackModalOpen(true)}
         onOpenStackMerger={() => {
           setMergeModalInitialIds([]);
           setMergeModalInitialStack(undefined);
@@ -604,8 +631,12 @@ export default function App() {
                         <h2 className="text-base font-bold font-mono text-white tracking-tight">
                           {projectName}
                         </h2>
-                        <span className="px-2 py-0.5 rounded-full text-[11px] font-mono bg-purple-950/80 border border-purple-500/40 text-purple-300">
-                          {stackData.containers.length} {stackData.containers.length === 1 ? 'service' : 'services'}
+                        <span className={`px-2 py-0.5 rounded-full text-[11px] font-mono border ${
+                          stackData.containers.length === 0
+                            ? 'bg-cyan-950/80 border-cyan-500/40 text-cyan-300'
+                            : 'bg-purple-950/80 border-purple-500/40 text-purple-300'
+                        }`}>
+                          {stackData.containers.length === 0 ? 'Empty Stack (0 services)' : `${stackData.containers.length} ${stackData.containers.length === 1 ? 'service' : 'services'}`}
                         </span>
                       </div>
                       {stackData.workingDir && (
@@ -629,7 +660,7 @@ export default function App() {
                         setMergeModalInitialIds(stackData.containers.map((c) => c.id));
                         setIsMergeModalOpen(true);
                       }}
-                      className="px-2.5 py-1 rounded-lg bg-purple-950/80 hover:bg-purple-900 border border-purple-500/40 text-purple-200 text-xs font-mono transition-colors flex items-center gap-1.5 shadow-[0_0_10px_rgba(168,85,247,0.15)]"
+                      className="px-2.5 py-1 rounded-lg bg-purple-950/80 hover:bg-purple-900 border border-purple-500/40 text-purple-200 text-xs font-mono transition-colors flex items-center gap-1.5 shadow-[0_0_10px_rgba(168,85,247,0.15)] cursor-pointer"
                       title="Add app into this stack or combine with other stacks"
                     >
                       <Layers className="w-3.5 h-3.5 text-purple-400" />
@@ -638,26 +669,51 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Stack Service Grid */}
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {stackData.containers.map((container) => (
-                    <AppCard
-                      key={container.id}
-                      container={container}
-                      hostAddress={hostAddress}
-                      groups={config?.groups || []}
-                      onInspect={setInspectContainer}
-                      onAssignGroup={handleAssignGroup}
-                      onAction={handleContainerAction}
-                      onSetPrimaryPort={handleSetPrimaryPort}
-                      onMergeToStack={(c) => {
-                        setMergeModalInitialIds([c.id]);
+                {/* Stack Service Grid or Empty Stack Placeholder */}
+                {stackData.containers.length === 0 ? (
+                  <div className="py-8 px-6 rounded-xl bg-slate-950/40 border border-slate-800/80 text-center flex flex-col items-center justify-center gap-3">
+                    <div className="p-3 rounded-2xl bg-cyan-950/40 border border-cyan-500/30 text-cyan-400 shadow-inner">
+                      <FolderPlus className="w-6 h-6" />
+                    </div>
+                    <div className="max-w-md space-y-1">
+                      <h3 className="text-sm font-bold font-mono text-white">Empty Stack Provisioned</h3>
+                      <p className="text-xs font-mono text-slate-400">
+                        This stack directory has a baseline <code className="text-cyan-300">docker-compose.yml</code> file ready on the host. Click &apos;Populate Stack with Apps&apos; below to merge existing standalone containers into this stack.
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => {
                         setMergeModalInitialStack(projectName);
+                        setMergeModalInitialIds([]);
                         setIsMergeModalOpen(true);
                       }}
-                    />
-                  ))}
-                </div>
+                      className="mt-1 px-3.5 py-2 rounded-xl bg-cyan-950 hover:bg-cyan-900 border border-cyan-500/40 text-xs font-mono text-cyan-300 transition-colors flex items-center gap-2 shadow-[0_0_15px_rgba(6,182,212,0.15)] cursor-pointer"
+                    >
+                      <Layers className="w-3.5 h-3.5 text-cyan-400" />
+                      <span>Populate Stack with Apps</span>
+                    </button>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {stackData.containers.map((container) => (
+                      <AppCard
+                        key={container.id}
+                        container={container}
+                        hostAddress={hostAddress}
+                        groups={config?.groups || []}
+                        onInspect={setInspectContainer}
+                        onAssignGroup={handleAssignGroup}
+                        onAction={handleContainerAction}
+                        onSetPrimaryPort={handleSetPrimaryPort}
+                        onMergeToStack={(c) => {
+                          setMergeModalInitialIds([c.id]);
+                          setMergeModalInitialStack(projectName);
+                          setIsMergeModalOpen(true);
+                        }}
+                      />
+                    ))}
+                  </div>
+                )}
               </section>
             ))}
 
@@ -822,6 +878,20 @@ export default function App() {
           }}
         />
       )}
+
+      {/* Directive 3: Create New Empty Stack Modal */}
+      <CreateStackModal
+        isOpen={isCreateStackModalOpen}
+        onClose={() => setIsCreateStackModalOpen(false)}
+        onSuccess={() => {
+          fetchData(true);
+        }}
+        defaultBaseDir={
+          containers.find((c) => c.compose?.workingDir)?.compose?.workingDir
+            ? containers.find((c) => c.compose?.workingDir)!.compose.workingDir!.split('/').slice(0, -1).join('/')
+            : '/home/ubuntu/docker'
+        }
+      />
     </div>
   );
 }

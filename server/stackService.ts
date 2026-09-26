@@ -1,88 +1,21 @@
-import * as jsyaml from 'js-yaml';
-import yaml, { parseDocument, YAMLMap } from 'yaml';
+import fs from 'fs';
+import { dump } from 'js-yaml';
+import { parseDocument, YAMLMap } from 'yaml';
 import path from 'path';
-import { DeepContainerMetadata } from '../src/types';
+import { DeepContainerMetadata, EmptyComposeStack } from '../src/types';
+import {
+  readHostFile,
+  writeHostFile,
+  createHostDirectory,
+  checkHostFileExists,
+  resolveContainerPath,
+} from './hostFsService';
 
-export interface ComposeAstObject {
-  version?: string;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  services: Record<string, any>;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  volumes?: Record<string, any>;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  networks?: Record<string, any>;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  [key: string]: any;
-}
+export type { EmptyComposeStack };
 
-/**
- * Directive 2: AST Object Validation
- * Validates the mutated compose AST structure before stringification.
- * Throws a descriptive critical error if invalid.
- */
-export function validateComposeAstObject(ast: unknown): ComposeAstObject {
-  if (!ast || typeof ast !== 'object') {
-    throw new Error('AST Validation Error: Compose AST is not a valid object (received null, undefined, or primitive).');
-  }
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const obj = ast as Record<string, any>;
-  if (!obj.services || typeof obj.services !== 'object') {
-    throw new Error('AST Validation Error: Compose AST is missing required "services" dictionary object.');
-  }
-
-  const serviceKeys = Object.keys(obj.services);
-  if (serviceKeys.length === 0) {
-    throw new Error('AST Validation Error: "services" dictionary contains zero services. Refusing to synthesize empty stack.');
-  }
-
-  for (const sName of serviceKeys) {
-    const sDef = obj.services[sName];
-    if (!sDef || typeof sDef !== 'object') {
-      throw new Error(`AST Validation Error: Service "${sName}" definition is invalid or not an object.`);
-    }
-    // Must have at least image or build
-    if (!sDef.image && !sDef.build) {
-      throw new Error(`AST Validation Error: Service "${sName}" must specify an "image" or "build" directive.`);
-    }
-  }
-
-  return obj as ComposeAstObject;
-}
-
-/**
- * Directive 3: Strict Stringification using js-yaml (jsyaml.dump).
- * Validates AST first, dumps to YAML, and guarantees output is never null, empty, blank, or 0-bytes.
- * Throws a critical error and stops execution if stringification produces empty string.
- */
-export function strictlyDumpComposeAst(ast: unknown): string {
-  const validated = validateComposeAstObject(ast);
-
-  if (!validated.version) {
-    validated.version = '3.8';
-  }
-
-  const dumped = jsyaml.dump(validated, {
-    indent: 2,
-    lineWidth: -1,
-    noRefs: true,
-  });
-
-  if (!dumped || dumped.trim().length === 0) {
-    throw new Error(
-      'Critical Stringification Failure: jsyaml.dump produced an empty or blank output string. Execution stopped to prevent 0-byte file write.'
-    );
-  }
-
-  const byteLength = Buffer.byteLength(dumped, 'utf-8');
-  if (byteLength === 0) {
-    throw new Error(
-      'Critical Stringification Failure: Output string byte length is 0. Execution stopped to prevent 0-byte file write.'
-    );
-  }
-
-  return dumped;
-}
+const CREATED_STACKS_FILE = fs.existsSync('/data')
+  ? '/data/created-stacks.json'
+  : path.join(process.cwd(), 'data', 'created-stacks.json');
 
 export interface VolumeSafetyAuditItem {
   service: string;
@@ -151,160 +84,45 @@ export function isManifexusContainer(c: {
 }
 
 /**
- * Module 5: Deterministic AST Injection
- * Inspects all services in a Compose YAML document. If container_name is missing,
- * explicitly injects container_name: <service_key> directly beneath image/build properties.
- */
-export function enforceDeterministicContainerNames(composeYaml: string): string {
-  try {
-    const doc = parseDocument(composeYaml);
-    const services = doc.get('services') as YAMLMap;
-    if (services && typeof services.toJSON === 'function') {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const entries = (services as any).items || [];
-      for (const item of entries) {
-        const sKey = String(item.key?.value || item.key);
-        const sVal = item.value;
-        if (sVal && typeof sVal.get === 'function') {
-          if (!sVal.get('container_name')) {
-            // Find index of image or build to insert right after
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const subItems = (sVal as any).items || [];
-            let insertIdx = -1;
-            for (let i = 0; i < subItems.length; i++) {
-              const k = String(subItems[i].key?.value || subItems[i].key);
-              if (k === 'image' || k === 'build') {
-                insertIdx = i + 1;
-              }
-            }
-            if (insertIdx !== -1 && insertIdx <= subItems.length) {
-              const pair = doc.createPair('container_name', sKey);
-              subItems.splice(insertIdx, 0, pair);
-            } else {
-              sVal.set('container_name', sKey);
-            }
-          }
-        }
-      }
-      return doc.toString();
-    }
-  } catch (err) {
-    console.warn('[AST] Could not enforce deterministic container_name via AST:', (err as Error).message);
-  }
-  return composeYaml;
-}
-
-/**
- * Directive 1 & 2: Non-Destructive Compose AST Deep-Merge Engine
+ * Directive 5: AST-Based Intelligent Stack Merging
  * Merges new services, volumes, and networks into an existing compose file while preserving
  * comments, directives, styling, and existing formatting.
- * Implements Safe Fallback to base AST { version: '3.8', services: {} }, AST validation,
- * and strict stringification to guarantee no 0-byte output.
  */
 export function mergeComposeWithAst(
   existingYaml: string,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   newServices: Record<string, any>,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  newVolumes?: Record<string, any>,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  newNetworks?: Record<string, any>
+  newVolumes?: Record<string, any>
 ): string {
-  // Safe Fallback Base AST representation
-  let baseObj: ComposeAstObject = { version: '3.8', services: {} };
-
   try {
-    if (existingYaml && existingYaml.trim().length > 0) {
-      const parsed = yaml.parse(existingYaml);
-      if (parsed && typeof parsed === 'object') {
-        baseObj = parsed as ComposeAstObject;
-        if (!baseObj.services || typeof baseObj.services !== 'object') {
-          baseObj.services = {};
-        }
-      }
-    }
-  } catch (parseErr) {
-    console.warn('[AST Merge] Failed to parse existing yaml, falling back to base AST { version: "3.8", services: {} }:', (parseErr as Error).message);
-    baseObj = { version: '3.8', services: {} };
-  }
-
-  // Inject incoming services into base object
-  for (const [sName, sDef] of Object.entries(newServices)) {
-    if (sDef && typeof sDef === 'object' && !sDef.container_name) {
-      sDef.container_name = sName;
-    }
-    baseObj.services[sName] = sDef;
-  }
-
-  // Inject incoming volumes
-  if (newVolumes && Object.keys(newVolumes).length > 0) {
-    if (!baseObj.volumes || typeof baseObj.volumes !== 'object') {
-      baseObj.volumes = {};
-    }
-    for (const [vName, vDef] of Object.entries(newVolumes)) {
-      baseObj.volumes[vName] = vDef;
-    }
-  }
-
-  // Inject incoming networks
-  if (newNetworks && Object.keys(newNetworks).length > 0) {
-    if (!baseObj.networks || typeof baseObj.networks !== 'object') {
-      baseObj.networks = {};
-    }
-    for (const [nName, nDef] of Object.entries(newNetworks)) {
-      baseObj.networks[nName] = nDef;
-    }
-  }
-
-  // Attempt comment-preserving AST document merge first
-  try {
-    const doc = parseDocument(existingYaml && existingYaml.trim().length > 0 ? existingYaml : 'version: "3.8"\nservices: {}\n');
+    const doc = parseDocument(existingYaml);
     let services = doc.get('services') as YAMLMap;
     if (!services) {
-      doc.set('services', doc.createNode({}));
+      doc.set('services', new YAMLMap());
       services = doc.get('services') as YAMLMap;
     }
 
     for (const [sName, sDef] of Object.entries(newServices)) {
-      services.set(sName, doc.createNode(sDef));
+      services.set(sName, sDef);
     }
 
     if (newVolumes && Object.keys(newVolumes).length > 0) {
       let volumes = doc.get('volumes') as YAMLMap;
       if (!volumes) {
-        doc.set('volumes', doc.createNode({}));
+        doc.set('volumes', new YAMLMap());
         volumes = doc.get('volumes') as YAMLMap;
       }
       for (const [vName, vDef] of Object.entries(newVolumes)) {
-        volumes.set(vName, doc.createNode(vDef));
+        volumes.set(vName, vDef);
       }
     }
 
-    if (newNetworks && Object.keys(newNetworks).length > 0) {
-      let networks = doc.get('networks') as YAMLMap;
-      if (!networks) {
-        doc.set('networks', doc.createNode({}));
-        networks = doc.get('networks') as YAMLMap;
-      }
-      for (const [nName, nDef] of Object.entries(newNetworks)) {
-        networks.set(nName, doc.createNode(nDef));
-      }
-    }
-
-    const astString = doc.toString();
-    // Validate AST string result before accepting
-    if (astString && astString.trim().length > 0) {
-      const parsedCheck = yaml.parse(astString);
-      if (parsedCheck && parsedCheck.services && Object.keys(parsedCheck.services).length > 0) {
-        return astString;
-      }
-    }
+    return doc.toString();
   } catch (err) {
-    console.warn('[AST Merge] Document-level AST merge fallback triggered:', (err as Error).message);
+    console.warn('[AST Merge] Fallback to standard merge due to AST parse error:', err);
+    return '';
   }
-
-  // Strict Stringification & Validation via strictlyDumpComposeAst
-  return strictlyDumpComposeAst(baseObj);
 }
 
 /**
@@ -596,7 +414,7 @@ export function generateStackMergePlan(
 # - Named volumes mapped using 'external: true' to preserve existing databases
 # =========================================================================
 
-${jsyaml.dump(fullComposeDoc, { indent: 2, lineWidth: -1 })}`;
+${dump(fullComposeDoc, { indent: 2, lineWidth: -1 })}`;
   }
 
   // Generate Step-by-Step Shell Migration Script
@@ -645,7 +463,7 @@ ${originalWorkingDirs.length > 0
       .map(
         (dir) => `if [ -d "${dir}" ]; then
   echo "Stopping standalone instances in ${dir}..."
-  (cd "${dir}" && docker compose -f "${dir}/docker-compose.yml" down || docker-compose -f "${dir}/docker-compose.yml" down || true)
+  (cd "${dir}" && docker compose down || docker-compose down || true)
 fi`
       )
       .join('\n')
@@ -653,10 +471,10 @@ fi`
 
 echo "=== [Step 4/6] Launching Unified Compose Stack ==="
 cd "${targetDirClean}"
-docker compose -f "${targetDirClean}/docker-compose.yml" up -d || docker-compose -f "${targetDirClean}/docker-compose.yml" up -d
+docker compose up -d || docker-compose up -d
 
 echo "=== [Step 5/6] Health & Port Verification ==="
-docker compose -f "${targetDirClean}/docker-compose.yml" ps || docker-compose -f "${targetDirClean}/docker-compose.yml" ps
+docker compose ps || docker-compose ps
 
 echo "=== [Step 6/6] Zero-Data-Loss Migration Complete ==="
 echo "All ${servicesList.length} services are now running unified in ${targetDirClean}!"
@@ -671,7 +489,7 @@ set -e
 
 echo "=== [Rollback 1/3] Stopping Merged Stack ==="
 if [ -d "${targetDirClean}" ]; then
-  (cd "${targetDirClean}" && docker compose -f "${targetDirClean}/docker-compose.yml" down || docker-compose -f "${targetDirClean}/docker-compose.yml" down || true)
+  (cd "${targetDirClean}" && docker compose down || docker-compose down || true)
 fi
 
 echo "=== [Rollback 2/3] Restoring Original Standalone Stacks ==="
@@ -679,7 +497,7 @@ ${originalWorkingDirs
   .map(
     (dir) => `if [ -d "${dir}" ]; then
   echo "Spinning original containers back up in ${dir}..."
-  (cd "${dir}" && docker compose -f "${dir}/docker-compose.yml" up -d || docker-compose -f "${dir}/docker-compose.yml" up -d || true)
+  (cd "${dir}" && docker compose up -d || docker-compose up -d || true)
 fi`
   )
   .join('\n')}
@@ -689,7 +507,7 @@ LATEST_BACKUP=$(ls -t "${targetDirClean}"/docker-compose.backup.*.yml 2>/dev/nul
 if [ -n "$LATEST_BACKUP" ] && [ -f "$LATEST_BACKUP" ]; then
   echo "Restoring previous compose file from $LATEST_BACKUP..."
   cp "$LATEST_BACKUP" "${targetDirClean}/docker-compose.yml"
-  (cd "${targetDirClean}" && docker compose -f "${targetDirClean}/docker-compose.yml" up -d || docker-compose -f "${targetDirClean}/docker-compose.yml" up -d || true)
+  (cd "${targetDirClean}" && docker compose up -d || docker-compose up -d || true)
 fi
 
 echo "Rollback successfully completed!"
@@ -704,10 +522,10 @@ set -e
 
 echo "Checking health of new stack in ${targetDirClean}..."
 cd "${targetDirClean}"
-docker compose -f "${targetDirClean}/docker-compose.yml" ps
+docker compose ps
 
 echo "Pruning dangling stopped containers and orphaned networks..."
-docker compose -f "${targetDirClean}/docker-compose.yml" down -v --remove-orphans 2>/dev/null || true
+docker compose down -v --remove-orphans 2>/dev/null || true
 docker container prune -f
 docker network prune -f
 
@@ -729,4 +547,281 @@ echo "Cleanup complete. Your unified stack is running pristine!"
     cleanupScript,
     existingComposeMergedWithAst,
   };
+}
+
+/**
+ * Returns saved created empty stacks from persistent storage.
+ */
+export function getRegisteredCreatedStacks(): EmptyComposeStack[] {
+  try {
+    if (fs.existsSync(CREATED_STACKS_FILE)) {
+      const data = fs.readFileSync(CREATED_STACKS_FILE, 'utf8');
+      const parsed = JSON.parse(data);
+      if (Array.isArray(parsed)) {
+        return parsed;
+      }
+    }
+  } catch (err) {
+    console.warn('[StackService] Error reading registered created stacks:', err);
+  }
+  return [];
+}
+
+/**
+ * Persists a newly created empty stack in persistent storage.
+ */
+export function registerCreatedStack(stack: EmptyComposeStack): void {
+  try {
+    const existing = getRegisteredCreatedStacks();
+    const filtered = existing.filter(
+      (s) => s.project.toLowerCase() !== stack.project.toLowerCase() && s.workingDir !== stack.workingDir
+    );
+    filtered.unshift(stack);
+    const parentDir = path.dirname(CREATED_STACKS_FILE);
+    if (!fs.existsSync(parentDir)) {
+      fs.mkdirSync(parentDir, { recursive: true });
+    }
+    fs.writeFileSync(CREATED_STACKS_FILE, JSON.stringify(filtered, null, 2), 'utf8');
+  } catch (err) {
+    console.warn('[StackService] Error writing registered created stack:', err);
+  }
+}
+
+/**
+ * Removes a created stack from persistent storage if deleted or merged.
+ */
+export function unregisterCreatedStack(projectName: string): void {
+  try {
+    const existing = getRegisteredCreatedStacks();
+    const filtered = existing.filter((s) => s.project.toLowerCase() !== projectName.toLowerCase());
+    fs.writeFileSync(CREATED_STACKS_FILE, JSON.stringify(filtered, null, 2), 'utf8');
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * Detects the most logical default base host directory for new stacks
+ * by inspecting existing compose containers' working directories.
+ */
+export function getDefaultHostStacksBaseDir(containers: DeepContainerMetadata[] = []): string {
+  if (process.env.DEFAULT_STACKS_DIR && process.env.DEFAULT_STACKS_DIR.trim().length > 0) {
+    return process.env.DEFAULT_STACKS_DIR.trim();
+  }
+
+  // Count parent directories of existing compose containers
+  const dirCounts: Record<string, number> = {};
+  for (const c of containers) {
+    if (c.compose?.workingDir) {
+      const parent = path.dirname(c.compose.workingDir);
+      if (parent && parent !== '/' && parent !== '.') {
+        dirCounts[parent] = (dirCounts[parent] || 0) + 1;
+      }
+    }
+  }
+
+  const sortedDirs = Object.entries(dirCounts).sort((a, b) => b[1] - a[1]);
+  if (sortedDirs.length > 0) {
+    return sortedDirs[0][0];
+  }
+
+  // Safe defaults
+  return '/home/ubuntu/docker';
+}
+
+/**
+ * Directive 2: Empty Stack Discovery
+ * Scans the base host directory and subdirectories for any valid docker-compose.yml files.
+ * Injects empty stacks (0 running services) into the dashboard payload so the UI displays them.
+ */
+export async function discoverHostComposeStacks(
+  activeContainers: DeepContainerMetadata[] = []
+): Promise<EmptyComposeStack[]> {
+  const discoveredMap = new Map<string, EmptyComposeStack>();
+
+  // 1. Load any previously provisioned stacks from persistent ledger
+  const registered = getRegisteredCreatedStacks();
+  for (const s of registered) {
+    discoveredMap.set(s.project.toLowerCase(), s);
+  }
+
+  // Set of projects currently populated with active running containers
+  const activeProjects = new Set(
+    activeContainers
+      .filter((c) => c.compose?.isCompose && c.compose.project)
+      .map((c) => (c.compose.project as string).toLowerCase())
+  );
+
+  // 2. Collect candidate base host directories to scan
+  const baseCandidates = new Set<string>();
+  const defaultBase = getDefaultHostStacksBaseDir(activeContainers);
+  baseCandidates.add(defaultBase);
+
+  for (const c of activeContainers) {
+    if (c.compose?.workingDir) {
+      baseCandidates.add(path.dirname(c.compose.workingDir));
+    }
+  }
+
+  // Add standard user and docker directories if mounted or accessible
+  const standardMounts = ['/host/home', '/host', '/home/ubuntu/docker', '/home/ryan'];
+  for (const m of standardMounts) {
+    if (fs.existsSync(m)) {
+      baseCandidates.add(m);
+    }
+  }
+
+  // 3. Scan directories for subdirectories containing compose files
+  for (const baseDir of baseCandidates) {
+    const localBase = resolveContainerPath(baseDir);
+    if (!fs.existsSync(localBase)) {
+      continue;
+    }
+
+    try {
+      const entries = fs.readdirSync(localBase, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+
+        const subDirName = entry.name;
+        // Skip hidden or system folders
+        if (subDirName.startsWith('.') || subDirName === 'node_modules') continue;
+
+        const hostSubDir = path.posix.join(baseDir, subDirName);
+        const localSubDir = path.join(localBase, subDirName);
+
+        // Candidate compose file names
+        const composeFileNames = [
+          'docker-compose.yml',
+          'docker-compose.yaml',
+          'compose.yml',
+          'compose.yaml',
+        ];
+
+        for (const fileName of composeFileNames) {
+          const localComposeFile = path.join(localSubDir, fileName);
+          if (fs.existsSync(localComposeFile)) {
+            try {
+              const fileContent = fs.readFileSync(localComposeFile, 'utf8');
+              const doc = parseDocument(fileContent);
+
+              if (!doc.errors || doc.errors.length === 0) {
+                // Determine stack project name (from top-level 'name:' or folder name)
+                const docName = doc.get('name');
+                const projectName = typeof docName === 'string' && docName.trim() ? docName.trim() : subDirName;
+                const projectKey = projectName.toLowerCase();
+
+                // If stack has no active containers running, discover it as an empty stack
+                if (!activeProjects.has(projectKey)) {
+                  // Count declared services
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  const servicesMap = doc.get('services') as any;
+                  let serviceCount = 0;
+                  if (servicesMap && typeof servicesMap.items === 'object') {
+                    serviceCount = Array.isArray(servicesMap.items) ? servicesMap.items.length : 0;
+                  }
+
+                  const hostComposeFile = path.posix.join(hostSubDir, fileName);
+                  discoveredMap.set(projectKey, {
+                    project: projectName,
+                    workingDir: hostSubDir,
+                    configFiles: hostComposeFile,
+                    serviceCount,
+                    source: 'discovered',
+                  });
+                }
+              }
+            } catch {
+              // Ignore parse errors on corrupted files
+            }
+            break; // found compose file in this subfolder
+          }
+        }
+      }
+    } catch {
+      // Ignore directory read errors
+    }
+  }
+
+  return Array.from(discoveredMap.values());
+}
+
+/**
+ * Directive 1: Backend Endpoint Logic Helper
+ * Sanitizes stackName, constructs absolute host path, provisions directory using host filesystem helpers,
+ * and writes baseline docker-compose.yml (version 3.8 and empty services dictionary).
+ */
+export async function provisionEmptyStack(
+  rawStackName: string,
+  customBaseDir?: string,
+  containers: DeepContainerMetadata[] = []
+): Promise<{
+  success: boolean;
+  stack?: EmptyComposeStack;
+  error?: string;
+}> {
+  const sanitizedName = (rawStackName || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, '-')
+    .replace(/^-+|-+$/g, '');
+
+  if (!sanitizedName || sanitizedName.length < 2) {
+    return {
+      success: false,
+      error: 'Invalid stack name. Use at least 2 alphanumeric characters, hyphens, or underscores.',
+    };
+  }
+
+  // Determine base host path
+  let baseDir = customBaseDir && customBaseDir.trim().startsWith('/') ? customBaseDir.trim() : '';
+  if (!baseDir) {
+    baseDir = getDefaultHostStacksBaseDir(containers);
+  }
+
+  const targetHostDir = path.posix.join(baseDir, sanitizedName);
+  const composeFilePath = path.posix.join(targetHostDir, 'docker-compose.yml');
+
+  // Baseline docker-compose.yml containing only services dictionary
+  const baselineComposeYaml = `services: {}
+`;
+
+  try {
+    // 1. Provision host directory bypassing container isolation
+    await createHostDirectory(targetHostDir);
+
+    // 2. Write baseline compose file
+    const writeOk = await writeHostFile(composeFilePath, baselineComposeYaml);
+    if (!writeOk) {
+      // Direct local write fallback
+      const localCandidate = resolveContainerPath(composeFilePath);
+      const localParent = path.dirname(localCandidate);
+      if (!fs.existsSync(localParent)) {
+        fs.mkdirSync(localParent, { recursive: true });
+      }
+      fs.writeFileSync(localCandidate, baselineComposeYaml, 'utf8');
+    }
+
+    const newStack: EmptyComposeStack = {
+      project: sanitizedName,
+      workingDir: targetHostDir,
+      configFiles: composeFilePath,
+      serviceCount: 0,
+      source: 'provisioned',
+    };
+
+    // Register stack so discovery immediately finds it
+    registerCreatedStack(newStack);
+
+    return {
+      success: true,
+      stack: newStack,
+    };
+  } catch (err) {
+    console.error(`[StackService] Failed to provision empty stack ${sanitizedName}:`, err);
+    return {
+      success: false,
+      error: (err as Error).message || 'Failed to provision host directory and docker-compose.yml',
+    };
+  }
 }

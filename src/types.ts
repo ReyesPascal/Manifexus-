@@ -81,6 +81,14 @@ export interface ManifexusConfig {
   refreshIntervalSeconds: number;
 }
 
+export interface EmptyComposeStack {
+  project: string;
+  workingDir: string;
+  configFiles: string;
+  serviceCount: number;
+  source?: 'discovered' | 'provisioned';
+}
+
 export interface SystemStatus {
   dockerConnected: boolean;
   isDemoMode: boolean;
