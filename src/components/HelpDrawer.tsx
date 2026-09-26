@@ -216,13 +216,13 @@ export const HelpDrawer: React.FC<HelpDrawerProps> = ({ isOpen, onClose }) => {
           <section className="space-y-2">
             <h3 className="text-sm font-bold text-purple-400 flex items-center gap-2">
               <Layers className="w-4 h-4" />
-              6. Stack Merger & Migration Studio
+              6. Moving apps between stacks
             </h3>
             <p className="text-slate-400">
-              Need to combine two separate apps (like adding Manifexus into your <code className="text-purple-300">utilities-stack</code> or creating a new stack like <code className="text-cyan-300">test-stack</code>)?
+              To put apps together in one stack, click <strong className="text-white">Add apps</strong> on the stack you want them in, or the move button on an app's card to send it somewhere else, including a new stack.
             </p>
             <p className="text-slate-400">
-              Click <strong className="text-white">Merge Stacks</strong> in the top navigation or on any app card. Manifexus inspects your bind mounts and named volumes, converts relative paths to host absolute paths, and marks named volumes with <code className="text-emerald-400 font-bold">external: true</code> so 100% of your data and configurations remain untouched.
+              Moved apps keep using their existing data where it is: relative paths become absolute and named volumes are marked <code className="text-emerald-400 font-bold">external: true</code>. Only the moved apps restart; the rest of their old stack keeps running. Every move can be undone from History.
             </p>
           </section>
         </div>

@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { DeepContainerMetadata } from '../src/types';
 import { readHostFile } from './hostFsService';
+import type { DataArchiveEntry } from './dataBackupService';
 
 export interface MergeHistoryRecord {
   id: string; // unique merge run id, e.g. merge_20260921_123456_abc
@@ -19,6 +20,8 @@ export interface MergeHistoryRecord {
     project: string;
     workingDir: string;
     composeContent?: string;
+    /** Exact compose file path that composeContent came from (moves edit this file) */
+    composePath?: string;
     containers: { name: string; id: string; image: string; ports: string[]; volumes: string[] }[];
   }[];
   status: 'active' | 'reverted' | 'pending_decision';
@@ -33,6 +36,12 @@ export interface MergeHistoryRecord {
     configFiles: string;
     serviceCount: number;
   };
+  // Full data backups (stack folders + Compose-owned named volumes) taken before the operation
+  dataArchives?: DataArchiveEntry[];
+  // True when the user explicitly chose to skip the data backup
+  dataBackupSkipped?: boolean;
+  // For moves: which services were removed from each source stack's compose file
+  movedServices?: { project: string; workingDir: string; services: string[] }[];
   installMode?: 'existing-stack' | 'new-stack';
   sourceUrl?: string;
   remappedPorts?: { service: string; originalHostPort: number; allocatedHostPort: number }[];

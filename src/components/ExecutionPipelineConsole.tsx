@@ -94,13 +94,12 @@ export const ExecutionPipelineConsole: React.FC<ExecutionPipelineConsoleProps> =
     }
 
     const defaultMergeSteps: PipelineStep[] = [
-      { index: 1, id: 'preflight', name: 'Pre-Flight & AST Validation', status: 'pending', logs: [] },
-      { index: 2, id: 'data_migration', name: 'Directory & Volume Data Migration', status: 'pending', logs: [] },
-      { index: 3, id: 'backup_archive', name: 'Backup Creation & Archiving', status: 'pending', logs: [] },
-      { index: 4, id: 'rollback_verification', name: 'Rollback Capability Verification', status: 'pending', logs: [] },
-      { index: 5, id: 'ast_deployment', name: 'AST Stack Synthesis & Deployment', status: 'pending', logs: [] },
-      { index: 6, id: 'cleanup_pruning', name: 'Post-Merge Cleanup & Pruning', status: 'pending', logs: [] },
-      { index: 7, id: 'completion', name: 'Pipeline Completion', status: 'pending', logs: [] },
+      { index: 1, id: 'preflight', name: 'Checking the plan', status: 'pending', logs: [] },
+      { index: 2, id: 'stop_apps', name: 'Stopping the apps being moved', status: 'pending', logs: [] },
+      { index: 3, id: 'backup', name: 'Backing up compose files and data', status: 'pending', logs: [] },
+      { index: 4, id: 'update_sources', name: 'Removing apps from their old stacks', status: 'pending', logs: [] },
+      { index: 5, id: 'deploy', name: 'Starting apps in the new stack', status: 'pending', logs: [] },
+      { index: 6, id: 'verify', name: 'Checking everything is running', status: 'pending', logs: [] },
     ];
 
     const defaultInstallSteps: PipelineStep[] = [
@@ -113,11 +112,11 @@ export const ExecutionPipelineConsole: React.FC<ExecutionPipelineConsoleProps> =
     ];
 
     const defaultRevertSteps: PipelineStep[] = [
-      { index: 1, id: 'stop_merged', name: 'Halting Merged Services', status: 'pending', logs: [] },
-      { index: 2, id: 'restore_compose', name: 'Restoring Target Compose Backup', status: 'pending', logs: [] },
-      { index: 3, id: 'restart_standalone', name: 'Re-Activating Standalone Source Stacks', status: 'pending', logs: [] },
-      { index: 4, id: 'cleanup_partial', name: 'Pruning Partial Merge State & Volumes', status: 'pending', logs: [] },
-      { index: 5, id: 'revert_complete', name: 'Rollback Complete & Ledger Verified', status: 'pending', logs: [] },
+      { index: 1, id: 'stop_changed', name: 'Stopping the changed stack', status: 'pending', logs: [] },
+      { index: 2, id: 'restore_data', name: 'Restoring data', status: 'pending', logs: [] },
+      { index: 3, id: 'restore_compose', name: 'Restoring compose files', status: 'pending', logs: [] },
+      { index: 4, id: 'restart', name: 'Starting the original stacks', status: 'pending', logs: [] },
+      { index: 5, id: 'revert_complete', name: 'Finishing up', status: 'pending', logs: [] },
     ];
 
     let initialSteps: PipelineStep[];

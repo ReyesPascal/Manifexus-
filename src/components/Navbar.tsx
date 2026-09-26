@@ -33,7 +33,6 @@ interface NavbarProps {
   onOpenGroupManager: () => void;
   onOpenSimulateModal: () => void;
   onOpenCreateStack?: () => void;
-  onOpenStackMerger?: () => void;
   onOpenHistory?: () => void;
   onOpenLogs?: () => void;
   updateState?: 'idle' | 'checking' | 'available' | 'updating';
@@ -60,7 +59,6 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenGroupManager,
   onOpenSimulateModal,
   onOpenCreateStack,
-  onOpenStackMerger,
   onOpenHistory,
   onOpenLogs,
   updateState = 'idle',
@@ -310,18 +308,6 @@ export const Navbar: React.FC<NavbarProps> = ({
               >
                 <FolderPlus className="w-3.5 h-3.5 text-cyan-400" />
                 <span>+ New Stack</span>
-              </button>
-            )}
-
-            {/* Combine / Merge Stacks Studio */}
-            {onOpenStackMerger && (
-              <button
-                onClick={onOpenStackMerger}
-                className="px-2.5 py-1.5 rounded-lg bg-purple-950/80 border border-purple-500/40 text-xs font-mono text-purple-300 hover:bg-purple-900/60 transition-colors flex items-center gap-1.5 shadow-[0_0_12px_rgba(168,85,247,0.15)]"
-                title="Combine separate Docker Compose apps into a single stack"
-              >
-                <Layers className="w-3.5 h-3.5 text-purple-400" />
-                <span>Merge Stacks</span>
               </button>
             )}
 

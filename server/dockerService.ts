@@ -530,8 +530,9 @@ export function parseRawContainer(inspectData: any): DeepContainerMetadata {
       : undefined;
 
   // Mounts
-  const mounts: ContainerMount[] = (inspectData.Mounts || []).map((m: { Type?: string; Source?: string; Destination?: string; Mode?: string; RW?: boolean }) => ({
+  const mounts: ContainerMount[] = (inspectData.Mounts || []).map((m: { Type?: string; Name?: string; Source?: string; Destination?: string; Mode?: string; RW?: boolean }) => ({
     type: m.Type || 'bind',
+    name: m.Name,
     source: m.Source || '',
     destination: m.Destination || '',
     mode: m.Mode,

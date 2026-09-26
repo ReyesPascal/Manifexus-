@@ -14,6 +14,7 @@ import {
   ChevronDown,
   Check,
   Sliders,
+  ArrowRightLeft,
 } from 'lucide-react';
 import { DeepContainerMetadata, UserGroup } from '../types';
 
@@ -25,7 +26,8 @@ interface AppCardProps {
   onAssignGroup: (containerId: string, groupId: string) => void;
   onAction: (containerId: string, action: 'start' | 'stop' | 'restart') => Promise<void>;
   onSetPrimaryPort?: (containerId: string, port: number) => void;
-  onMergeToStack?: (container: DeepContainerMetadata) => void;
+  /** Opens the Move apps flow with this app selected */
+  onMoveApp?: (container: DeepContainerMetadata) => void;
 }
 
 export const AppCard: React.FC<AppCardProps> = ({
@@ -36,7 +38,7 @@ export const AppCard: React.FC<AppCardProps> = ({
   onAssignGroup,
   onAction,
   onSetPrimaryPort,
-  onMergeToStack,
+  onMoveApp,
 }) => {
   const [imgError, setImgError] = useState(false);
   const [isActing, setIsActing] = useState(false);
@@ -152,16 +154,17 @@ export const AppCard: React.FC<AppCardProps> = ({
 
         {/* Info & Inspect trigger */}
         <div className="flex items-center gap-1">
-          {onMergeToStack && (
+          {onMoveApp && (
             <button
               onClick={(e) => {
                 e.stopPropagation();
-                onMergeToStack(container);
+                onMoveApp(container);
               }}
               className="p-1.5 rounded-lg bg-slate-900/90 text-slate-400 hover:text-purple-300 hover:bg-purple-950/40 border border-slate-800 hover:border-purple-500/40 transition-all"
-              title="Add to Stack or Combine with other apps"
+              title="Move to another stack"
+              aria-label={`Move ${container.cleanName} to another stack`}
             >
-              <Layers className="w-3.5 h-3.5 text-purple-400" />
+              <ArrowRightLeft className="w-3.5 h-3.5 text-purple-400" />
             </button>
           )}
 

@@ -12,9 +12,16 @@ import {
   resolveContainerPath,
 } from './hostFsService';
 import { createPreMergeSnapshot, saveMergeHistoryRecord } from './historyService';
-import { runHostDockerCompose } from './automationService';
 import { getContainersList, removeDemoContainersByProject } from './dockerService';
 import { globalLogService } from './globalLogService';
+import {
+  archiveStackData,
+  runComposeInDir,
+  getProjectVolumes,
+  removeVolume,
+  removeHostDirectory,
+  formatBytes,
+} from './dataBackupService';
 
 export type { EmptyComposeStack };
 
@@ -840,22 +847,29 @@ export async function provisionEmptyStack(
 }
 
 /**
- * Directive 4: Safely deletes a stack from the host.
- * 1. Executes zero-data-loss backup snapshot first to archive the compose file
- * 2. Uses Docker socket helper to execute docker compose down -v --remove-orphans in target host directory
- * 3. Deletes directory from host
- * 4. Logs to history ledger so it can be reverted using existing rollback flow
+ * Safe stack delete.
+ *
+ * Order matters — nothing is destroyed until a full backup exists:
+ *   1. Record the compose file and .env in the history ledger.
+ *   2. Stop the stack (`compose down`, keeping volumes) so databases are flushed and consistent.
+ *   3. Archive the stack folder and its Compose-owned named volumes. If this fails, the stack is
+ *      started again and the delete is aborted.
+ *   4. Remove the stack's volumes and folder.
+ *
+ * `skipDataBackup` exists for stacks too large to archive; the UI requires an explicit opt-in.
  */
 export async function deleteHostStack(params: {
   projectName: string;
   targetDirectory?: string;
+  skipDataBackup?: boolean;
 }): Promise<{
   success: boolean;
   message: string;
   backupArchiveDir?: string;
   historyRecordId?: string;
+  dataBackupBytes?: number;
 }> {
-  const { projectName, targetDirectory } = params;
+  const { projectName, targetDirectory, skipDataBackup } = params;
   const sanitizedName = (projectName || '').trim().toLowerCase();
 
   if (!sanitizedName) {
@@ -875,12 +889,12 @@ export async function deleteHostStack(params: {
   const resolvedTargetDir =
     targetDirectory && targetDirectory.trim().startsWith('/')
       ? targetDirectory.trim()
-      : stackContainers[0]?.compose?.workingDir || path.posix.join('/home/ryan', sanitizedName);
+      : stackContainers[0]?.compose?.workingDir || path.posix.join(getDefaultHostStacksBaseDir(containers), sanitizedName);
 
   const composeFilePath = path.posix.join(resolvedTargetDir, 'docker-compose.yml');
   const existingComposeContent = (await readHostFile(composeFilePath)) || undefined;
 
-  // Step 1: Zero-Data-Loss Backup Snapshot
+  // Step 1: ledger record with compose + .env
   const deleteRunId = `delete_${sanitizedName}_${Date.now()}`;
   const snapshotRes = await createPreMergeSnapshot({
     mergeId: deleteRunId,
@@ -889,27 +903,72 @@ export async function deleteHostStack(params: {
     selectedContainers: stackContainers,
     preMergeTargetCompose: existingComposeContent,
   });
-
-  // Customize ledger record description
-  snapshotRes.record.summary = `Deleted stack "${sanitizedName}" (safe pre-deletion snapshot archived in ${snapshotRes.backupArchiveDir})`;
-  snapshotRes.record.status = 'active';
-  snapshotRes.record.type = 'STACK_DELETE';
-  snapshotRes.record.deletedStack = {
+  const record = snapshotRes.record;
+  record.summary = `Deleted stack "${sanitizedName}"`;
+  record.status = 'active';
+  record.type = 'STACK_DELETE';
+  record.deletedStack = {
     project: sanitizedName,
     workingDir: resolvedTargetDir,
     configFiles: composeFilePath,
     serviceCount: stackContainers.length,
   };
-  saveMergeHistoryRecord(snapshotRes.record);
 
-  // Step 2: Use Docker Socket Helper to run docker compose down -v --remove-orphans
-  await runHostDockerCompose(
-    resolvedTargetDir,
-    'docker compose down -v --remove-orphans || docker-compose down -v --remove-orphans || docker compose down || true'
-  );
+  // Step 2: stop the stack but keep its volumes, so the backup sees consistent data
+  if (!isDemo && stackContainers.length > 0) {
+    await runComposeInDir(resolvedTargetDir, 'down --remove-orphans');
+  }
 
-  // Step 3: Delete directory from host
-  await deleteHostDirectory(resolvedTargetDir);
+  // Step 3: full data backup (or an explicit, recorded opt-out)
+  let dataBackupBytes = 0;
+  if (!isDemo && !skipDataBackup) {
+    try {
+      const archives = await archiveStackData({
+        project: sanitizedName,
+        workingDir: resolvedTargetDir,
+        archiveDir: snapshotRes.backupArchiveDir,
+      });
+      record.dataArchives = archives;
+      dataBackupBytes = archives.reduce((sum, a) => sum + a.bytes, 0);
+      record.archiveSizeBytes = (record.archiveSizeBytes || 0) + dataBackupBytes;
+    } catch (backupErr) {
+      // Put things back the way they were and refuse to delete without a backup
+      if (stackContainers.length > 0) {
+        await runComposeInDir(resolvedTargetDir, 'up -d');
+      }
+      try {
+        fs.rmSync(snapshotRes.backupArchiveDir, { recursive: true, force: true });
+      } catch {
+        // ignore
+      }
+      throw new Error(
+        `Delete cancelled: the data backup failed (${(backupErr as Error).message}). Nothing was deleted and the stack was restarted.`
+      );
+    }
+  } else if (skipDataBackup) {
+    record.dataBackupSkipped = true;
+    record.summary = `Deleted stack "${sanitizedName}" (data backup skipped by user)`;
+  }
+  saveMergeHistoryRecord(record);
+
+  // Step 4: remove volumes + folder. `down -v` covers volumes declared in the compose file;
+  // any remaining Compose-owned volumes for the project are removed explicitly.
+  if (!isDemo) {
+    await runComposeInDir(resolvedTargetDir, 'down -v --remove-orphans');
+    for (const v of await getProjectVolumes(sanitizedName)) {
+      await removeVolume(v.name);
+    }
+  }
+  if (isDemo) {
+    await deleteHostDirectory(resolvedTargetDir);
+  } else if (!(await removeHostDirectory(resolvedTargetDir))) {
+    globalLogService.log({
+      eventType: 'STACK_OP',
+      level: 'WARN',
+      source: 'stackService',
+      message: `Stack '${sanitizedName}' folder ${resolvedTargetDir} could not be fully removed; its data is backed up in ${snapshotRes.backupArchiveDir}`,
+    });
+  }
 
   // Unregister stack from local storage
   unregisterCreatedStack(sanitizedName);
@@ -923,19 +982,25 @@ export async function deleteHostStack(params: {
     eventType: 'STACK_OP',
     level: 'INFO',
     source: 'stackService',
-    message: `Stack '${sanitizedName}' safely deleted at ${resolvedTargetDir} with snapshot ${deleteRunId}`,
+    message: `Stack '${sanitizedName}' deleted at ${resolvedTargetDir} (history ${deleteRunId}, data backup ${
+      skipDataBackup ? 'skipped' : formatBytes(dataBackupBytes)
+    })`,
     payload: {
       projectName: sanitizedName,
       targetDirectory: resolvedTargetDir,
       backupArchiveDir: snapshotRes.backupArchiveDir,
       historyRecordId: deleteRunId,
+      dataBackupBytes,
     },
   });
 
   return {
     success: true,
-    message: `Stack '${sanitizedName}' was safely deleted. A zero-data-loss backup snapshot was saved at ${snapshotRes.backupArchiveDir} and can be restored anytime from History & Reverts.`,
+    message: skipDataBackup
+      ? `Stack '${sanitizedName}' was deleted. Its compose file was saved, but its data was not backed up.`
+      : `Stack '${sanitizedName}' was deleted. Its compose file and ${formatBytes(dataBackupBytes)} of data were backed up — undo anytime from History.`,
     backupArchiveDir: snapshotRes.backupArchiveDir,
     historyRecordId: deleteRunId,
+    dataBackupBytes,
   };
 }

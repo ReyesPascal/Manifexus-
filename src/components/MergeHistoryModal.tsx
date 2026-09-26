@@ -6,7 +6,6 @@ import {
   CheckCircle2,
   AlertCircle,
   FileCode,
-  Layers,
   Calendar,
   Folder,
   Shield,
@@ -137,9 +136,9 @@ export const MergeHistoryModal: React.FC<MergeHistoryModalProps> = ({
           ) : records.length === 0 ? (
             <div className="text-center py-16 text-slate-500">
               <History className="w-12 h-12 mx-auto mb-3 opacity-30 text-slate-400" />
-              <p className="text-sm text-slate-300 font-bold">No merge operations recorded yet</p>
+              <p className="text-sm text-slate-300 font-bold">Nothing here yet</p>
               <p className="text-xs text-slate-500 mt-1">
-                Every stack merge automatically records an immutable snapshot with pre-merge backup files here.
+                Moves and deletes are listed here with their backups, so you can undo them.
               </p>
             </div>
           ) : (
@@ -147,6 +146,11 @@ export const MergeHistoryModal: React.FC<MergeHistoryModalProps> = ({
               {records.map((r) => {
                 const isReverted = r.status === 'reverted';
                 const isActive = r.status === 'active';
+                const isDelete = r.type === 'STACK_DELETE' || r.id.startsWith('delete_');
+                const kindLabel = isDelete ? 'Deleted' : r.type === 'COMPOSE_INSTALL' ? 'Installed' : 'Moved apps';
+                const dataBytes = (r.dataArchives || []).reduce((sum, a) => sum + a.bytes, 0);
+                const fmt = (b: number) =>
+                  b < 1024 * 1024 ? `${Math.max(1, Math.round(b / 1024))} KB` : b < 1024 ** 3 ? `${(b / 1024 ** 2).toFixed(1)} MB` : `${(b / 1024 ** 3).toFixed(1)} GB`;
 
                 return (
                   <div
@@ -160,6 +164,7 @@ export const MergeHistoryModal: React.FC<MergeHistoryModalProps> = ({
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                       <div>
                         <div className="flex items-center gap-2">
+                          <span className="text-[11px] text-slate-400">{kindLabel}</span>
                           <span className="font-bold text-white text-sm">
                             {r.targetStackName}
                           </span>
@@ -170,10 +175,10 @@ export const MergeHistoryModal: React.FC<MergeHistoryModalProps> = ({
                                 : 'bg-emerald-950 text-emerald-300 border border-emerald-500/40'
                             }`}
                           >
-                            {r.status}
+                            {isReverted ? 'undone' : r.status}
                           </span>
-                          <span className="text-[10px] text-slate-500">ID: {r.id}</span>
                         </div>
+                        {r.summary && <p className="text-xs text-slate-300 mt-1.5">{r.summary}</p>}
 
                         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2 text-[11px] text-slate-400">
                           <span className="flex items-center gap-1">
@@ -181,8 +186,12 @@ export const MergeHistoryModal: React.FC<MergeHistoryModalProps> = ({
                             {r.targetDirectory}
                           </span>
                           <span className="flex items-center gap-1">
-                            <Layers className="w-3.5 h-3.5 text-purple-400" />
-                            {r.sourceConfigs.length} source service(s)
+                            <Shield className={`w-3.5 h-3.5 ${dataBytes > 0 ? 'text-emerald-400' : 'text-slate-500'}`} />
+                            {dataBytes > 0
+                              ? `Compose files + ${fmt(dataBytes)} of data backed up`
+                              : r.dataBackupSkipped
+                                ? 'Compose files only (data backup skipped)'
+                                : 'Compose files only'}
                           </span>
                           <span className="flex items-center gap-1">
                             <Clock className="w-3.5 h-3.5 text-slate-500" />
@@ -205,6 +214,7 @@ export const MergeHistoryModal: React.FC<MergeHistoryModalProps> = ({
                           </span>
                         )}
 
+                        {!isDelete && (
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
@@ -221,6 +231,7 @@ export const MergeHistoryModal: React.FC<MergeHistoryModalProps> = ({
                           )}
                           Repair Stack
                         </button>
+                        )}
 
                         {!isReverted && (
                           <button
@@ -231,7 +242,7 @@ export const MergeHistoryModal: React.FC<MergeHistoryModalProps> = ({
                             className="px-3 py-1.5 rounded-lg border border-rose-500/40 bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 text-xs font-mono font-bold flex items-center gap-1.5 transition-all hover:shadow-[0_0_12px_rgba(244,63,94,0.2)]"
                           >
                             <RotateCcw className="w-3.5 h-3.5 text-rose-400" />
-                            Revert Stack
+                            Undo
                           </button>
                         )}
                       </div>

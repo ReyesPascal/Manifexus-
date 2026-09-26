@@ -1,3 +1,4 @@
+import { getStackDataFootprint, getBackupFreeBytes } from './server/dataBackupService';
 import express from 'express';
 import http from 'http';
 import path from 'path';
@@ -479,13 +480,46 @@ async function startServer() {
   // Archives compose file first, runs docker compose down -v --remove-orphans via Docker socket, deletes host directory, logs to ledger
   app.post('/api/stacks/delete', async (req, res) => {
     try {
-      const { projectName, targetDirectory } = req.body;
+      const { projectName, targetDirectory, skipDataBackup } = req.body;
       if (!projectName || typeof projectName !== 'string' || !projectName.trim()) {
         return res.status(400).json({ error: 'A valid projectName is required.' });
       }
 
-      const result = await deleteHostStack({ projectName, targetDirectory });
+      const result = await deleteHostStack({ projectName, targetDirectory, skipDataBackup: skipDataBackup === true });
       res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // Measure how much data backing up the given stacks would archive (folder + Compose-owned volumes),
+  // plus free space in the backups location. Used by the delete and move-apps confirmations.
+  app.post('/api/stacks/data-footprint', async (req, res) => {
+    try {
+      const stacks = Array.isArray(req.body?.stacks) ? req.body.stacks : [];
+      const { containers, isDemo } = await getContainersList();
+      const footprints = [];
+      for (const st of stacks.slice(0, 20)) {
+        const project = String(st?.project || '').trim();
+        if (!project) continue;
+        const stackContainers = containers.filter((c) => (c.compose?.project || '') === project);
+        const workingDir =
+          typeof st.workingDir === 'string' && st.workingDir.startsWith('/')
+            ? st.workingDir
+            : stackContainers[0]?.compose?.workingDir;
+        if (isDemo) {
+          footprints.push({ project, workingDir, directoryBytes: 0, volumes: [], externalMounts: [], totalBytes: 0 });
+          continue;
+        }
+        footprints.push(
+          await getStackDataFootprint({
+            project,
+            workingDir,
+            bindMounts: stackContainers.flatMap((c) => c.mounts.filter((m) => m.type === 'bind').map((m) => m.source)),
+          })
+        );
+      }
+      res.json({ footprints, freeBytes: getBackupFreeBytes() });
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
     }
@@ -577,7 +611,7 @@ async function startServer() {
     };
 
     try {
-      const { sourceContainerIds, targetStackName, targetDirectory, yamlContent } = req.body;
+      const { sourceContainerIds, targetStackName, targetDirectory, yamlContent, backupData } = req.body;
       if (!Array.isArray(sourceContainerIds) || sourceContainerIds.length === 0) {
         sendEvent({ type: 'failed', log: 'Source container IDs required' });
         res.end();
@@ -591,6 +625,7 @@ async function startServer() {
           targetDirectory: targetDirectory || `/home/ryan/${targetStackName || 'combined-stack'}`,
           yamlContent: yamlContent || '',
           sourceContainerIds,
+          backupData: backupData !== false,
         },
         sendEvent
       );

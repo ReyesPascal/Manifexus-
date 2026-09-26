@@ -9,6 +9,8 @@ export interface ContainerPort {
 
 export interface ContainerMount {
   type: string;
+  /** Docker volume name, for type 'volume' mounts */
+  name?: string;
   source: string;
   destination: string;
   mode?: string;
