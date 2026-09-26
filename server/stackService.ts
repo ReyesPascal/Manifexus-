@@ -83,6 +83,8 @@ export interface MergePlanRequest {
   existingComposeContent?: string;
   /** Original compose text of each source stack, keyed by working directory */
   sourceComposes?: Record<string, string>;
+  /** Every container on the host, to catch ports already taken by apps that aren't moving */
+  allContainers?: DeepContainerMetadata[];
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -582,6 +584,25 @@ export function generateStackMergePlan(
       originalProject: container.compose?.project,
       originalWorkingDir: container.compose?.workingDir,
     });
+  }
+
+  // Ports the moved apps publish that a different, running app already holds: compose would fail
+  const selectedIds = new Set(selectedContainers.map((c) => c.id));
+  for (const c of selectedContainers) {
+    for (const p of c.ports) {
+      if (!p.publicPort) continue;
+      const holder = (options.allContainers || []).find(
+        (o) =>
+          !selectedIds.has(o.id) &&
+          o.state === 'running' &&
+          o.ports.some((op) => op.publicPort === p.publicPort && op.type === p.type)
+      );
+      if (holder) {
+        const nameOf = (x: DeepContainerMetadata) => x.customName || x.compose?.service || x.cleanName;
+        const msg = `Port ${p.publicPort} is already used by ${nameOf(holder)}, so ${nameOf(c)} couldn’t start. Change one of their ports first.`;
+        if (!blockers.includes(msg)) blockers.push(msg);
+      }
+    }
   }
 
   // Detect Host Port Collisions

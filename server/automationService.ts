@@ -513,6 +513,7 @@ export async function executeStreamingPipeline(
         moved,
         isDemo,
         log,
+        newComposeText: req.yamlContent,
       });
       log('Everything is back the way it was.');
       markMergeAsReverted(mergeId, [errorMsg, 'Auto-reverted']);
@@ -532,18 +533,40 @@ async function rollbackFailedMove(params: {
   moved: MovedContainer[];
   isDemo: boolean;
   log: (msg: string) => void;
+  /** The compose file the failed move wrote, to know which services it added */
+  newComposeText?: string;
 }): Promise<void> {
-  const { targetDir, preMergeTargetCompose, targetComposeWritten, editedSources, moved, isDemo, log } = params;
+  const { targetDir, preMergeTargetCompose, targetComposeWritten, editedSources, moved, isDemo, log, newComposeText } = params;
   if (isDemo) return;
 
   if (targetComposeWritten) {
-    // Remove whatever the failed deploy started, then restore the previous target compose
-    await runComposeInDir(targetDir, 'down --remove-orphans');
     if (preMergeTargetCompose) {
+      // Remove only the containers the failed move added; apps already in this stack keep running
+      const serviceNames = (text?: string): string[] => {
+        try {
+          return Object.keys(yaml.parse(text || '')?.services || {});
+        } catch {
+          return [];
+        }
+      };
+      const before = new Set(serviceNames(preMergeTargetCompose));
+      const added = serviceNames(newComposeText).filter((n) => !before.has(n));
+      try {
+        const filters = encodeURIComponent(JSON.stringify({ label: [`com.docker.compose.project.working_dir=${targetDir}`] }));
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const list = await queryDockerEngine<any[]>(`/containers/json?all=1&filters=${filters}`);
+        for (const c of list || []) {
+          if (added.includes(c.Labels?.['com.docker.compose.service'])) await forceRemoveContainer(c.Id);
+        }
+      } catch {
+        // fall through: compose below still restores the stack
+      }
       await writeHostFile(path.posix.join(targetDir, 'docker-compose.yml'), preMergeTargetCompose);
       await runComposeInDir(targetDir, 'up -d');
-      log('Restored the previous compose file for the target stack.');
+      log('Restored the previous compose file for the target stack. Its own apps kept running.');
     } else {
+      // A brand-new stack only contains the moved apps
+      await runComposeInDir(targetDir, 'down --remove-orphans');
       await writeHostFile(path.posix.join(targetDir, 'docker-compose.yml'), 'services: {}\n');
       log('Reset the new stack to an empty compose file.');
     }

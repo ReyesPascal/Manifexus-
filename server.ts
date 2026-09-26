@@ -492,6 +492,7 @@ async function startServer() {
 
       const plan = generateStackMergePlan(selectedContainers, {
         sourceComposes,
+        allContainers: containers,
         sourceContainerIds,
         targetStackName: targetStackName || 'combined-stack',
         targetDirectory: targetDir,

@@ -698,7 +698,7 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
         </section>
       )}
 
-      {(plan?.warnings?.length || 0) > 0 && (
+      {(plan?.warnings?.length || 0) > 0 && !(plan?.blockers?.length) && (
         <section>
           <Group className="ios-inset-icon">
             {plan!.warnings!.map((w, i) => (
