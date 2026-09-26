@@ -14,40 +14,11 @@ import {
 } from './dockerService';
 import {
   createPreMergeSnapshot,
-  createComposeInstallSnapshot,
   getHistoryRecordById,
   markMergeAsReverted,
   resolveBackupDir,
 } from './historyService';
-import {
-  readHostFile,
-  writeHostFile,
-  checkHostFileExists,
-  forceRemoveContainer,
-  createHostDirectory,
-  removeHostDirectory,
-  runHostDockerCompose,
-  resolveDefaultHostHome,
-  ensureHostVolumeDirectories,
-  detectAndInjectEnvVariables,
-  isHostPortFree,
-} from './hostFsService';
-import { resolvePortCollisions, extractPortsFromCompose, RemappedPort } from './portCollisionService';
-import {
-  mergeComposeWithAst,
-  enforceDeterministicContainerNames,
-  validateComposeAstObject,
-  strictlyDumpComposeAst,
-} from './stackService';
-import { resolveComposeBuildContexts } from './buildContextService';
-import { namespaceRelativeVolumeMounts } from './remoteComposeService';
-import { sysLog } from './systemLogService';
-import {
-  createDiagnosticBundle,
-  recordMicroStep,
-  saveDiagnosticBundleToDisk,
-  DiagnosticBundle,
-} from './diagnosticLogService';
+import { readHostFile, writeHostFile, checkHostFileExists, forceRemoveContainer } from './hostFsService';
 
 const execAsync = util.promisify(exec);
 
@@ -167,7 +138,7 @@ export function resolveHostPathToContainer(hostPath: string, hostRoot: string): 
 export type PipelineStepStatus = 'pending' | 'running' | 'success' | 'failed' | 'skipped';
 
 export interface PipelineStreamEvent {
-  type: 'step_update' | 'log' | 'completed' | 'failed' | 'auto_reverted' | 'diagnostic_bundle';
+  type: 'step_update' | 'log' | 'completed' | 'failed' | 'auto_reverted';
   mergeId: string;
   stepIndex?: number; // 1 to 7
   stepId?: string;
@@ -177,7 +148,6 @@ export interface PipelineStreamEvent {
   log?: string;
   timestamp: string;
   payload?: Record<string, unknown>;
-  bundle?: DiagnosticBundle;
 }
 
 export interface StreamingPipelineRequest {
@@ -609,71 +579,38 @@ export async function executeStreamingRevert(
   };
 
   try {
-    const isNewStackInstall = record?.installMode === 'new-stack';
-
     // Step 1: Halting Merged Services
     const t1 = Date.now();
-    updateStep(1, 'stop_merged', isNewStackInstall ? 'Halting Provisioned Stack' : 'Halting Merged Services', 'running');
-    logAndCollect(
-      isNewStackInstall
-        ? `Executing docker compose down -v at ${record?.targetDirectory}...`
-        : `Stopping merged services at ${record?.targetDirectory || 'target directory'}...`,
-      1
-    );
+    updateStep(1, 'stop_merged', 'Halting Merged Services', 'running');
+    logAndCollect(`Stopping merged services at ${record?.targetDirectory || 'target directory'}...`, 1);
 
     if (privs.isSocketWritable && record?.targetDirectory) {
-      try {
-        const downArgs = isNewStackInstall ? 'down -v --remove-orphans' : 'down --remove-orphans';
-        logAndCollect(`Attempting graceful stack teardown via docker compose ${downArgs}...`, 1);
-        const downResult = await runHostDockerCompose(record.targetDirectory, downArgs);
-        if (!downResult.success) {
-          throw new Error(downResult.stderr || 'Graceful docker compose down returned non-zero code');
-        }
-        logAndCollect('Graceful stack halt succeeded.', 1);
-      } catch (gracefulErr) {
-        // Directive 3: Force Teardown Fallback if graceful down hangs, fails, or times out
-        logAndCollect(
-          `Notice: Graceful stop encountered an issue (${(gracefulErr as Error).message}). Executing forceful container termination fallback...`,
-          1
-        );
-
-        // 1. Force remove all affected services by name
-        if (record.affectedServices && record.affectedServices.length > 0) {
-          for (const svc of record.affectedServices) {
-            logAndCollect(`Force killing and removing container "${svc}"...`, 1);
-            await forceRemoveContainer(svc);
-          }
-        }
-
-        // 2. Scan Docker daemon for lingering containers belonging to target directory or stack
-        try {
-          const { containers } = await getContainersList();
-          for (const c of containers) {
-            const matchesDir = record.targetDirectory && c.compose?.workingDir === record.targetDirectory;
-            const matchesStack = record.targetStackName && c.compose?.project?.toLowerCase() === record.targetStackName.toLowerCase();
-            const matchesService = record.affectedServices?.some((s) => c.cleanName === s || c.compose?.service === s);
-            if (matchesDir || matchesStack || matchesService) {
-              logAndCollect(`Force terminating lingering stack container "${c.cleanName}" (${c.id})...`, 1);
-              await forceRemoveContainer(c.id || c.cleanName);
-            }
-          }
-        } catch (forceErr) {
-          logAndCollect(`Force removal scan note: ${(forceErr as Error).message}`, 1);
-        }
+      const helperImage = await getBestAvailableImage();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const stopRunner = await queryDockerEngine<any>('/containers/create', 'POST', {
+        Image: helperImage,
+        Entrypoint: [],
+        Cmd: ['sh', '-c', `cd "${record.targetDirectory}" && (docker compose down || docker-compose down || true)`],
+        HostConfig: {
+          Binds: [
+            `${DOCKER_SOCKET_PATH}:/var/run/docker.sock`,
+            `${record.targetDirectory}:${record.targetDirectory}`,
+          ],
+        },
+      });
+      if (stopRunner && stopRunner.Id) {
+        await queryDockerEngine(`/containers/${stopRunner.Id}/start`, 'POST');
+        await queryDockerEngine(`/containers/${stopRunner.Id}/wait`, 'POST');
+        await queryDockerEngine(`/containers/${stopRunner.Id}?force=true`, 'DELETE');
       }
     }
     await sleep(400);
-    updateStep(1, 'stop_merged', isNewStackInstall ? 'Halting Provisioned Stack' : 'Halting Merged Services', 'success', Date.now() - t1);
+    updateStep(1, 'stop_merged', 'Halting Merged Services', 'success', Date.now() - t1);
 
-    // Step 2: Restoring Target Compose Backup or Removing Provisioned Directory
+    // Step 2: Restoring Target Compose Backup
     const t2 = Date.now();
-    updateStep(2, 'restore_compose', isNewStackInstall ? 'Pruning Provisioned Directory' : 'Restoring Target Compose Backup', 'running');
-
-    if (isNewStackInstall && record?.targetDirectory) {
-      logAndCollect(`Recursively deleting provisioned directory ${record.targetDirectory}...`, 2);
-      await removeHostDirectory(record.targetDirectory);
-      logAndCollect(`Successfully purged directory ${record.targetDirectory}.`, 2);
-    } else if (record?.targetDirectory) {
+    updateStep(2, 'restore_compose', 'Restoring Target Compose Backup', 'running');
+    if (record?.targetDirectory) {
       let restoredContent = record.preMergeComposeContent;
       if (!restoredContent && record.targetComposeBackupPath && fs.existsSync(record.targetComposeBackupPath)) {
         try {
@@ -689,40 +626,39 @@ export async function executeStreamingRevert(
         await writeHostFile(targetComposePath, restoredContent);
         logAndCollect(`Original target compose file written back to ${targetComposePath}.`, 2);
 
-        // Directive 3: Complete Restoration of .env file
-        let restoredEnv = record.preMergeEnvContent;
-        if (!restoredEnv && record.targetEnvBackupPath && fs.existsSync(record.targetEnvBackupPath)) {
-          try {
-            restoredEnv = fs.readFileSync(record.targetEnvBackupPath, 'utf8');
-          } catch {
-            // ignore
-          }
-        }
-        if (restoredEnv && restoredEnv.trim().length > 0) {
-          const targetEnvPath = path.join(record.targetDirectory, '.env');
-          await writeHostFile(targetEnvPath, restoredEnv);
-          logAndCollect(`Original .env configuration restored to ${targetEnvPath}.`, 2);
-        }
-
-        // Verify files synced on host disk
-        await checkHostFileExists(targetComposePath);
-
         // Bring restored target stack back up
         if (privs.isSocketWritable) {
           logAndCollect(`Re-launching original stack in ${record.targetDirectory}...`, 2);
-          await runHostDockerCompose(record.targetDirectory, 'up -d --remove-orphans');
+          const helperImage = await getBestAvailableImage();
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const relaunchRunner = await queryDockerEngine<any>('/containers/create', 'POST', {
+            Image: helperImage,
+            Entrypoint: [],
+            Cmd: ['sh', '-c', `cd "${record.targetDirectory}" && (docker compose up -d || docker-compose up -d || true)`],
+            HostConfig: {
+              Binds: [
+                `${DOCKER_SOCKET_PATH}:/var/run/docker.sock`,
+                `${record.targetDirectory}:${record.targetDirectory}`,
+              ],
+            },
+          });
+          if (relaunchRunner && relaunchRunner.Id) {
+            await queryDockerEngine(`/containers/${relaunchRunner.Id}/start`, 'POST');
+            await queryDockerEngine(`/containers/${relaunchRunner.Id}/wait`, 'POST');
+            await queryDockerEngine(`/containers/${relaunchRunner.Id}?force=true`, 'DELETE');
+          }
         }
       } else {
         logAndCollect('No previous target compose existed; cleaning up generated stack file.', 2);
       }
     }
     await sleep(400);
-    updateStep(2, 'restore_compose', isNewStackInstall ? 'Pruning Provisioned Directory' : 'Restoring Target Compose Backup', 'success', Date.now() - t2);
+    updateStep(2, 'restore_compose', 'Restoring Target Compose Backup', 'success', Date.now() - t2);
 
     // Step 3: Re-Activating Standalone Source Stacks
     const t3 = Date.now();
     updateStep(3, 'restart_standalone', 'Re-Activating Standalone Source Stacks', 'running');
-    if (!isNewStackInstall && record?.sourceConfigs && record.sourceConfigs.length > 0) {
+    if (record?.sourceConfigs && record.sourceConfigs.length > 0) {
       for (const sc of record.sourceConfigs) {
         if (sc.workingDir && sc.workingDir !== record.targetDirectory) {
           logAndCollect(`Spinning up original stack in ${sc.workingDir}...`, 3);
@@ -935,657 +871,3 @@ export async function repairTargetStack(
     logs,
   };
 }
-
-export interface StreamingComposeInstallRequest {
-  installId?: string;
-  sourceUrl: string;
-  targetStackName: string;
-  targetDirectory: string;
-  installMode: 'existing-stack' | 'new-stack';
-  composeYaml: string;
-}
-
-/**
- * Directives 1, 3, 4, 5: Live Streaming Remote Compose Installation Engine (SSE)
- * Fully automated installation to existing stack or newly provisioned directory
- * with intelligent port collision mutation, zero-data-loss snapshots, and elevated deployment.
- */
-export async function executeStreamingComposeInstall(
-  req: StreamingComposeInstallRequest,
-  emit: (event: PipelineStreamEvent) => void
-): Promise<void> {
-  const installId = req.installId || `install_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 7)}`;
-  const { containers } = await getContainersList();
-  const isNewStack = req.installMode === 'new-stack';
-
-  // Directive 1 & 2: Running DiagnosticBundle tracking every micro-step and variable state
-  const diagBundle = createDiagnosticBundle({
-    installId,
-    deploymentType: req.installMode,
-    targetStackName: req.targetStackName,
-    targetPath: req.targetDirectory,
-    sourceUrl: req.sourceUrl,
-  });
-
-  let currentStepIndex = 1;
-  let currentStepId = 'preflight';
-  let currentStepName = 'Pre-Flight & Remote Fetch Validation';
-
-  const log = (msg: string, stepIndex?: number) => {
-    const sIdx = stepIndex || currentStepIndex;
-    recordMicroStep(diagBundle, {
-      stepIndex: sIdx,
-      stepId: currentStepId,
-      stepName: currentStepName,
-      status: 'running',
-      log: msg,
-    });
-    emit({
-      type: 'log',
-      mergeId: installId,
-      stepIndex: sIdx,
-      log: msg,
-      timestamp: new Date().toISOString(),
-      bundle: diagBundle,
-    });
-  };
-
-  const updateStep = (
-    stepIndex: number,
-    stepId: string,
-    stepName: string,
-    status: PipelineStepStatus,
-    durationMs?: number,
-    metadata?: Record<string, unknown>
-  ) => {
-    currentStepIndex = stepIndex;
-    currentStepId = stepId;
-    currentStepName = stepName;
-    recordMicroStep(diagBundle, {
-      stepIndex,
-      stepId,
-      stepName,
-      status,
-      durationMs,
-      metadata,
-    });
-    emit({
-      type: 'step_update',
-      mergeId: installId,
-      stepIndex,
-      stepId,
-      stepName,
-      status,
-      durationMs,
-      timestamp: new Date().toISOString(),
-      bundle: diagBundle,
-    });
-  };
-
-  const INSTALL_STEPS = isNewStack
-    ? [
-        { index: 1, id: 'preflight', name: 'Pre-Flight & Remote Fetch Validation' },
-        { index: 2, id: 'port_collision', name: 'Intelligent Port Collision Resolution' },
-        { index: 3, id: 'provision_directory', name: 'Directory Provisioning & Host FS Setup' },
-        { index: 4, id: 'write_compose', name: 'Build Context & Compose Deployment' },
-        { index: 5, id: 'deployment', name: 'Elevated Docker Compose Deployment' },
-        { index: 6, id: 'completion', name: 'Socket Health Audit & Ledger Verification' },
-      ]
-    : [
-        { index: 1, id: 'preflight', name: 'Pre-Flight & Remote Fetch Validation' },
-        { index: 2, id: 'port_collision', name: 'Intelligent Port Collision Resolution' },
-        { index: 3, id: 'backup_archive', name: 'Zero-Data-Loss Backup & Snapshot' },
-        { index: 4, id: 'ast_synthesis', name: 'Build Context & AST Synthesis Injection' },
-        { index: 5, id: 'deployment', name: 'Elevated Docker Compose Deployment' },
-        { index: 6, id: 'completion', name: 'Socket Health Audit & Ledger Verification' },
-      ];
-
-  for (const s of INSTALL_STEPS) {
-    updateStep(s.index, s.id, s.name, 'pending');
-  }
-
-  let finalComposeYaml = req.composeYaml;
-  let affectedServices: string[] = [];
-  let preMergeComposeContent: string | undefined;
-
-  try {
-    // =========================================================================
-    // Step 1: Pre-flight & Remote Fetch Validation
-    // =========================================================================
-    const t1 = Date.now();
-    updateStep(1, 'preflight', 'Pre-Flight & Remote Fetch Validation', 'running');
-    log(`[Micro-Step 1.1] Initializing installation pipeline [${installId}] for ${req.sourceUrl}`, 1);
-    log(`[Micro-Step 1.2] Target mode: ${req.installMode} -> ${req.targetDirectory}`, 1);
-
-    if (!finalComposeYaml || finalComposeYaml.trim().length === 0) {
-      throw new Error('Compose YAML content is empty or undefined.');
-    }
-
-    // Parse YAML to discover services and capture remote AST
-    const doc = yaml.parse(finalComposeYaml);
-    if (!doc || !doc.services || typeof doc.services !== 'object') {
-      throw new Error('Invalid Compose specification: "services" root key missing.');
-    }
-    diagBundle.fetchedRemoteAst = doc;
-    affectedServices = Object.keys(doc.services);
-    log(`[Micro-Step 1.3] Discovered ${affectedServices.length} remote service(s) to install: ${affectedServices.join(', ')}`, 1);
-    await sleep(250);
-    updateStep(1, 'preflight', 'Pre-Flight & Remote Fetch Validation', 'success', Date.now() - t1, {
-      serviceCount: affectedServices.length,
-      services: affectedServices,
-    });
-
-    // =========================================================================
-    // Step 2: Intelligent Port Collision Resolution
-    // =========================================================================
-    const t2 = Date.now();
-    updateStep(2, 'port_collision', 'Intelligent Port Collision Resolution', 'running');
-    log('[Micro-Step 2.1] Scanning system-wide container host ports and OS network sockets for collisions...', 2);
-
-    const occupiedPorts = new Set<number>();
-    for (const c of containers) {
-      for (const p of c.ports) {
-        if (p.publicPort) occupiedPorts.add(p.publicPort);
-      }
-    }
-
-    const requestedPorts = extractPortsFromCompose(finalComposeYaml);
-    for (const rp of requestedPorts) {
-      if (rp.hostPort) {
-        const isFree = await isHostPortFree(rp.hostPort);
-        if (!isFree) {
-          log(`[Micro-Step 2.2] Host port ${rp.hostPort} is actively bound on the host system. Flagging as occupied.`, 2);
-          occupiedPorts.add(rp.hostPort);
-        }
-      }
-    }
-    log(`[Micro-Step 2.3] Identified ${occupiedPorts.size} currently bound host port(s) across fleet and host OS.`, 2);
-
-    const portRes = resolvePortCollisions(finalComposeYaml, occupiedPorts);
-    finalComposeYaml = portRes.resolvedYaml;
-
-    if (portRes.hasCollisions) {
-      log(`[Micro-Step 2.4] Detected ${portRes.remappedPorts.length} port collision(s)! Programmatically mutated AST:`, 2);
-      for (const r of portRes.remappedPorts) {
-        log(
-          ` -> Service [${r.service}]: Host port ${r.originalHostPort} occupied -> Re-allocated to free port ${r.allocatedHostPort} (Container port ${r.containerPort}/${r.protocol})`,
-          2
-        );
-      }
-    } else {
-      log('[Micro-Step 2.4] Zero port collisions detected. All requested host ports are free.', 2);
-    }
-    await sleep(250);
-    updateStep(2, 'port_collision', 'Intelligent Port Collision Resolution', 'success', Date.now() - t2, {
-      remappedPorts: portRes.remappedPorts,
-      hasCollisions: portRes.hasCollisions,
-    });
-
-    if (isNewStack) {
-      // =========================================================================
-      // Step 3 (New Stack): Directory Provisioning & Host FS Setup
-      // =========================================================================
-      const t3 = Date.now();
-      updateStep(3, 'provision_directory', 'Directory Provisioning & Host FS Setup', 'running');
-      log(`[Micro-Step 3.1] Initializing base AST { version: "3.8", services: {} } for new stack`, 3);
-      diagBundle.initialAstSnapshot = { version: '3.8', services: {} };
-
-      log(`[Micro-Step 3.2] Provisioning target directory: ${req.targetDirectory}`, 3);
-      const dirCreated = await createHostDirectory(req.targetDirectory);
-      if (!dirCreated) {
-        log('Notice: Host directory creation fallback initialized.', 3);
-      }
-      log(`[Micro-Step 3.3] Target directory verified: ${req.targetDirectory} (permissions 0755)`, 3);
-      await sleep(250);
-      updateStep(3, 'provision_directory', 'Directory Provisioning & Host FS Setup', 'success', Date.now() - t3);
-
-      // =========================================================================
-      // Step 4 (New Stack): Build Context Resolution & Compose YAML Deployment
-      // =========================================================================
-      const t4 = Date.now();
-      updateStep(4, 'write_compose', 'Build Context & Compose Deployment', 'running');
-
-      log('[Micro-Step 4.1] Analyzing services for build contexts, Dockerfile references, and pre-built image overrides...', 4);
-      const buildContextResult = await resolveComposeBuildContexts({
-        composeYaml: finalComposeYaml,
-        sourceUrl: req.sourceUrl,
-        targetDirectory: req.targetDirectory,
-        defaultAppName: req.targetStackName,
-        log: (msg) => log(msg, 4),
-      });
-      finalComposeYaml = buildContextResult.mutatedYaml;
-
-      log('[Micro-Step 4.2] Detecting and injecting dynamic .env variables into target environment...', 4);
-      await detectAndInjectEnvVariables(
-        req.targetDirectory,
-        finalComposeYaml,
-        buildContextResult.clonedContextPaths[0],
-        (msg) => log(msg, 4)
-      );
-
-      log('[Micro-Step 4.3] Enforcing deterministic container_name mappings across all services...', 4);
-      finalComposeYaml = enforceDeterministicContainerNames(finalComposeYaml);
-
-      // Part 1, Item 2: Validation of AST before stringifying
-      log('[Micro-Step 4.4] Strictly validating mutated Compose AST structure...', 4);
-      const parsedAst = yaml.parse(finalComposeYaml);
-      const validatedAst = validateComposeAstObject(parsedAst);
-      diagBundle.finalMergedAst = validatedAst;
-
-      // Part 1, Item 3: Strict Stringification using yaml.dump with zero-byte prevention
-      log('[Micro-Step 4.5] Strict stringification via yaml.dump with zero-byte safety guarantees...', 4);
-      finalComposeYaml = strictlyDumpComposeAst(validatedAst);
-      const fileBytes = Buffer.byteLength(finalComposeYaml, 'utf-8');
-      if (fileBytes === 0) {
-        throw new Error('Critical Stringification Failure: Output string byte length is 0. Aborting write to prevent 0-byte file.');
-      }
-      diagBundle.fileWriteBytes = fileBytes;
-
-      const targetComposePath = path.join(req.targetDirectory, 'docker-compose.yml');
-      diagBundle.targetComposePath = targetComposePath;
-      log(`[Micro-Step 4.6] Writing finalized Docker Compose file (${fileBytes} bytes) to ${targetComposePath}...`, 4);
-      const writeOk = await writeHostFile(targetComposePath, finalComposeYaml);
-      if (!writeOk) {
-        throw new Error(`Failed to write compose file to ${targetComposePath}`);
-      }
-
-      const fileSynced = await checkHostFileExists(targetComposePath);
-      if (!fileSynced) {
-        throw new Error(`Filesystem sync verification failed: ${targetComposePath} is missing or empty`);
-      }
-
-      sysLog.pipeline('ast', `Synthesized new Compose stack "${req.targetStackName}" with deterministic container_name mappings`, {
-        targetStackName: req.targetStackName,
-        targetDirectory: req.targetDirectory,
-        fileBytes,
-      });
-
-      log(`[Micro-Step 4.7] Configuration committed and synchronized to host filesystem (${fileBytes} bytes).`, 4);
-      await sleep(250);
-      updateStep(4, 'write_compose', 'Build Context & Compose Deployment', 'success', Date.now() - t4, {
-        fileBytes,
-        targetComposePath,
-      });
-    } else {
-      // =========================================================================
-      // Step 3 (Existing Stack): Zero-Data-Loss Backup & Snapshot
-      // =========================================================================
-      const t3 = Date.now();
-      updateStep(3, 'backup_archive', 'Zero-Data-Loss Backup & Snapshot', 'running');
-      log(`[Micro-Step 3.1] Reading existing compose configuration from ${req.targetDirectory}...`, 3);
-
-      const existingCandidates = [
-        path.join(req.targetDirectory, 'docker-compose.yml'),
-        path.join(req.targetDirectory, 'docker-compose.yaml'),
-        path.join(req.targetDirectory, 'compose.yaml'),
-      ];
-      for (const cand of existingCandidates) {
-        try {
-          const content = await readHostFile(cand);
-          if (content && content.trim().length > 0) {
-            preMergeComposeContent = content;
-            break;
-          }
-        } catch {
-          // ignore and check next
-        }
-      }
-
-      // Part 1, Item 1: Safe Fallback: If reading fails or is empty, catch error and fallback to base AST
-      if (!preMergeComposeContent || preMergeComposeContent.trim().length === 0) {
-        log(`[Micro-Step 3.2] Safe Fallback Triggered: Could not read target compose file in ${req.targetDirectory}. Falling back to base AST { version: "3.8", services: {} }.`, 3);
-        preMergeComposeContent = 'version: "3.8"\nservices: {}\n';
-        diagBundle.initialAstSnapshot = { version: '3.8', services: {} };
-      } else {
-        try {
-          const parsedInitial = yaml.parse(preMergeComposeContent);
-          diagBundle.initialAstSnapshot = parsedInitial || { version: '3.8', services: {} };
-          log(`[Micro-Step 3.2] Captured initial AST snapshot from existing stack (${Buffer.byteLength(preMergeComposeContent)} bytes).`, 3);
-        } catch (parseInitialErr) {
-          log(`[Micro-Step 3.2] Safe Fallback: Parse error on existing compose file (${(parseInitialErr as Error).message}). Initializing base AST { version: "3.8", services: {} }.`, 3);
-          preMergeComposeContent = 'version: "3.8"\nservices: {}\n';
-          diagBundle.initialAstSnapshot = { version: '3.8', services: {} };
-        }
-      }
-
-      log(`[Micro-Step 3.3] Creating zero-data-loss pre-merge snapshot archive...`, 3);
-      const snapshot = await createComposeInstallSnapshot({
-        installId,
-        targetStackName: req.targetStackName,
-        targetDirectory: req.targetDirectory,
-        installMode: 'existing-stack',
-        sourceUrl: req.sourceUrl,
-        affectedServices,
-        preMergeComposeContent,
-        remappedPorts: portRes.remappedPorts,
-      });
-      log(`[Micro-Step 3.4] Backup archive verified at: ${snapshot.backupArchiveDir}`, 3);
-      await sleep(250);
-      updateStep(3, 'backup_archive', 'Zero-Data-Loss Backup & Snapshot', 'success', Date.now() - t3, {
-        backupArchiveDir: snapshot.backupArchiveDir,
-      });
-
-      // =========================================================================
-      // Step 4 (Existing Stack): Build Context & AST Stack Synthesis Injection
-      // =========================================================================
-      const t4 = Date.now();
-      updateStep(4, 'ast_synthesis', 'Build Context & AST Synthesis Injection', 'running');
-
-      log('[Micro-Step 4.1] Analyzing incoming services for build contexts and pre-built image tags...', 4);
-      const buildContextResult = await resolveComposeBuildContexts({
-        composeYaml: finalComposeYaml,
-        sourceUrl: req.sourceUrl,
-        targetDirectory: req.targetDirectory,
-        defaultAppName: req.targetStackName,
-        log: (msg) => log(msg, 4),
-      });
-      finalComposeYaml = buildContextResult.mutatedYaml;
-
-      log('[Micro-Step 4.2] Detecting and injecting dynamic .env variables into target environment...', 4);
-      await detectAndInjectEnvVariables(
-        req.targetDirectory,
-        finalComposeYaml,
-        buildContextResult.clonedContextPaths[0],
-        (msg) => log(msg, 4)
-      );
-
-      log('[Micro-Step 4.3] Injecting remote services into existing compose AST...', 4);
-      const parsedRemote = yaml.parse(finalComposeYaml);
-      const incomingServices = parsedRemote.services || {};
-      const incomingVolumes = parsedRemote.volumes || {};
-      const incomingNetworks = parsedRemote.networks || {};
-
-      namespaceRelativeVolumeMounts(incomingServices);
-
-      const mergedYaml = mergeComposeWithAst(
-        preMergeComposeContent,
-        incomingServices,
-        incomingVolumes,
-        incomingNetworks
-      );
-
-      log('[Micro-Step 4.4] Enforcing deterministic container_name on synthesized YAML...', 4);
-      const withNamesYaml = enforceDeterministicContainerNames(mergedYaml);
-
-      // Part 1, Item 2: Validation of mutated AST before stringifying
-      log('[Micro-Step 4.5] Validating merged Compose AST object...', 4);
-      const parsedMerged = yaml.parse(withNamesYaml);
-      const validatedMergedAst = validateComposeAstObject(parsedMerged);
-      diagBundle.finalMergedAst = validatedMergedAst;
-
-      // Part 1, Item 3: Strict Stringification using yaml.dump with zero-byte prevention
-      log('[Micro-Step 4.6] Performing strict stringification via yaml.dump...', 4);
-      finalComposeYaml = strictlyDumpComposeAst(validatedMergedAst);
-      const fileBytes = Buffer.byteLength(finalComposeYaml, 'utf-8');
-      if (fileBytes === 0) {
-        throw new Error('Critical Stringification Failure: Output string byte length is 0. Aborting write to prevent 0-byte file.');
-      }
-      diagBundle.fileWriteBytes = fileBytes;
-
-      const targetComposePath = path.join(req.targetDirectory, 'docker-compose.yml');
-      diagBundle.targetComposePath = targetComposePath;
-      log(`[Micro-Step 4.7] Committing synthesized compose file (${fileBytes} bytes) to ${targetComposePath}...`, 4);
-      const writeOk = await writeHostFile(targetComposePath, finalComposeYaml);
-      if (!writeOk) {
-        throw new Error(`Failed to write synthesized compose file to ${targetComposePath}`);
-      }
-
-      const fileSynced = await checkHostFileExists(targetComposePath);
-      if (!fileSynced) {
-        throw new Error(`Filesystem sync verification failed: ${targetComposePath} is missing or empty`);
-      }
-      log(
-        `[Micro-Step 4.8] AST mutation complete and synchronized to disk (${fileBytes} bytes). Total services in target stack: ${Object.keys(validatedMergedAst.services || {}).length}`,
-        4
-      );
-
-      sysLog.pipeline('ast', `Injected remote services into stack "${req.targetStackName}" via AST synthesis`, {
-        targetStackName: req.targetStackName,
-        services: affectedServices,
-        fileBytes,
-      });
-
-      await sleep(250);
-      updateStep(4, 'ast_synthesis', 'Build Context & AST Synthesis Injection', 'success', Date.now() - t4, {
-        fileBytes,
-        targetComposePath,
-      });
-    }
-
-    // =========================================================================
-    // Step 5: Elevated Docker Compose Deployment (Part 1, Item 4: Explicit Execution)
-    // =========================================================================
-    const t5 = Date.now();
-    updateStep(5, 'deployment', 'Elevated Docker Compose Deployment', 'running');
-
-    log('[Micro-Step 5.1] Scanning YAML for host volume mounts and permissions...', 5);
-    const volumeDirs = await ensureHostVolumeDirectories(req.targetDirectory, finalComposeYaml, (msg) => log(msg, 5));
-    if (volumeDirs.length > 0) {
-      log(`[Micro-Step 5.1] Verified ${volumeDirs.length} host volume directory/directories initialized with unrestricted 777 permissions.`, 5);
-    }
-
-    log('[Micro-Step 5.2] De-conflicting container names to prevent daemon collisions...', 5);
-    for (const svc of affectedServices) {
-      await forceRemoveContainer(svc);
-    }
-
-    // Part 1, Item 4: Explicit Execution with -f absolute file path and cwd set to targetDirectory
-    const targetComposePath = diagBundle.targetComposePath || path.join(req.targetDirectory, 'docker-compose.yml');
-    log(
-      `[Micro-Step 5.3] Spawning elevated Docker Compose: docker compose -f "${targetComposePath}" up -d --build --remove-orphans (cwd: ${req.targetDirectory})...`,
-      5
-    );
-
-    const composeResult = await runHostDockerCompose(
-      req.targetDirectory,
-      'up -d --build --remove-orphans',
-      targetComposePath
-    );
-
-    diagBundle.dockerExecutionCommand = composeResult.commandExecuted;
-    diagBundle.cwd = composeResult.cwd;
-    diagBundle.stdout = composeResult.stdout;
-    diagBundle.stderr = composeResult.stderr;
-    diagBundle.exitCode = composeResult.exitCode;
-
-    if (composeResult.stdout) {
-      for (const line of composeResult.stdout.split('\n')) {
-        if (line.trim()) log(` [docker] ${line}`, 5);
-      }
-    }
-
-    const fatalKeywordsRegex = /(error|failed|fatal|cannot|no such file|not found|denied|conflict|syntax error)/i;
-    const hasFatalOutput =
-      (composeResult.stderr && fatalKeywordsRegex.test(composeResult.stderr)) ||
-      (composeResult.stdout && /failed to solve|no such file or directory/i.test(composeResult.stdout));
-
-    if (!composeResult.success || composeResult.exitCode !== 0 || hasFatalOutput) {
-      const errDetail = composeResult.stderr || composeResult.stdout || `Process exited with code ${composeResult.exitCode}`;
-      log(`[docker error] ${errDetail}`, 5);
-      throw new Error(`Docker compose deployment failed (exit code ${composeResult.exitCode}): ${errDetail}`);
-    }
-
-    log('[Micro-Step 5.4] Docker Compose deployment execution resolved successfully.', 5);
-    await sleep(300);
-    updateStep(5, 'deployment', 'Elevated Docker Compose Deployment', 'success', Date.now() - t5, {
-      command: composeResult.commandExecuted,
-      cwd: composeResult.cwd,
-      exitCode: composeResult.exitCode,
-    });
-
-    // =========================================================================
-    // Step 6: Socket Health Audit & State Ledger Verification
-    // =========================================================================
-    const t6 = Date.now();
-    updateStep(6, 'completion', 'Socket Health Audit & Ledger Verification', 'running');
-    log('[Micro-Step 6.1] Auditing Docker daemon socket: Polling container health across 15-second stability window...', 6);
-
-    const crashedServices: { name: string; resolvedId: string; status: string; logs: string }[] = [];
-    const verifiedServices = new Set<string>();
-
-    for (let poll = 1; poll <= 15; poll++) {
-      try {
-        for (const svc of affectedServices) {
-          const match = await getContainerByComposeService(req.targetStackName, svc);
-
-          if (match) {
-            const state = match.state?.toLowerCase();
-            const statusLower = (match.status || '').toLowerCase();
-            const resolvedId = match.id || svc;
-
-            if (state === 'exited' || state === 'dead' || statusLower.includes('exit') || statusLower.includes('dead')) {
-              log(`🚨 Service "${svc}" (Resolved ID: ${resolvedId}) died or exited with status: "${match.status || state}". Fetching diagnostic logs...`, 6);
-              const diagnosticLogs = await getContainerLogsTail(resolvedId, 100);
-              crashedServices.push({
-                name: svc,
-                resolvedId,
-                status: match.status || state,
-                logs: diagnosticLogs,
-              });
-              verifiedServices.delete(svc);
-            } else if (state === 'running') {
-              if (!verifiedServices.has(svc)) {
-                log(` -> Service "${svc}" [ID: ${resolvedId}] verified healthy via label audit (Up: "${match.status}") [Poll ${poll}/15]`, 6);
-                verifiedServices.add(svc);
-              }
-            }
-          }
-        }
-
-        if (crashedServices.length > 0) {
-          break;
-        }
-      } catch {
-        // transient error during poll
-      }
-      await sleep(1000);
-    }
-
-    if (crashedServices.length > 0) {
-      for (const crash of crashedServices) {
-        log(`\n===============================================================`, 6);
-        log(`DIAGNOSTIC CRASH STREAM FOR [${crash.name}] (Resolved Container ID: ${crash.resolvedId}) (Status: ${crash.status})`, 6);
-        log(`Command: docker logs ${crash.resolvedId} --tail 100`, 6);
-        log(`---------------------------------------------------------------`, 6);
-        const logLines = crash.logs.split('\n');
-        for (const line of logLines) {
-          if (line.trim()) log(` [stderr/stdout] ${line}`, 6);
-        }
-        log(`===============================================================\n`, 6);
-      }
-
-      throw new Error(
-        `Container startup failure: ${crashedServices.map((c) => `${c.name} (${c.status})`).join(', ')}. Live logs streamed above.`
-      );
-    }
-
-    const missingServices = affectedServices.filter((svc) => !verifiedServices.has(svc));
-    if (missingServices.length > 0) {
-      for (const missing of missingServices) {
-        log(`Fetching diagnostic logs for unverified service "${missing}"...`, 6);
-        const diag = await getContainerLogsTail(missing, 100);
-        for (const line of diag.split('\n')) {
-          if (line.trim()) log(` [${missing}] ${line}`, 6);
-        }
-      }
-      throw new Error(
-        `Container health check failed: The following service(s) failed to achieve continuous running state: ${missingServices.join(', ')}`
-      );
-    }
-
-    log(`[Micro-Step 6.2] Socket verification confirmed: All ${affectedServices.length} service(s) running and attached to stack.`, 6);
-
-    if (isNewStack) {
-      await createComposeInstallSnapshot({
-        installId,
-        targetStackName: req.targetStackName,
-        targetDirectory: req.targetDirectory,
-        installMode: 'new-stack',
-        sourceUrl: req.sourceUrl,
-        affectedServices,
-        remappedPorts: portRes.remappedPorts,
-      });
-      log(`[Micro-Step 6.3] Registered new stack "${req.targetStackName}" in State Ledger with 1-click rollback capability.`, 6);
-    } else {
-      log(`[Micro-Step 6.3] Updated state ledger for existing stack "${req.targetStackName}".`, 6);
-    }
-
-    // Part 2: Finalize DiagnosticBundle and write to Manifexus existing log directory
-    diagBundle.success = true;
-    diagBundle.completedAt = new Date().toISOString();
-    const savedDiagnosticFile = saveDiagnosticBundleToDisk(diagBundle);
-    log(`[Micro-Step 6.4] DiagnosticBundle persisted to disk: ${savedDiagnosticFile}`, 6);
-
-    log('All installation steps finished with 100% verified operational success.', 6);
-    await sleep(200);
-    updateStep(6, 'completion', 'Socket Health Audit & Ledger Verification', 'success', Date.now() - t6, {
-      diagnosticBundleFile: savedDiagnosticFile,
-    });
-
-    emit({
-      type: 'completed',
-      mergeId: installId,
-      timestamp: new Date().toISOString(),
-      payload: {
-        success: true,
-        diagnosticBundle: diagBundle,
-      },
-      bundle: diagBundle,
-    });
-  } catch (err) {
-    const errMsg = (err as Error).message;
-    log(`CRITICAL PIPELINE FAILURE: ${errMsg}`, currentStepIndex);
-    updateStep(currentStepIndex, currentStepId, currentStepName, 'failed');
-
-    // Part 2: Record error stack trace and save complete bundle on failure
-    diagBundle.success = false;
-    diagBundle.completedAt = new Date().toISOString();
-    diagBundle.errorStackTrace = (err as Error).stack || errMsg;
-    const failureDiagnosticFile = saveDiagnosticBundleToDisk(diagBundle);
-    log(`[Diagnostics] Pipeline failure bundle saved for post-mortem analysis: ${failureDiagnosticFile}`, currentStepIndex);
-
-    // Directive 3 & Module 1: Automated Rollback & Resource Pruning on failure
-    log('INITIATING AUTOMATED ROLLBACK: Reverting target state and pruning orphaned files...', currentStepIndex);
-    try {
-      if (isNewStack) {
-        log(`Tearing down failed new stack in ${req.targetDirectory}...`, currentStepIndex);
-        await runHostDockerCompose(req.targetDirectory, 'down -v --remove-orphans');
-        for (const svc of affectedServices) {
-          await forceRemoveContainer(svc);
-        }
-        await pruneOrphanedDockerResources(`${req.targetStackName}_default`);
-        log(`Removing provisional target directory: ${req.targetDirectory}...`, currentStepIndex);
-        await removeHostDirectory(req.targetDirectory);
-        log('Provisional filesystem wiped cleanly. Zero orphaned containers, networks, or dangling images left on host.', currentStepIndex);
-      } else {
-        log(`Halting failed injected services in ${req.targetDirectory}...`, currentStepIndex);
-        for (const svc of affectedServices) {
-          await forceRemoveContainer(svc);
-        }
-        await pruneOrphanedDockerResources();
-        if (preMergeComposeContent) {
-          const targetComposePath = path.join(req.targetDirectory, 'docker-compose.yml');
-          log(`Restoring pre-merge target compose configuration to ${targetComposePath}...`, currentStepIndex);
-          await writeHostFile(targetComposePath, preMergeComposeContent);
-          await checkHostFileExists(targetComposePath);
-        }
-        await removeHostDirectory(path.join(req.targetDirectory, 'build-contexts'));
-        log('Relaunching original fleet services...', currentStepIndex);
-        await runHostDockerCompose(req.targetDirectory, 'up -d --remove-orphans');
-        log('Original stack restored to 100% operational health.', currentStepIndex);
-      }
-    } catch (rollbackErr) {
-      log(`Rollback notice: ${(rollbackErr as Error).message}`, currentStepIndex);
-    }
-
-    emit({
-      type: 'failed',
-      mergeId: installId,
-      stepIndex: currentStepIndex,
-      log: errMsg,
-      timestamp: new Date().toISOString(),
-      bundle: diagBundle,
-    });
-  }
-}
-
