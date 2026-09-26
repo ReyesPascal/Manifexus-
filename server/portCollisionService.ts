@@ -1,4 +1,5 @@
 import yaml from 'yaml';
+import { isHostPortFree } from './hostFsService';
 
 export interface ExtractedPort {
   service: string;
@@ -6,9 +7,8 @@ export interface ExtractedPort {
   containerPort: number;
   protocol: 'tcp' | 'udp';
   hostIp?: string;
-  originalRaw: string | number | Record<string, unknown>;
-  portIndex: number;
-  isLongSyntax: boolean;
+  originalRaw?: string | number | Record<string, unknown>;
+  portIndex?: number;
 }
 
 export interface RemappedPort {
@@ -21,7 +21,7 @@ export interface RemappedPort {
   reason: string;
 }
 
-export interface PortResolutionResult {
+export interface PortCollisionResult {
   hasCollisions: boolean;
   remappedPorts: RemappedPort[];
   resolvedYaml: string;
@@ -29,237 +29,335 @@ export interface PortResolutionResult {
   allAllocatedHostPorts: number[];
 }
 
+export class PortCollisionResultObject implements PortCollisionResult, PromiseLike<string> {
+  hasCollisions: boolean;
+  remappedPorts: RemappedPort[];
+  resolvedYaml: string;
+  extractedPorts: ExtractedPort[];
+  allAllocatedHostPorts: number[];
+
+  constructor(data: PortCollisionResult) {
+    this.hasCollisions = data.hasCollisions;
+    this.remappedPorts = data.remappedPorts;
+    this.resolvedYaml = data.resolvedYaml;
+    this.extractedPorts = data.extractedPorts;
+    this.allAllocatedHostPorts = data.allAllocatedHostPorts;
+  }
+
+  toString(): string {
+    return this.resolvedYaml;
+  }
+
+  then<TResult1 = string, TResult2 = never>(
+    onfulfilled?: ((value: string) => TResult1 | PromiseLike<TResult1>) | null,
+    onrejected?: ((reason: any) => TResult2 | PromiseLike<TResult2>) | null
+  ): Promise<TResult1 | TResult2> {
+    return Promise.resolve(this.resolvedYaml).then(onfulfilled, onrejected);
+  }
+}
+
 /**
- * Extracts host port mappings from a docker-compose.yml YAML string
+ * Extracts structured port definitions from a Compose YAML string.
  */
 export function extractPortsFromCompose(composeYaml: string): ExtractedPort[] {
   const extracted: ExtractedPort[] = [];
   try {
     const doc = yaml.parse(composeYaml);
-    if (!doc || typeof doc !== 'object' || !doc.services || typeof doc.services !== 'object') {
-      return [];
+    if (!doc || !doc.services || typeof doc.services !== 'object') {
+      return extracted;
     }
 
-    for (const [serviceName, serviceConfig] of Object.entries(doc.services)) {
-      if (!serviceConfig || typeof serviceConfig !== 'object') continue;
+    for (const [serviceName, serviceDef] of Object.entries(doc.services)) {
+      if (!serviceDef || typeof serviceDef !== 'object') continue;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const ports = (serviceConfig as any).ports;
-      if (!Array.isArray(ports)) continue;
+      const svc = serviceDef as any;
+      if (!Array.isArray(svc.ports)) continue;
 
-      ports.forEach((portEntry, portIndex) => {
-        if (typeof portEntry === 'string' || typeof portEntry === 'number') {
-          const parsed = parseShortSyntaxPort(String(portEntry));
-          if (parsed) {
-            extracted.push({
-              service: serviceName,
-              hostPort: parsed.hostPort,
-              containerPort: parsed.containerPort,
-              protocol: parsed.protocol,
-              hostIp: parsed.hostIp,
-              originalRaw: portEntry,
-              portIndex,
-              isLongSyntax: false,
-            });
+      for (let i = 0; i < svc.ports.length; i++) {
+        const portItem = svc.ports[i];
+        if (typeof portItem === 'string' || typeof portItem === 'number') {
+          const str = String(portItem).trim();
+          let protocol: 'tcp' | 'udp' = 'tcp';
+          let body = str;
+          if (str.includes('/')) {
+            const [pBody, proto] = str.split('/');
+            body = pBody;
+            if (proto.toLowerCase() === 'udp') protocol = 'udp';
           }
-        } else if (typeof portEntry === 'object' && portEntry !== null) {
-          // Long syntax: { target: 80, published: 8080, protocol: 'tcp', mode: 'host' }
-          const target = parseInt(String(portEntry.target), 10);
-          const published = portEntry.published ? parseInt(String(portEntry.published), 10) : undefined;
-          const protocol = (String(portEntry.protocol || 'tcp').toLowerCase() as 'tcp' | 'udp') || 'tcp';
-          if (!isNaN(target)) {
+
+          const parts = body.split(':');
+          if (parts.length === 1) {
+            // Container port only, e.g. "80"
+            const cp = parseInt(parts[0], 10);
+            if (!isNaN(cp)) {
+              extracted.push({
+                service: serviceName,
+                containerPort: cp,
+                protocol,
+                originalRaw: portItem,
+                portIndex: i,
+              });
+            }
+          } else if (parts.length === 2) {
+            // host:container, e.g. "8080:80" or "8080-8082:80-82"
+            const hostPart = parts[0];
+            const contPart = parts[1];
+            const hostMatch = hostPart.match(/^(\d+)(?:-(\d+))?/);
+            const contMatch = contPart.match(/^(\d+)(?:-(\d+))?/);
+            if (hostMatch && contMatch) {
+              const hStart = parseInt(hostMatch[1], 10);
+              const hEnd = hostMatch[2] ? parseInt(hostMatch[2], 10) : hStart;
+              const cStart = parseInt(contMatch[1], 10);
+              const count = hEnd - hStart;
+              for (let offset = 0; offset <= count; offset++) {
+                extracted.push({
+                  service: serviceName,
+                  hostPort: hStart + offset,
+                  containerPort: cStart + offset,
+                  protocol,
+                  originalRaw: portItem,
+                  portIndex: i,
+                });
+              }
+            }
+          } else if (parts.length >= 3) {
+            // ip:host:container, e.g. "127.0.0.1:8080:80"
+            const hostIp = parts[0];
+            const hostPart = parts[1];
+            const contPart = parts[2];
+            const hostMatch = hostPart.match(/^(\d+)(?:-(\d+))?/);
+            const contMatch = contPart.match(/^(\d+)(?:-(\d+))?/);
+            if (hostMatch && contMatch) {
+              const hStart = parseInt(hostMatch[1], 10);
+              const hEnd = hostMatch[2] ? parseInt(hostMatch[2], 10) : hStart;
+              const cStart = parseInt(contMatch[1], 10);
+              const count = hEnd - hStart;
+              for (let offset = 0; offset <= count; offset++) {
+                extracted.push({
+                  service: serviceName,
+                  hostIp,
+                  hostPort: hStart + offset,
+                  containerPort: cStart + offset,
+                  protocol,
+                  originalRaw: portItem,
+                  portIndex: i,
+                });
+              }
+            }
+          }
+        } else if (typeof portItem === 'object' && portItem !== null) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const pObj = portItem as any;
+          const containerPort = typeof pObj.target === 'number' ? pObj.target : parseInt(pObj.target, 10);
+          const hostPort = pObj.published ? parseInt(String(pObj.published), 10) : undefined;
+          const protocol = pObj.protocol?.toLowerCase() === 'udp' ? 'udp' : 'tcp';
+          const hostIp = pObj.host_ip ? String(pObj.host_ip) : undefined;
+          if (!isNaN(containerPort)) {
             extracted.push({
               service: serviceName,
-              hostPort: !isNaN(Number(published)) ? Number(published) : undefined,
-              containerPort: target,
+              hostPort: typeof hostPort === 'number' && !isNaN(hostPort) ? hostPort : undefined,
+              containerPort,
               protocol,
-              originalRaw: portEntry,
-              portIndex,
-              isLongSyntax: true,
+              hostIp,
+              originalRaw: portItem,
+              portIndex: i,
             });
           }
         }
-      });
+      }
     }
   } catch (err) {
-    console.warn('[PortCollisionService] Error parsing compose for ports:', err);
+    console.warn('[PortCollisionService] Error extracting ports from compose:', err);
   }
-
   return extracted;
 }
 
 /**
- * Parses short docker-compose port string e.g. "8080:80", "127.0.0.1:8080:80/tcp", "80"
+ * Extracts all published host ports from a Compose YAML string.
  */
-function parseShortSyntaxPort(raw: string): {
-  hostPort?: number;
-  containerPort: number;
-  protocol: 'tcp' | 'udp';
-  hostIp?: string;
-} | null {
-  const clean = raw.trim();
-  let protocol: 'tcp' | 'udp' = 'tcp';
-  let portPart = clean;
-
-  if (clean.includes('/')) {
-    const [p, proto] = clean.split('/');
-    portPart = p;
-    protocol = proto.toLowerCase() === 'udp' ? 'udp' : 'tcp';
+export function extractPublishedPorts(composeYaml: string): number[] {
+  const ports: number[] = [];
+  try {
+    const extracted = extractPortsFromCompose(composeYaml);
+    for (const ep of extracted) {
+      if (ep.hostPort && !ports.includes(ep.hostPort)) {
+        ports.push(ep.hostPort);
+      }
+    }
+  } catch (err) {
+    console.warn('[PortCollisionService] Error extracting ports:', err);
   }
-
-  const parts = portPart.split(':');
-  if (parts.length === 1) {
-    // Just a container port "80"
-    const cPort = parseInt(parts[0], 10);
-    return isNaN(cPort) ? null : { containerPort: cPort, protocol };
-  }
-
-  if (parts.length === 2) {
-    // "8080:80"
-    const hPort = parseInt(parts[0], 10);
-    const cPort = parseInt(parts[1], 10);
-    if (isNaN(cPort)) return null;
-    return {
-      hostPort: isNaN(hPort) ? undefined : hPort,
-      containerPort: cPort,
-      protocol,
-    };
-  }
-
-  if (parts.length === 3) {
-    // "127.0.0.1:8080:80" or "0.0.0.0:8080:80"
-    const ip = parts[0];
-    const hPort = parseInt(parts[1], 10);
-    const cPort = parseInt(parts[2], 10);
-    if (isNaN(cPort)) return null;
-    return {
-      hostIp: ip,
-      hostPort: isNaN(hPort) ? undefined : hPort,
-      containerPort: cPort,
-      protocol,
-    };
-  }
-
-  return null;
+  return ports;
 }
 
 /**
- * Directive 3: Intelligent Port Collision Engine
- * Cross-references required ports against occupied host ports and programmatically mutates the AST
- * to map any conflicting container to the next available incremented host port (e.g. 8080 -> 8081).
+ * Directive 1: Immutable Existing Stacks & Collision Resolution
+ * Resolves port collisions strictly on the INCOMING Compose YAML.
+ * The existing YAML is only parsed to reserve its ports, ensuring it is never mutated.
+ * Supports both Set/array of occupied ports and existing stack YAML string.
  */
 export function resolvePortCollisions(
-  composeYaml: string,
-  occupiedPortsInput: Set<number> | number[]
-): PortResolutionResult {
-  const occupiedSet = new Set<number>(
-    Array.isArray(occupiedPortsInput) ? occupiedPortsInput : Array.from(occupiedPortsInput)
-  );
+  incomingYaml: string,
+  occupiedPorts?: Set<number> | number[],
+  log?: (msg: string) => void
+): PortCollisionResult;
+export function resolvePortCollisions(
+  incomingYaml: string,
+  existingYaml?: string,
+  log?: (msg: string) => void
+): Promise<string> & PortCollisionResult;
+export function resolvePortCollisions(
+  incomingYaml: string,
+  occupiedOrExisting?: Set<number> | number[] | string,
+  existingYamlOrLog?: string | ((msg: string) => void),
+  logFn?: (msg: string) => void
+): PortCollisionResultObject {
+  const log = typeof existingYamlOrLog === 'function' ? existingYamlOrLog : logFn;
+  const reservedPorts = new Set<number>();
 
+  if (occupiedOrExisting instanceof Set) {
+    for (const p of occupiedOrExisting) reservedPorts.add(p);
+  } else if (Array.isArray(occupiedOrExisting)) {
+    for (const p of occupiedOrExisting) reservedPorts.add(p);
+  } else if (typeof occupiedOrExisting === 'string' && occupiedOrExisting.trim().length > 0) {
+    const existingPorts = extractPublishedPorts(occupiedOrExisting);
+    existingPorts.forEach((p) => reservedPorts.add(p));
+  }
+
+  if (typeof existingYamlOrLog === 'string' && existingYamlOrLog.trim().length > 0) {
+    const existingPorts = extractPublishedPorts(existingYamlOrLog);
+    existingPorts.forEach((p) => reservedPorts.add(p));
+  }
+
+  const extractedPorts = extractPortsFromCompose(incomingYaml);
   const remappedPorts: RemappedPort[] = [];
   const allAllocatedHostPorts: number[] = [];
 
-  let doc: yaml.Document;
-  try {
-    doc = yaml.parseDocument(composeYaml);
-  } catch (err) {
-    throw new Error(`Failed to parse Compose YAML AST for port resolution: ${(err as Error).message}`);
-  }
-
+  // Parse incoming YAML AST for mutation
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const servicesNode = doc.get('services') as any;
-  if (!servicesNode || typeof servicesNode.items === 'undefined') {
-    return {
+  let doc: any;
+  try {
+    doc = yaml.parseDocument(incomingYaml);
+    if (!doc || !doc.has || !doc.has('services')) {
+      return new PortCollisionResultObject({
+        hasCollisions: false,
+        remappedPorts: [],
+        resolvedYaml: incomingYaml,
+        extractedPorts,
+        allAllocatedHostPorts: [],
+      });
+    }
+  } catch {
+    return new PortCollisionResultObject({
       hasCollisions: false,
       remappedPorts: [],
-      resolvedYaml: composeYaml,
-      extractedPorts: [],
+      resolvedYaml: incomingYaml,
+      extractedPorts,
       allAllocatedHostPorts: [],
-    };
-  }
-
-  const extractedPorts = extractPortsFromCompose(composeYaml);
-
-  // Iterate over services in the AST Document
-  for (const item of servicesNode.items) {
-    const serviceName = String(item.key?.value || item.key);
-    const serviceMap = item.value;
-    if (!serviceMap || !serviceMap.get) continue;
-
-    const portsSeq = serviceMap.get('ports');
-    if (!portsSeq || !Array.isArray(portsSeq.items)) continue;
-
-    portsSeq.items.forEach((portNode: any, idx: number) => {
-      const matchingExtracted = extractedPorts.find(
-        (p) => p.service === serviceName && p.portIndex === idx
-      );
-
-      if (!matchingExtracted || matchingExtracted.hostPort === undefined) {
-        return;
-      }
-
-      const originalHostPort = matchingExtracted.hostPort;
-      let targetHostPort = originalHostPort;
-      let collisionDetected = false;
-
-      // Check if original host port is occupied (either on host or by a previously resolved service in this compose)
-      if (occupiedSet.has(targetHostPort)) {
-        collisionDetected = true;
-        // Increment until we find an unoccupied port
-        while (occupiedSet.has(targetHostPort)) {
-          targetHostPort++;
-        }
-      }
-
-      // Mark this port as occupied for any subsequent services
-      occupiedSet.add(targetHostPort);
-      allAllocatedHostPorts.push(targetHostPort);
-
-      if (collisionDetected) {
-        remappedPorts.push({
-          service: serviceName,
-          originalHostPort,
-          allocatedHostPort: targetHostPort,
-          containerPort: matchingExtracted.containerPort,
-          protocol: matchingExtracted.protocol,
-          hostIp: matchingExtracted.hostIp,
-          reason: `Host port ${originalHostPort} is currently occupied; auto-assigned next free port ${targetHostPort}`,
-        });
-
-        // Programmatically mutate the AST node
-        if (matchingExtracted.isLongSyntax) {
-          // Object node in yaml
-          if (portNode && typeof portNode.set === 'function') {
-            portNode.set('published', targetHostPort);
-          } else if (typeof portNode === 'object' && portNode !== null) {
-            portNode.published = targetHostPort;
-          }
-        } else {
-          // Short string node
-          let newPortStr = '';
-          const protoSuffix = matchingExtracted.protocol === 'udp' ? '/udp' : '';
-          if (matchingExtracted.hostIp) {
-            newPortStr = `${matchingExtracted.hostIp}:${targetHostPort}:${matchingExtracted.containerPort}${protoSuffix}`;
-          } else {
-            newPortStr = `${targetHostPort}:${matchingExtracted.containerPort}${protoSuffix}`;
-          }
-
-          if (portNode && typeof portNode === 'object' && 'value' in portNode) {
-            portNode.value = newPortStr;
-          } else {
-            portsSeq.items[idx] = newPortStr;
-          }
-        }
-      }
     });
   }
 
-  const resolvedYaml = doc.toString();
+  const servicesNode = doc.get('services');
+  if (!servicesNode || typeof servicesNode.items === 'undefined') {
+    return new PortCollisionResultObject({
+      hasCollisions: false,
+      remappedPorts: [],
+      resolvedYaml: incomingYaml,
+      extractedPorts,
+      allAllocatedHostPorts: [],
+    });
+  }
 
-  return {
+  let hasMutated = false;
+
+  for (const servicePair of servicesNode.items) {
+    const svcName = servicePair.key?.value || String(servicePair.key);
+    const svcNode = servicePair.value;
+
+    if (!svcNode || !svcNode.has || !svcNode.has('ports')) continue;
+
+    const portsSeq = svcNode.get('ports');
+    if (!portsSeq || !portsSeq.items) continue;
+
+    for (let i = 0; i < portsSeq.items.length; i++) {
+      const portNode = portsSeq.items[i];
+      let portString = portNode?.value ?? String(portNode);
+
+      if (typeof portString !== 'string' && typeof portString !== 'number') continue;
+      portString = String(portString);
+
+      const parts = portString.split(':');
+      let hostPortIndex = 0;
+      if (parts.length >= 3) {
+        hostPortIndex = 1; // IP:HOST:CONTAINER
+      } else if (parts.length === 2) {
+        hostPortIndex = 0; // HOST:CONTAINER
+      } else {
+        // Container-only port
+        continue;
+      }
+
+      const hostPortMatch = parts[hostPortIndex].match(/^(\d+)(?:-(\d+))?/);
+      if (!hostPortMatch) continue;
+
+      const originalHostPort = parseInt(hostPortMatch[1], 10);
+      const currentHostPort = originalHostPort;
+
+      const contPart = parts[parts.length - 1];
+      const contMatch = contPart.match(/^(\d+)/);
+      const containerPort = contMatch ? parseInt(contMatch[1], 10) : originalHostPort;
+      const protocol: 'tcp' | 'udp' = portString.toLowerCase().includes('/udp') ? 'udp' : 'tcp';
+      const hostIp = parts.length >= 3 ? parts[0] : undefined;
+
+      if (reservedPorts.has(currentHostPort)) {
+        if (log) {
+          log(`Port Collision Detected: Port ${currentHostPort} for service "${svcName}" is already in use.`);
+        }
+
+        let nextPort = Math.max(8000, currentHostPort + 1);
+        while (reservedPorts.has(nextPort)) {
+          nextPort++;
+        }
+
+        if (log) {
+          log(`Mutating service "${svcName}" port: ${currentHostPort} -> ${nextPort}`);
+        }
+
+        parts[hostPortIndex] = parts[hostPortIndex].replace(originalHostPort.toString(), nextPort.toString());
+        const newPortString = parts.join(':');
+        if (typeof portNode === 'object' && portNode !== null && 'value' in portNode) {
+          portNode.value = newPortString;
+        } else {
+          portsSeq.items[i] = newPortString;
+        }
+
+        remappedPorts.push({
+          service: svcName,
+          originalHostPort,
+          allocatedHostPort: nextPort,
+          containerPort,
+          protocol,
+          hostIp,
+          reason: `Host port ${originalHostPort} occupied by existing stack or bound system port`,
+        });
+
+        reservedPorts.add(nextPort);
+        allAllocatedHostPorts.push(nextPort);
+        hasMutated = true;
+      } else {
+        reservedPorts.add(currentHostPort);
+        allAllocatedHostPorts.push(currentHostPort);
+      }
+    }
+  }
+
+  const resolvedYaml = hasMutated ? doc.toString() : incomingYaml;
+
+  return new PortCollisionResultObject({
     hasCollisions: remappedPorts.length > 0,
     remappedPorts,
     resolvedYaml,
     extractedPorts,
     allAllocatedHostPorts,
-  };
+  });
 }

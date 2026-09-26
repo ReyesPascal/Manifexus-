@@ -21,7 +21,10 @@ import {
 } from './types';
 import { Navbar } from './components/Navbar';
 import { StatsBar } from './components/StatsBar';
-import { AppCard } from './components/AppCard';
+
+// 1. IMPORT THE NEW CONTAINER CARD (Replaces AppCard)
+import ContainerCard from './components/ContainerCard';
+
 import { InspectModal } from './components/InspectModal';
 import { HelpDrawer } from './components/HelpDrawer';
 import { GroupManagerModal } from './components/GroupManagerModal';
@@ -148,6 +151,16 @@ export default function App() {
       }
     } catch (err) {
       console.error(`Failed to ${action} container:`, err);
+    }
+  };
+
+  // 2. NEW DELETE HANDLER FOR CONTAINER CARD
+  const handleDelete = async (id: string) => {
+    if (confirm('Are you sure you want to delete this container?')) {
+      console.log('Delete requested for container ID:', id);
+      // If you implement a DELETE route later, call it here:
+      // await fetch(`/api/containers/${id}`, { method: 'DELETE' });
+      // await fetchData(true);
     }
   };
 
@@ -312,7 +325,7 @@ export default function App() {
 
       return !c.isHidden;
     });
-  }, [containers, statusFilter, searchQuery, config?.groups]);
+  }, [containers, statusFilter, searchQuery, config?.groups, isManifexus]);
 
   // Unique ports count
   const discoveredPortsCount = useMemo(() => {
@@ -524,24 +537,16 @@ export default function App() {
                     )}
                   </div>
 
-                  {/* Grid of App Cards */}
+                  {/* 3. NEW CONTAINER CARD MAP (Groups) */}
                   {items.length > 0 ? (
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                       {items.map((container) => (
-                        <AppCard
+                        <ContainerCard
                           key={container.id}
                           container={container}
-                          hostAddress={hostAddress}
-                          groups={config?.groups || []}
-                          onInspect={setInspectContainer}
-                          onAssignGroup={handleAssignGroup}
-                          onAction={handleContainerAction}
-                          onSetPrimaryPort={handleSetPrimaryPort}
-                          onMergeToStack={(c) => {
-                            setMergeModalInitialIds([c.id]);
-                            setMergeModalInitialStack(c.compose?.project);
-                            setIsMergeModalOpen(true);
-                          }}
+                          onStart={(id) => handleContainerAction(id, 'start')}
+                          onStop={(id) => handleContainerAction(id, 'stop')}
+                          onDelete={handleDelete}
                         />
                       ))}
                     </div>
@@ -572,22 +577,15 @@ export default function App() {
                   </span>
                 </div>
 
+                {/* 3. NEW CONTAINER CARD MAP (Uncategorized) */}
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                   {groupedByUserCategories.uncategorized.map((container) => (
-                    <AppCard
+                    <ContainerCard
                       key={container.id}
                       container={container}
-                      hostAddress={hostAddress}
-                      groups={config?.groups || []}
-                      onInspect={setInspectContainer}
-                      onAssignGroup={handleAssignGroup}
-                      onAction={handleContainerAction}
-                      onSetPrimaryPort={handleSetPrimaryPort}
-                      onMergeToStack={(c) => {
-                        setMergeModalInitialIds([c.id]);
-                        setMergeModalInitialStack(c.compose?.project);
-                        setIsMergeModalOpen(true);
-                      }}
+                      onStart={(id) => handleContainerAction(id, 'start')}
+                      onStop={(id) => handleContainerAction(id, 'stop')}
+                      onDelete={handleDelete}
                     />
                   ))}
                 </div>
@@ -650,23 +648,15 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Stack Service Grid */}
+                {/* 3. NEW CONTAINER CARD MAP (Compose Stacks) */}
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                   {stackData.containers.map((container) => (
-                    <AppCard
+                    <ContainerCard
                       key={container.id}
                       container={container}
-                      hostAddress={hostAddress}
-                      groups={config?.groups || []}
-                      onInspect={setInspectContainer}
-                      onAssignGroup={handleAssignGroup}
-                      onAction={handleContainerAction}
-                      onSetPrimaryPort={handleSetPrimaryPort}
-                      onMergeToStack={(c) => {
-                        setMergeModalInitialIds([c.id]);
-                        setMergeModalInitialStack(projectName);
-                        setIsMergeModalOpen(true);
-                      }}
+                      onStart={(id) => handleContainerAction(id, 'start')}
+                      onStop={(id) => handleContainerAction(id, 'stop')}
+                      onDelete={handleDelete}
                     />
                   ))}
                 </div>
@@ -696,22 +686,15 @@ export default function App() {
                   </span>
                 </div>
 
+                {/* 3. NEW CONTAINER CARD MAP (Standalone) */}
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                   {groupedByComposeStacks.standalone.map((container) => (
-                    <AppCard
+                    <ContainerCard
                       key={container.id}
                       container={container}
-                      hostAddress={hostAddress}
-                      groups={config?.groups || []}
-                      onInspect={setInspectContainer}
-                      onAssignGroup={handleAssignGroup}
-                      onAction={handleContainerAction}
-                      onSetPrimaryPort={handleSetPrimaryPort}
-                      onMergeToStack={(c) => {
-                        setMergeModalInitialIds([c.id]);
-                        setMergeModalInitialStack(undefined);
-                        setIsMergeModalOpen(true);
-                      }}
+                      onStart={(id) => handleContainerAction(id, 'start')}
+                      onStop={(id) => handleContainerAction(id, 'stop')}
+                      onDelete={handleDelete}
                     />
                   ))}
                 </div>

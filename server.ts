@@ -46,6 +46,9 @@ import {
   listRecentDiagnosticBundles,
 } from './server/diagnosticLogService';
 
+// --- NEW IMPORT FOR DIRECTIVE 4 ---
+import setupRoutes from './server/setupRoutes'; 
+
 async function startServer() {
   const app = express();
   // In the production Docker container deployed on your host, it listens on PORT (3334),
@@ -58,6 +61,9 @@ async function startServer() {
       : 3000;
 
   app.use(express.json());
+
+  // --- REGISTER NEW SETUP ROUTES ---
+  app.use(setupRoutes);
 
   // API Routes FIRST
   app.get('/api/health', (req, res) => {
