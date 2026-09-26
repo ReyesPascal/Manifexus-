@@ -119,14 +119,6 @@ export const StatsBar: React.FC<StatsBarProps> = ({
         </button>
       </div>
 
-      {statusFilter !== 'all' && (
-        <div className="mt-2.5 flex items-center gap-2 text-xs font-mono text-slate-400">
-          <span>Showing {statusFilter === 'running' ? 'running' : 'stopped'} apps only.</span>
-          <button type="button" onClick={() => onStatusFilterChange('all')} className="text-cyan-400 hover:text-cyan-300 underline underline-offset-2">
-            Show all
-          </button>
-        </div>
-      )}
     </div>
   );
 };

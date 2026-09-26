@@ -1,368 +1,142 @@
-import React, { useEffect } from 'react';
-import {
-  Layers,
-  FolderKanban,
-  HelpCircle,
-  Settings,
-  RefreshCw,
-  PlusCircle,
-  CheckCircle2,
-  AlertTriangle,
-  Server,
-  History,
-  RotateCcw,
-  Terminal,
-  FolderPlus,
-} from 'lucide-react';
-import { SystemStatus, AutomationPrivileges } from '../types';
-import { Zap, ShieldAlert } from 'lucide-react';
+import React from 'react';
+import { Layers, FolderKanban, Settings, RefreshCw, PlusCircle, RotateCcw, FolderPlus } from 'lucide-react';
+import { SystemStatus } from '../types';
+import { UpdateGlyph } from './SoftwareUpdateSheet';
 
 interface NavbarProps {
   systemStatus: SystemStatus | null;
-  privileges: AutomationPrivileges | null;
-  onOpenAutomationModal: () => void;
   viewMode: 'groups' | 'compose';
   onViewModeChange: (mode: 'groups' | 'compose') => void;
-  onToggleHelp: () => void;
   onOpenSettings: () => void;
   onOpenGroupManager: () => void;
   onOpenSimulateModal: () => void;
   onOpenCreateStack?: () => void;
   onOpenHistory?: () => void;
-  onOpenLogs?: () => void;
-  updateState?: 'idle' | 'checking' | 'available' | 'updating';
-  latestVersion?: string | null;
-  onCheckUpdate?: () => void;
-  onExecuteUpdate?: () => void;
-  onSetUpdateAvailable?: (version: string) => void;
+  /** Opens Software Update */
+  onOpenUpdates: () => void;
+  updateAvailable: boolean;
+  updating: boolean;
   onRefresh: () => void;
   isRefreshing: boolean;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
   systemStatus,
-  privileges,
-  onOpenAutomationModal,
   viewMode,
   onViewModeChange,
-  onToggleHelp,
   onOpenSettings,
   onOpenGroupManager,
   onOpenSimulateModal,
   onOpenCreateStack,
   onOpenHistory,
-  onOpenLogs,
-  updateState = 'idle',
-  latestVersion,
-  onCheckUpdate,
-  onExecuteUpdate,
-  onSetUpdateAvailable,
+  onOpenUpdates,
+  updateAvailable,
+  updating,
   onRefresh,
   isRefreshing,
 }) => {
-  // Directive 2: Auto-poll update check endpoint every 6 hours silently
-  useEffect(() => {
-    const checkSilently = async () => {
-      try {
-        const res = await fetch('/api/system/check-update');
-        if (res.ok) {
-          const data = await res.json();
-          if ((data.updateAvailable || data.update_available) && onSetUpdateAvailable) {
-            onSetUpdateAvailable(data.latestVersion || 'latest');
-          }
-        }
-      } catch {
-        // Silent failure - do not interrupt user
-      }
-    };
+  const iconBtn =
+    'p-2 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700 transition-colors focus-visible:outline-2 focus-visible:outline-cyan-400';
 
-    // 6 hours in milliseconds: 6 * 60 * 60 * 1000 = 21,600,000 ms
-    const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
-    const interval = setInterval(checkSilently, SIX_HOURS_MS);
-
-    return () => clearInterval(interval);
-  }, [onSetUpdateAvailable]);
   return (
     <header className="sticky top-0 z-40 bg-[#07090e]/90 backdrop-blur-md border-b border-slate-800/80 px-4 lg:px-6 py-3">
-      <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4">
-        {/* Brand & Logo */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            {/* Minimal Tech Nexus SVG Logo */}
-            <div className="relative flex items-center justify-center w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-950/80 to-slate-900 border border-cyan-500/30 shadow-[0_0_15px_rgba(6,182,212,0.2)]">
-              <svg
-                viewBox="0 0 40 40"
-                className="w-6 h-6 text-cyan-400"
-                fill="none"
-                xmlns="http://www.w3.org/2000/svg"
-              >
-                {/* Orbital nodes and interconnected nexus lines */}
-                <circle cx="20" cy="20" r="4.5" className="fill-cyan-400 drop-shadow-[0_0_6px_#06b6d4]" />
-                <circle cx="20" cy="8" r="2.5" className="fill-cyan-300" />
-                <circle cx="31" cy="28" r="2.5" className="fill-cyan-300" />
-                <circle cx="9" cy="28" r="2.5" className="fill-cyan-300" />
-                <path
-                  d="M20 12.5V15.5M28.5 24.5L23.5 22.5M11.5 24.5L16.5 22.5"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                  strokeOpacity="0.8"
-                />
-                <circle
-                  cx="20"
-                  cy="20"
-                  r="14"
-                  stroke="currentColor"
-                  strokeWidth="1"
-                  strokeDasharray="2 3"
-                  strokeOpacity="0.4"
-                />
-              </svg>
-            </div>
-
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="text-xl font-bold tracking-tight text-white font-mono flex items-center">
-                  MANI<span className="text-cyan-400">FEXUS</span>
-                </span>
-                <span className="px-1.5 py-0.5 text-[10px] font-mono uppercase tracking-wider rounded bg-cyan-950/80 border border-cyan-500/30 text-cyan-300">
-                  v1.0
-                </span>
-              </div>
-              <p className="text-xs text-slate-400 hidden sm:block">
-                The central nexus for your container fleet.
-              </p>
-            </div>
-          </div>
-
-          {/* Mobile refresh & help buttons */}
-          <div className="flex items-center gap-1.5 md:hidden">
-            <button
-              onClick={onRefresh}
-              className="p-2 rounded-lg bg-slate-800/80 text-slate-300 hover:text-white"
-              title="Refresh containers"
-            >
-              <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin text-cyan-400' : ''}`} />
-            </button>
-            <button
-              onClick={onToggleHelp}
-              className="p-2 rounded-lg bg-cyan-950/60 border border-cyan-500/30 text-cyan-300"
-              title="Quick Start"
-            >
-              <HelpCircle className="w-4 h-4" />
-            </button>
-          </div>
+      <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-3">
+        {/* View Toggle: Custom Groups vs Compose Stacks */}
+        <div className="flex rounded-lg bg-slate-900/90 border border-slate-800 p-0.5 text-xs font-mono">
+          <button
+            onClick={() => onViewModeChange('groups')}
+            className={`px-3 py-1.5 rounded-md flex items-center gap-1.5 transition-all ${
+              viewMode === 'groups'
+                ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 font-medium shadow-[0_0_10px_rgba(6,182,212,0.15)]'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+            title="Group by custom user-defined categories"
+          >
+            <FolderKanban className="w-3.5 h-3.5" />
+            <span>User Groups</span>
+          </button>
+          <button
+            onClick={() => onViewModeChange('compose')}
+            className={`px-3 py-1.5 rounded-md flex items-center gap-1.5 transition-all ${
+              viewMode === 'compose'
+                ? 'bg-purple-500/20 text-purple-300 border border-purple-500/40 font-medium shadow-[0_0_10px_rgba(168,85,247,0.15)]'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+            title="Group automatically by docker-compose.yml project name"
+          >
+            <Layers className="w-3.5 h-3.5" />
+            <span>Compose Stacks</span>
+          </button>
         </div>
 
-        {/* Right: Layout Switcher, Daemon Status, Actions */}
-        <div className="flex flex-wrap items-center justify-end gap-2.5">
-          {/* View Toggle: Custom Groups vs Compose Stacks */}
-          <div className="flex rounded-lg bg-slate-900/90 border border-slate-800 p-0.5 text-xs font-mono">
+        <div className="flex flex-wrap items-center justify-end gap-1.5">
+          {onOpenCreateStack && (
             <button
-              onClick={() => onViewModeChange('groups')}
-              className={`px-3 py-1.5 rounded-md flex items-center gap-1.5 transition-all ${
-                viewMode === 'groups'
-                  ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 font-medium shadow-[0_0_10px_rgba(6,182,212,0.15)]'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-              title="Group by custom user-defined categories"
+              onClick={onOpenCreateStack}
+              className="px-2.5 py-1.5 rounded-lg bg-cyan-950/80 border border-cyan-500/40 text-xs font-mono text-cyan-300 hover:bg-cyan-900/60 transition-colors flex items-center gap-1.5 shadow-[0_0_12px_rgba(6,182,212,0.15)] cursor-pointer"
+              title="Create a new empty compose stack directory"
             >
-              <FolderKanban className="w-3.5 h-3.5" />
-              <span>User Groups</span>
+              <FolderPlus className="w-3.5 h-3.5 text-cyan-400" />
+              <span>New Stack</span>
             </button>
+          )}
+
+          {onOpenHistory && (
             <button
-              onClick={() => onViewModeChange('compose')}
-              className={`px-3 py-1.5 rounded-md flex items-center gap-1.5 transition-all ${
-                viewMode === 'compose'
-                  ? 'bg-purple-500/20 text-purple-300 border border-purple-500/40 font-medium shadow-[0_0_10px_rgba(168,85,247,0.15)]'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-              title="Group automatically by docker-compose.yml project name"
+              onClick={onOpenHistory}
+              className="px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700/80 text-xs font-mono text-purple-300 hover:border-purple-500/40 hover:bg-purple-950/40 transition-colors flex items-center gap-1.5"
+              title="History: undo moves and deletes"
             >
-              <Layers className="w-3.5 h-3.5" />
-              <span>Compose Stacks</span>
+              <RotateCcw className="w-3.5 h-3.5 text-purple-400" />
+              <span className="hidden lg:inline">History</span>
             </button>
-          </div>
+          )}
 
-          {/* Socket Connection Pill */}
-          <div
-            className={`hidden xl:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-mono ${
-              systemStatus?.dockerConnected
-                ? 'bg-emerald-950/40 border-emerald-500/30 text-emerald-300'
-                : 'bg-amber-950/40 border-amber-500/30 text-amber-300'
-            }`}
-            title={
-              systemStatus?.dockerConnected
-                ? `Connected to host Docker Socket at ${systemStatus?.socketPath}`
-                : `Standby / Demo Mode (Mount /var/run/docker.sock on Ubuntu for live socket)`
-            }
-          >
-            {systemStatus?.dockerConnected ? (
-              <>
-                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Socket Active</span>
-              </>
-            ) : (
-              <>
-                <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
-                <span>Demo Mode</span>
-              </>
-            )}
-          </div>
+          {systemStatus?.isDemoMode && (
+            <button
+              onClick={onOpenSimulateModal}
+              className="px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700/80 text-xs font-mono text-cyan-300 hover:border-cyan-500/40 hover:bg-slate-800 transition-colors flex items-center gap-1.5"
+              title="Simulate adding or testing a container"
+            >
+              <PlusCircle className="w-3.5 h-3.5" />
+              <span>Simulate</span>
+            </button>
+          )}
 
-          {/* Host Automation & Privileges Badge */}
-          <button
-            onClick={onOpenAutomationModal}
-            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-mono transition-all ${
-              privileges?.mode === 'elevated'
-                ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-300 hover:bg-emerald-900/50 shadow-[0_0_10px_rgba(16,185,129,0.15)]'
-                : 'bg-purple-950/50 border-purple-500/40 text-purple-300 hover:bg-purple-900/60 shadow-[0_0_10px_rgba(168,85,247,0.15)]'
-            }`}
-            title={
-              privileges?.mode === 'elevated'
-                ? 'Full Host Automation Active: Click to manage permissions'
-                : 'Host Sandboxed: Click to view instructions to unlock 1-click execution'
-            }
-          >
-            {privileges?.mode === 'elevated' ? (
-              <>
-                <Zap className="w-3.5 h-3.5 text-emerald-400" />
-                <span className="hidden sm:inline">Host Automation:</span>
-                <span className="font-bold text-emerald-400">Elevated</span>
-              </>
-            ) : (
-              <>
-                <ShieldAlert className="w-3.5 h-3.5 text-purple-400 animate-pulse" />
-                <span className="hidden sm:inline">Host Mode:</span>
-                <span className="font-bold text-purple-300">Sandboxed</span>
-              </>
-            )}
+          {/* Software Update: quiet icon normally; a labeled pill when an update is ready */}
+          {updateAvailable || updating ? (
+            <button
+              onClick={onOpenUpdates}
+              className="pl-2 pr-2.5 py-1.5 rounded-lg bg-[#0A84FF]/15 border border-[#0A84FF]/50 text-xs font-medium text-[#6CB6FF] hover:bg-[#0A84FF]/25 transition-colors flex items-center gap-1.5 focus-visible:outline-2 focus-visible:outline-[#0A84FF]"
+              title={updating ? 'Manifexus is updating' : 'A new version of Manifexus is available'}
+            >
+              {updating ? (
+                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <span className="relative flex">
+                  <UpdateGlyph className="w-4 h-4" />
+                  <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-[#0A84FF] ring-2 ring-[#07090e]" />
+                </span>
+              )}
+              <span>{updating ? 'Updating…' : 'Update'}</span>
+            </button>
+          ) : (
+            <button onClick={onOpenUpdates} className={iconBtn} title="Software Update" aria-label="Software Update">
+              <UpdateGlyph className="w-4 h-4" />
+            </button>
+          )}
+
+          <button onClick={onOpenGroupManager} className={iconBtn} title="Manage custom groups" aria-label="Manage custom groups">
+            <FolderKanban className="w-4 h-4" />
           </button>
 
-          {/* Action buttons */}
-          <div className="hidden md:flex items-center gap-1.5">
-            {/* Create New Empty Stack */}
-            {onOpenCreateStack && (
-              <button
-                onClick={onOpenCreateStack}
-                className="px-2.5 py-1.5 rounded-lg bg-cyan-950/80 border border-cyan-500/40 text-xs font-mono text-cyan-300 hover:bg-cyan-900/60 transition-colors flex items-center gap-1.5 shadow-[0_0_12px_rgba(6,182,212,0.15)] cursor-pointer"
-                title="Create a new empty compose stack directory"
-              >
-                <FolderPlus className="w-3.5 h-3.5 text-cyan-400" />
-                <span>+ New Stack</span>
-              </button>
-            )}
+          <button onClick={onOpenSettings} className={iconBtn} title="Settings" aria-label="Settings">
+            <Settings className="w-4 h-4" />
+          </button>
 
-            {/* Directive 3: History & Reverts Button */}
-            {onOpenHistory && (
-              <button
-                onClick={onOpenHistory}
-                className="px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700/80 text-xs font-mono text-purple-300 hover:border-purple-500/40 hover:bg-purple-950/40 transition-colors flex items-center gap-1.5 shadow-[0_0_10px_rgba(168,85,247,0.1)]"
-                title="Open History & Reverts (Snapshots & State Rollback)"
-              >
-                <RotateCcw className="w-3.5 h-3.5 text-purple-400" />
-                <span className="hidden lg:inline">History & Reverts</span>
-              </button>
-            )}
-
-            {/* System Diagnostic Logs Dashboard */}
-            {onOpenLogs && (
-              <button
-                onClick={onOpenLogs}
-                className="px-2.5 py-1.5 rounded-lg bg-emerald-950/80 border border-emerald-500/40 text-xs font-mono text-emerald-300 hover:bg-emerald-900/60 transition-colors flex items-center gap-1.5 shadow-[0_0_12px_rgba(16,185,129,0.15)]"
-                title="Open Global Diagnostic Logging & Observability Dashboard"
-              >
-                <Terminal className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Logs</span>
-              </button>
-            )}
-
-            {/* Directive 5: Auto-Updater Button */}
-            {onCheckUpdate && (
-              <button
-                onClick={updateState === 'available' ? onExecuteUpdate : onCheckUpdate}
-                disabled={updateState === 'checking' || updateState === 'updating'}
-                className={`px-2.5 py-1.5 rounded-lg border text-xs font-mono transition-all flex items-center gap-1.5 cursor-pointer shadow-sm ${
-                  updateState === 'available'
-                    ? 'bg-gradient-to-r from-emerald-950 via-teal-950 to-emerald-900 border-emerald-500/70 text-emerald-200 hover:border-emerald-400 shadow-[0_0_15px_rgba(16,185,129,0.35)] animate-pulse'
-                    : 'bg-slate-900 border-slate-700/80 text-slate-300 hover:border-cyan-500/40 hover:text-cyan-300'
-                }`}
-                title={
-                  updateState === 'available'
-                    ? `New version ${latestVersion || ''} available. Click to pull & update!`
-                    : 'Check host repository for new Manifexus version'
-                }
-              >
-                {updateState === 'checking' ? (
-                  <>
-                    <RefreshCw className="w-3.5 h-3.5 text-cyan-400 animate-spin" />
-                    <span>Checking...</span>
-                  </>
-                ) : updateState === 'updating' ? (
-                  <>
-                    <RefreshCw className="w-3.5 h-3.5 text-emerald-400 animate-spin" />
-                    <span>Updating...</span>
-                  </>
-                ) : updateState === 'available' ? (
-                  <>
-                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-                    <span className="font-bold text-emerald-300">Update</span>
-                  </>
-                ) : (
-                  <>
-                    <RefreshCw className="w-3.5 h-3.5 text-cyan-400" />
-                    <span>Check For New Version</span>
-                  </>
-                )}
-              </button>
-            )}
-
-            {/* Quick Simulate in Demo Mode */}
-            {systemStatus?.isDemoMode && (
-              <button
-                onClick={onOpenSimulateModal}
-                className="px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700/80 text-xs font-mono text-cyan-300 hover:border-cyan-500/40 hover:bg-slate-800 transition-colors flex items-center gap-1.5"
-                title="Simulate adding or testing a container"
-              >
-                <PlusCircle className="w-3.5 h-3.5" />
-                <span>+ Simulate</span>
-              </button>
-            )}
-
-            <button
-              onClick={onOpenGroupManager}
-              className="p-2 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700 transition-colors"
-              title="Manage Custom Categories"
-            >
-              <FolderKanban className="w-4 h-4" />
-            </button>
-
-            <button
-              onClick={onOpenSettings}
-              className="p-2 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700 transition-colors"
-              title="Dashboard Settings & Host IP"
-            >
-              <Settings className="w-4 h-4" />
-            </button>
-
-            <button
-              onClick={onRefresh}
-              className="p-2 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700 transition-colors"
-              title="Refresh Container Telemetry"
-            >
-              <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin text-cyan-400' : ''}`} />
-            </button>
-
-            {/* Help / Quick Start Toggle Button */}
-            <button
-              onClick={onToggleHelp}
-              className="px-3 py-1.5 rounded-lg bg-gradient-to-r from-cyan-950 to-slate-900 border border-cyan-500/40 text-xs font-medium text-cyan-300 hover:border-cyan-400 hover:shadow-[0_0_12px_rgba(6,182,212,0.25)] transition-all flex items-center gap-1.5"
-              title="Toggle Help & Deployment Guide"
-            >
-              <HelpCircle className="w-3.5 h-3.5" />
-              <span>Help / Deploy</span>
-            </button>
-          </div>
+          <button onClick={onRefresh} className={iconBtn} title="Refresh" aria-label="Refresh">
+            <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin text-cyan-400' : ''}`} />
+          </button>
         </div>
       </div>
     </header>

@@ -129,7 +129,6 @@ When pushed, the included GitHub Actions workflow (`.github/workflows/docker-pub
 │   │   ├── StatsBar.tsx                 # Real-time fleet metrics
 │   │   ├── AppCard.tsx                  # Large application tile with port links
 │   │   ├── InspectModal.tsx             # Deep container inspection & metadata
-│   │   ├── HelpDrawer.tsx               # Interactive deployment guide drawer
 │   │   ├── GroupManagerModal.tsx        # Custom category manager
 │   │   ├── SettingsModal.tsx            # Host IP & telemetry polling config
 │   │   └── SimulateContainerModal.tsx   # Instant container spawner for testing

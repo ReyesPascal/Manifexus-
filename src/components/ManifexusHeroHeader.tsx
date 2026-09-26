@@ -12,7 +12,6 @@ import {
   Zap,
   Info,
   ChevronRight,
-  FileText,
   Search,
 } from 'lucide-react';
 import { DeepContainerMetadata, SystemStatus, AutomationPrivileges } from '../types';
@@ -23,6 +22,9 @@ interface ManifexusHeroHeaderProps {
   privileges: AutomationPrivileges | null;
   onOpenElevateModal: () => void;
   onInspectContainer?: (container: DeepContainerMetadata) => void;
+  versionLabel?: string;
+  updateAvailable?: boolean;
+  onOpenUpdates?: () => void;
 }
 
 export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
@@ -31,6 +33,9 @@ export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
   privileges,
   onOpenElevateModal,
   onInspectContainer,
+  versionLabel,
+  updateAvailable,
+  onOpenUpdates,
 }) => {
   const [showQuickLogs, setShowQuickLogs] = useState(false);
 
@@ -66,9 +71,19 @@ export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
               <div className="flex flex-wrap items-center gap-2.5">
                 <h2 className="text-xl font-black tracking-tight text-white flex items-center gap-2">
                   Manifexus
-                  <span className="text-xs font-mono font-medium px-2 py-0.5 rounded-full bg-cyan-950/90 text-cyan-300 border border-cyan-500/40">
-                    v2.5.0 Core
-                  </span>
+                  <button
+                    type="button"
+                    onClick={onOpenUpdates}
+                    className={`text-xs font-mono font-medium px-2 py-0.5 rounded-full border transition-colors ${
+                      updateAvailable
+                        ? 'bg-[#0A84FF]/15 text-[#6CB6FF] border-[#0A84FF]/50 hover:bg-[#0A84FF]/25'
+                        : 'bg-cyan-950/90 text-cyan-300 border-cyan-500/40 hover:border-cyan-400'
+                    }`}
+                    title={updateAvailable ? 'An update is available' : 'Software Update'}
+                  >
+                    {versionLabel || '…'}
+                    {updateAvailable ? ' · Update available' : ''}
+                  </button>
                 </h2>
 
                 {/* Directive 1: Distinctive "System Orchestrator / Protected Stack" badge */}
@@ -104,10 +119,6 @@ export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
                   Backups: <code className="text-purple-300 font-bold">/app/backups</code>
                 </span>
 
-                <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-slate-900/90 border border-cyan-500/50 text-cyan-300 shadow-[0_0_8px_rgba(6,182,212,0.2)]">
-                  <FileText className="w-3.5 h-3.5 text-cyan-400" />
-                  Logs: <code className="text-cyan-400 font-bold">/app/logs</code>
-                </span>
               </div>
             </div>
           </div>

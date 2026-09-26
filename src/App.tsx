@@ -4,7 +4,6 @@ import {
   Layers,
   Server,
   AlertCircle,
-  HelpCircle,
   FolderOpen,
   Terminal,
   ExternalLink,
@@ -27,9 +26,9 @@ import {
 import { Navbar } from './components/Navbar';
 import { StatsBar } from './components/StatsBar';
 import { PortsSheet } from './components/PortsSheet';
+import { SoftwareUpdateSheet, SoftwareUpdateState } from './components/SoftwareUpdateSheet';
 import { AppCard } from './components/AppCard';
 import { InspectModal } from './components/InspectModal';
-import { HelpDrawer } from './components/HelpDrawer';
 import { GroupManagerModal } from './components/GroupManagerModal';
 import { SettingsModal } from './components/SettingsModal';
 import { SimulateContainerModal } from './components/SimulateContainerModal';
@@ -39,7 +38,6 @@ import { HostAutomationModal } from './components/HostAutomationModal';
 import { ManifexusHeroHeader } from './components/ManifexusHeroHeader';
 import { MergeHistoryModal } from './components/MergeHistoryModal';
 import { ExecutionPipelineConsole } from './components/ExecutionPipelineConsole';
-import { SystemLogsDashboard } from './components/SystemLogsDashboard';
 import { CreateStackModal } from './components/CreateStackModal';
 import { WebTerminalModal } from './components/WebTerminalModal';
 import { AutomationPrivileges } from './types';
@@ -62,13 +60,11 @@ export default function App() {
 
   // Modals state
   const [inspectContainer, setInspectContainer] = useState<DeepContainerMetadata | null>(null);
-  const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isGroupManagerOpen, setIsGroupManagerOpen] = useState(false);
   const [isSimulateOpen, setIsSimulateOpen] = useState(false);
   const [isMergeModalOpen, setIsMergeModalOpen] = useState(false);
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
-  const [isLogsDashboardOpen, setIsLogsDashboardOpen] = useState(false);
   const [isCreateStackModalOpen, setIsCreateStackModalOpen] = useState(false);
   const [emptyStacks, setEmptyStacks] = useState<EmptyComposeStack[]>([]);
   // Folder the server puts new stacks in (the parent most existing stacks share)
@@ -94,65 +90,24 @@ export default function App() {
   const [terminalStackName, setTerminalStackName] = useState<string | undefined>(undefined);
 
   // Directive 5: Auto-Updater state
-  const [updateState, setUpdateState] = useState<'idle' | 'checking' | 'available' | 'updating'>('idle');
-  const [latestVersion, setLatestVersion] = useState<string | null>(null);
-  const [isUpdatingModalOpen, setIsUpdatingModalOpen] = useState(false);
-
-  // Directive 4: Safe Delete Stack state
   const [deleteStackTarget, setDeleteStackTarget] = useState<DeleteStackTarget | null>(null);
 
-  // Check for updates
-  const handleCheckUpdate = useCallback(async () => {
-    setUpdateState('checking');
+  // Software Update: state comes from the server, which checks on its own schedule
+  const [softwareUpdate, setSoftwareUpdate] = useState<SoftwareUpdateState | null>(null);
+  const [isUpdatesOpen, setIsUpdatesOpen] = useState(false);
+  const refreshSoftwareUpdate = useCallback(async () => {
     try {
-      const res = await fetch('/api/system/check-update?force=true');
-      if (res.ok) {
-        const data = await res.json();
-        if (data.updateAvailable || data.update_available) {
-          setUpdateState('available');
-          setLatestVersion(data.latestVersion || 'latest');
-        } else {
-          setUpdateState('idle');
-        }
-      } else {
-        setUpdateState('idle');
-      }
+      const r = await fetch('/api/system/update', { cache: 'no-store' });
+      if (r.ok) setSoftwareUpdate(await r.json());
     } catch {
-      setUpdateState('idle');
+      // offline or restarting
     }
   }, []);
-
-  // Execute update
-  const handleExecuteUpdate = useCallback(async () => {
-    setUpdateState('updating');
-    setIsUpdatingModalOpen(true);
-
-    try {
-      await fetch('/api/system/self-update', { method: 'POST' });
-    } catch {
-      // Continue polling regardless of connection drop when container restarts
-    }
-
-    // Poll health endpoint every 1.5s until server returns OK, then force hard reload
-    let attempts = 0;
-    const interval = setInterval(async () => {
-      attempts++;
-      try {
-        const check = await fetch('/api/health', { cache: 'no-store' });
-        if (check.ok && attempts >= 2) {
-          clearInterval(interval);
-          window.location.reload();
-        }
-      } catch {
-        // Still recreating container
-      }
-
-      if (attempts >= 30) {
-        clearInterval(interval);
-        window.location.reload();
-      }
-    }, 1500);
-  }, []);
+  useEffect(() => {
+    refreshSoftwareUpdate();
+    const t = setInterval(refreshSoftwareUpdate, 5 * 60 * 1000);
+    return () => clearInterval(t);
+  }, [refreshSoftwareUpdate]);
 
   // Fetch Container Telemetry & System Status
   const fetchData = useCallback(async (showRefreshingState = false) => {
@@ -483,25 +438,19 @@ export default function App() {
       {/* Top Command Navbar */}
       <Navbar
         systemStatus={systemStatus}
-        privileges={privileges}
-        onOpenAutomationModal={() => setIsAutomationModalOpen(true)}
         viewMode={viewMode}
         onViewModeChange={setViewMode}
-        onToggleHelp={() => setIsHelpOpen(!isHelpOpen)}
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenGroupManager={() => setIsGroupManagerOpen(true)}
         onOpenSimulateModal={() => setIsSimulateOpen(true)}
         onOpenCreateStack={() => setIsCreateStackModalOpen(true)}
         onOpenHistory={() => setIsHistoryModalOpen(true)}
-        onOpenLogs={() => setIsLogsDashboardOpen(true)}
-        updateState={updateState}
-        latestVersion={latestVersion}
-        onCheckUpdate={handleCheckUpdate}
-        onExecuteUpdate={handleExecuteUpdate}
-        onSetUpdateAvailable={(ver) => {
-          setUpdateState('available');
-          setLatestVersion(ver);
+        onOpenUpdates={() => {
+          setIsUpdatesOpen(true);
+          refreshSoftwareUpdate();
         }}
+        updateAvailable={softwareUpdate?.status === 'available'}
+        updating={Boolean(softwareUpdate?.installing && ['download', 'prepare', 'restart'].includes(softwareUpdate.installing.stage))}
         onRefresh={() => {
           fetchData(true);
           fetchPrivileges();
@@ -518,6 +467,9 @@ export default function App() {
           privileges={privileges}
           onOpenElevateModal={() => setIsAutomationModalOpen(true)}
           onInspectContainer={(c) => setInspectContainer(c)}
+          versionLabel={softwareUpdate?.current.label}
+          updateAvailable={softwareUpdate?.status === 'available'}
+          onOpenUpdates={() => setIsUpdatesOpen(true)}
         />
 
         {/* Standby / Demo Mode Notification Banner (Visible when socket is not attached) */}
@@ -544,13 +496,6 @@ export default function App() {
               >
                 <PlusCircle className="w-3.5 h-3.5" />
                 <span>Simulate Event</span>
-              </button>
-              <button
-                onClick={() => setIsHelpOpen(true)}
-                className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 transition-colors flex items-center gap-1.5"
-              >
-                <HelpCircle className="w-3.5 h-3.5" />
-                <span>Deploy Command</span>
               </button>
             </div>
           </div>
@@ -909,12 +854,6 @@ export default function App() {
         onSaveOverride={handleSaveOverride}
       />
 
-      {/* Quick Start & Deployment Guide Drawer */}
-      <HelpDrawer
-        isOpen={isHelpOpen}
-        onClose={() => setIsHelpOpen(false)}
-      />
-
       {/* Custom Group Manager Modal */}
       <GroupManagerModal
         isOpen={isGroupManagerOpen}
@@ -975,15 +914,6 @@ export default function App() {
         }}
       />
 
-      {/* Directive 4: Advanced System Logs & Global Diagnostics Dashboard Overlay */}
-      {isLogsDashboardOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 md:p-6 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
-          <div className="flex flex-col w-full max-w-7xl h-[92vh] bg-slate-950 border border-slate-700/80 rounded-2xl shadow-2xl overflow-hidden ring-1 ring-white/10">
-            <SystemLogsDashboard onClose={() => setIsLogsDashboardOpen(false)} />
-          </div>
-        </div>
-      )}
-
       {/* Directive 4 & 6: Revert Execution Pipeline Console */}
       {revertRecordToStream && (
         <ExecutionPipelineConsole
@@ -1022,47 +952,12 @@ export default function App() {
         stackName={terminalStackName}
       />
 
-      {/* Directive 5: Deployment Loading Modal & Self-Updater Progress */}
-      {isUpdatingModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md animate-in fade-in">
-          <div className="w-full max-w-lg bg-[#0a0e18] border border-cyan-500/50 rounded-2xl p-6 shadow-2xl space-y-5 font-mono text-slate-200">
-            <div className="flex items-center gap-3">
-              <div className="p-3 rounded-xl bg-cyan-950/80 border border-cyan-500/40 text-cyan-400">
-                <RefreshCw className="w-6 h-6 animate-spin" />
-              </div>
-              <div>
-                <h3 className="text-base font-bold text-white tracking-wide">
-                  Updating Manifexus
-                </h3>
-                <p className="text-xs text-slate-400 mt-0.5">
-                  Host container recreation in progress...
-                </p>
-              </div>
-            </div>
-
-            <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 text-xs space-y-2">
-              <div className="flex items-center justify-between text-slate-400 text-[11px]">
-                <span>Pipeline Stage:</span>
-                <span className="text-cyan-300 font-bold">docker compose pull && up -d</span>
-              </div>
-              <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
-                <div className="bg-gradient-to-r from-cyan-500 to-emerald-500 h-full w-2/3 animate-pulse" />
-              </div>
-              <p className="text-[11px] text-slate-400 leading-relaxed pt-1">
-                The host Docker engine is pulling the latest image tag and recreating the container on your server. Stand by for automatic reconnect.
-              </p>
-            </div>
-
-            <div className="flex items-center justify-between pt-1 text-[11px] text-slate-500">
-              <div className="flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-                <span>Polling health heartbeat...</span>
-              </div>
-              <span>Auto-refreshing browser</span>
-            </div>
-          </div>
-        </div>
-      )}
+      <SoftwareUpdateSheet
+        open={isUpdatesOpen}
+        onClose={() => setIsUpdatesOpen(false)}
+        state={softwareUpdate}
+        onStateChange={setSoftwareUpdate}
+      />
 
       <PortsSheet
         open={isPortsOpen}

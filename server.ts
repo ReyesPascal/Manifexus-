@@ -47,10 +47,15 @@ import {
   finalizeMergeRecord,
   getHistoryRecordById,
 } from './server/historyService';
-import { globalLogService, LogLevel, LogEventType } from './server/globalLogService';
-import { expressLogMiddleware } from './server/logMiddleware';
+import { globalLogService } from './server/globalLogService';
 import { setupTerminalWebSocket } from './server/terminalService';
-import { checkManifexusUpdate, executeManifexusSelfUpdate } from './server/updateService';
+import {
+  getSoftwareUpdateState,
+  checkForUpdate,
+  updateSettings,
+  installUpdate,
+  startUpdateScheduler,
+} from './server/updateService';
 import fs from 'fs';
 import { DeepContainerMetadata } from './src/types';
 
@@ -66,122 +71,6 @@ async function startServer() {
       : 3000;
 
   app.use(express.json());
-
-  // Directive 2: Intercept and log every API call with route, body, status, execution duration
-  app.use(expressLogMiddleware);
-
-  // ==========================================
-  // DIRECTIVE 1 & 4: LOGGING & MONITORING API
-  // ==========================================
-
-  // Query structured logs with filtering, searching, date range, and pagination
-  app.get('/api/logs', (req, res) => {
-    try {
-      const {
-        startDate,
-        endDate,
-        level,
-        eventType,
-        search,
-        limit,
-        offset,
-      } = req.query;
-
-      const result = globalLogService.queryLogs({
-        startDate: startDate ? String(startDate) : undefined,
-        endDate: endDate ? String(endDate) : undefined,
-        level: level ? (String(level) as LogLevel | 'ALL') : 'ALL',
-        eventType: eventType ? (String(eventType) as LogEventType | 'ALL') : 'ALL',
-        search: search ? String(search) : undefined,
-        limit: limit ? parseInt(String(limit), 10) : 500,
-        offset: offset ? parseInt(String(offset), 10) : 0,
-      });
-
-      res.json({
-        success: true,
-        ...result,
-      });
-    } catch (err) {
-      res.status(500).json({ success: false, error: (err as Error).message });
-    }
-  });
-
-  // Export full filtered dataset as downloadable JSON
-  app.get('/api/logs/export', (req, res) => {
-    try {
-      const {
-        startDate,
-        endDate,
-        level,
-        eventType,
-        search,
-      } = req.query;
-
-      const logs = globalLogService.exportLogs({
-        startDate: startDate ? String(startDate) : undefined,
-        endDate: endDate ? String(endDate) : undefined,
-        level: level ? (String(level) as LogLevel | 'ALL') : 'ALL',
-        eventType: eventType ? (String(eventType) as LogEventType | 'ALL') : 'ALL',
-        search: search ? String(search) : undefined,
-      });
-
-      const filename = `manifexus-system-logs-${new Date().toISOString().slice(0, 10)}.json`;
-      res.setHeader('Content-Type', 'application/json');
-      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-      res.send(JSON.stringify(logs, null, 2));
-    } catch (err) {
-      res.status(500).json({ success: false, error: (err as Error).message });
-    }
-  });
-
-  // Clear logs with safety confirmation prompt
-  app.post('/api/logs/clear', (req, res) => {
-    try {
-      const { confirmed } = req.body;
-      if (confirmed !== true) {
-        return res.status(400).json({
-          success: false,
-          error: 'Safety verification failed. User confirmation parameter "confirmed: true" is required to purge log files.',
-        });
-      }
-
-      const result = globalLogService.clearAllLogs();
-      res.json(result);
-    } catch (err) {
-      res.status(500).json({ success: false, error: (err as Error).message });
-    }
-  });
-
-  // Real-time Server-Sent Events (SSE) stream for live diagnostic log updates
-  app.get('/api/logs/stream', (req, res) => {
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-
-    // Send initial handshake
-    res.write(`data: ${JSON.stringify({ type: 'connected', time: new Date().toISOString() })}\n\n`);
-
-    const onLog = (entry: unknown) => {
-      res.write(`data: ${JSON.stringify(entry)}\n\n`);
-    };
-
-    globalLogService.on('log', onLog);
-
-    req.on('close', () => {
-      globalLogService.removeListener('log', onLog);
-      res.end();
-    });
-  });
-
-  // List log files archived on volume
-  app.get('/api/logs/files', (req, res) => {
-    try {
-      const files = globalLogService.getLogFilesList();
-      res.json({ success: true, files });
-    } catch (err) {
-      res.status(500).json({ success: false, error: (err as Error).message });
-    }
-  });
 
   // API Routes FIRST
   app.get('/api/health', (req, res) => {
@@ -802,25 +691,39 @@ async function startServer() {
     }
   });
 
-  // Directive 4: Self-Updater API Endpoints
-  // Check for updates to Manifexus container
-  app.get('/api/system/check-update', async (req, res) => {
+  // Software Update
+  app.get('/api/system/update', async (req, res) => {
     try {
-      const force = req.query.force === 'true';
-      const result = await checkManifexusUpdate(force);
-      res.json(result);
+      res.json(await getSoftwareUpdateState());
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
     }
   });
 
-  // Execute update using host helper container via Docker socket
-  app.post('/api/system/self-update', async (req, res) => {
+  app.post('/api/system/update/check', async (req, res) => {
     try {
-      const result = await executeManifexusSelfUpdate();
-      res.json(result);
+      res.json(await checkForUpdate());
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  app.post('/api/system/update/settings', (req, res) => {
+    res.json({ settings: updateSettings(req.body || {}) });
+  });
+
+  // Streams install progress (Server-Sent Events). The stream ends when Manifexus restarts.
+  app.post('/api/system/update/install', async (req, res) => {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    // @ts-ignore
+    if (res.flushHeaders) res.flushHeaders();
+    const send = (p: unknown) => res.write(`data: ${JSON.stringify(p)}\n\n`);
+    try {
+      await installUpdate(send);
+    } finally {
+      res.end();
     }
   });
 
@@ -851,6 +754,9 @@ async function startServer() {
   // Remove helper containers left behind by interrupted jobs (they used to show up as stopped apps)
   void cleanupStoppedHelpers();
   setInterval(() => void cleanupStoppedHelpers(), 10 * 60 * 1000);
+
+  // Software Update: record the outcome of an update the previous instance started, then check periodically
+  startUpdateScheduler();
 
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`[Manifexus Core Engine] Server and Web Terminal running on http://0.0.0.0:${PORT}`);
