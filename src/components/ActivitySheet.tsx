@@ -709,12 +709,7 @@ const ActivityDetail: React.FC<{ id: string; subscribe: Subscribe }> = ({ id, su
           <Row title="Docker" trailing={<span className="text-[14px]">{env.docker?.version} · {env.docker?.os}</span>} />
           <Row title="Activity ID" trailing={<span className="text-[13px] font-mono">{a.id}</span>} />
         </Group>
-        {a.input !== undefined && (
-          <div className="mt-3">
-            <SectionHeader>Request</SectionHeader>
-            <Pre>{JSON.stringify(a.input, null, 2)}</Pre>
-          </div>
-        )}
+        {/* The raw request that started it is in Copy Report and the downloads, not on screen */}
       </section>
     </div>
   );

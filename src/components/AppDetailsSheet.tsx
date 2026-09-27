@@ -248,6 +248,7 @@ export const AppDetailsSheet: React.FC<{
   const [busyAction, setBusyAction] = useState<string>();
   const [report, setReport] = useState<'idle' | 'busy' | 'done' | 'failed'>('idle');
   const bodyRef = useRef<HTMLDivElement>(null);
+  const toFixRef = useRef<HTMLElement>(null);
 
   // Logs
   const [logs, setLogs] = useState<string | null>(null);
@@ -370,6 +371,20 @@ export const AppDetailsSheet: React.FC<{
     setTimeout(() => setReport('idle'), 2500);
   };
 
+  // Current issues (warnings, errors) sit at the top under "To Fix" until the checks stop finding them
+  const isIssue = (c: Check) => c.level === 'warn' || c.level === 'error';
+  const issues = (checks || []).filter(isIssue).sort((a, b) => RANK[a.level] - RANK[b.level]);
+  const checkRow = (c: Check) => (
+    <Row
+      key={c.id}
+      onClick={c.link ? () => followLink(c.link, c.id) : undefined}
+      leading={<CheckIcon level={c.level} />}
+      title={c.title}
+      subtitle={<span className="line-clamp-3">{c.detail}</span>}
+      chevron={Boolean(c.link)}
+    />
+  );
+
   // ---------------------------------------------------------------- status line under the name
   const statusPill = (() => {
     if (system && sys) {
@@ -417,10 +432,33 @@ export const AppDetailsSheet: React.FC<{
           <p className="mt-1 text-[13px] font-mono truncate max-w-[520px] px-4" style={{ color: ios.secondary }}>
             {system && sys?.environment?.manifexus?.build ? `${sys.environment.manifexus.build} · ${container.image}` : container.image}
           </p>
-          <span className="mt-3 inline-flex items-center gap-1.5 h-[26px] px-3 rounded-full text-[13px] font-medium" style={{ color: statusPill.color, background: statusPill.bg }}>
-            <span className="w-[7px] h-[7px] rounded-full" style={{ background: 'currentColor' }} />
-            {loading && !diag && !sys ? 'Checking…' : statusPill.text}
-          </span>
+          {(() => {
+            const pill = (
+              <>
+                <span className="w-[7px] h-[7px] rounded-full" style={{ background: 'currentColor' }} />
+                {loading && !diag && !sys ? 'Checking…' : statusPill.text}
+              </>
+            );
+            const cls = 'mt-3 inline-flex items-center gap-1.5 h-[26px] px-3 rounded-full text-[13px] font-medium';
+            return issues.length > 0 ? (
+              <button
+                type="button"
+                onClick={() => toFixRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                className={`${cls} hover:opacity-85 focus-visible:outline-2 focus-visible:outline-[#0A84FF]`}
+                style={{ color: statusPill.color, background: statusPill.bg }}
+                title="Show what to fix"
+              >
+                {pill}
+                <svg width="7" height="11" viewBox="0 0 8 13" aria-hidden="true" className="rotate-90 ml-0.5">
+                  <path d="M1.5 1.5 6.5 6.5 1.5 11.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
+            ) : (
+              <span className={cls} style={{ color: statusPill.color, background: statusPill.bg }}>
+                {pill}
+              </span>
+            );
+          })()}
           <div className="mt-5 flex flex-wrap justify-center gap-2">
             {system ? (
               <>
@@ -453,6 +491,14 @@ export const AppDetailsSheet: React.FC<{
           </div>
         </div>
 
+        {issues.length > 0 && (
+          <section ref={toFixRef} className="scroll-mt-4">
+            <SectionHeader>To Fix</SectionHeader>
+            <Group>{issues.map(checkRow)}</Group>
+            <SectionFooter>These stay here until they’re fixed. Check Again after fixing one.</SectionFooter>
+          </section>
+        )}
+
         {r && (r.memoryBytes !== undefined || r.cpuPercent !== undefined) && (
           <section>
             <SectionHeader>Right Now</SectionHeader>
@@ -478,16 +524,11 @@ export const AppDetailsSheet: React.FC<{
             ) : !checks ? (
               <Row title={<span style={{ color: ios.secondary }}>Checking…</span>} />
             ) : (
-              [...checks].sort((a, b) => RANK[a.level] - RANK[b.level]).map((c) => (
-                <Row
-                  key={c.id}
-                  onClick={c.link ? () => followLink(c.link, c.id) : undefined}
-                  leading={<CheckIcon level={c.level} />}
-                  title={c.title}
-                  subtitle={<span className="line-clamp-3">{c.detail}</span>}
-                  chevron={Boolean(c.link)}
-                />
-              ))
+              [...checks]
+                .filter((c) => !isIssue(c))
+                // The history counter is background, so it goes last
+                .sort((a, b) => Number(a.id === 'problems') - Number(b.id === 'problems') || RANK[a.level] - RANK[b.level])
+                .map(checkRow)
             )}
           </Group>
         </section>

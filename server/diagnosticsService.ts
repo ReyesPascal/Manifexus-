@@ -356,18 +356,19 @@ export async function systemDiagnostics() {
   const since = new Date(Date.now() - 86400000).toISOString();
   const problems = listActivities({ statuses: ['failed', 'rolled_back', 'interrupted'], limit: 200 }).activities.filter((a) => (a.endedAt || a.startedAt) > since && !a.meta?.background);
   checks.push(
+    // History, not a current issue: a plain counter that never raises the alarm on its own
     problems.length
       ? {
           id: 'problems',
-          level: 'warn',
-          title: `${problems.length} problem${problems.length === 1 ? '' : 's'} in the last day`,
-          detail: problems
-            .slice(0, 2)
-            .map((a) => a.title)
-            .join(' · ') + (problems.length > 2 ? ` and ${problems.length - 2} more` : ''),
-          link: 'activity',
+          level: 'info',
+          title: `Last 24 hours: ${problems.length} failed change${problems.length === 1 ? '' : 's'}`,
+          detail:
+            problems
+              .slice(0, 2)
+              .map((a) => a.title)
+              .join(' · ') + (problems.length > 2 ? ` and ${problems.length - 2} more` : '') + '. Details are in Activity.',
         }
-      : { id: 'problems', level: 'ok', title: 'No problems in the last day', detail: `Everything you did in the last 24 hours finished. Activity keeps ${formatBytes(stats.bytes)} of records for ${logs.retentionDays} days.`, link: 'activity' }
+      : { id: 'problems', level: 'ok', title: 'Last 24 hours: no failed changes', detail: `Activity keeps ${formatBytes(stats.bytes)} of records for ${logs.retentionDays} days.` }
   );
 
   // Updates
@@ -390,7 +391,7 @@ export async function systemDiagnostics() {
   return {
     summary: {
       level: worst,
-      text: worst === 'ok' ? 'Everything is working' : `${attention} thing${attention === 1 ? '' : 's'} need${attention === 1 ? 's' : ''} attention`,
+      text: worst === 'ok' ? 'All Clear' : `Attention: ${attention} Issue${attention === 1 ? '' : 's'} to Fix!`,
     },
     checks,
     resources,
