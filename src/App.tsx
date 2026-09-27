@@ -23,7 +23,6 @@ import {
   AppOverride,
   EmptyComposeStack,
 } from './types';
-import { Navbar } from './components/Navbar';
 import { StatsBar } from './components/StatsBar';
 import { PortsSheet } from './components/PortsSheet';
 import { SoftwareUpdateSheet, SoftwareUpdateState } from './components/SoftwareUpdateSheet';
@@ -37,6 +36,7 @@ import { MoveAppsModal } from './components/MoveAppsModal';
 import { DeleteStackDialog, DeleteStackTarget } from './components/DeleteStackDialog';
 import { HostAutomationModal } from './components/HostAutomationModal';
 import { ManifexusHeroHeader } from './components/ManifexusHeroHeader';
+import { ViewBar } from './components/ViewBar';
 import { MergeHistoryModal } from './components/MergeHistoryModal';
 import { ExecutionPipelineConsole } from './components/ExecutionPipelineConsole';
 import { CreateStackModal } from './components/CreateStackModal';
@@ -492,33 +492,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#07090e] text-slate-100 flex flex-col font-sans selection:bg-cyan-500/30 selection:text-cyan-200">
-      {/* Top Command Navbar */}
-      <Navbar
-        systemStatus={systemStatus}
-        viewMode={viewMode}
-        onViewModeChange={setViewMode}
-        onOpenSettings={() => setIsSettingsOpen(true)}
-        onOpenGroupManager={() => setIsGroupManagerOpen(true)}
-        onOpenSimulateModal={() => setIsSimulateOpen(true)}
-        onOpenCreateStack={() => setIsCreateStackModalOpen(true)}
-        onOpenHistory={() => setIsHistoryModalOpen(true)}
-        onOpenUpdates={() => {
-          setIsUpdatesOpen(true);
-          refreshSoftwareUpdate();
-        }}
-        updateAvailable={softwareUpdate?.status === 'available'}
-        updating={Boolean(softwareUpdate?.installing && ['download', 'prepare', 'restart'].includes(softwareUpdate.installing.stage))}
-        onOpenActivity={() => {
-          setActivity({ open: true });
-          markFailuresSeen(lastFailureAt.current);
-        }}
-        activityAlert={unseenFailure}
-        onRefresh={() => {
-          fetchData(true);
-          fetchPrivileges();
-        }}
-        isRefreshing={isRefreshing}
-      />
 
       {/* Main Dashboard Canvas */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 lg:px-6 py-6">
@@ -529,8 +502,24 @@ export default function App() {
           onInspectContainer={(c) => setInspectContainer(c)}
           versionLabel={softwareUpdate?.current.label}
           updateAvailable={softwareUpdate?.status === 'available'}
-          onOpenUpdates={() => setIsUpdatesOpen(true)}
+          updating={Boolean(softwareUpdate?.installing && ['download', 'prepare', 'restart'].includes(softwareUpdate.installing.stage))}
+          onOpenUpdates={() => {
+            setIsUpdatesOpen(true);
+            refreshSoftwareUpdate();
+          }}
           stackCount={stats.stacks}
+          onOpenActivity={() => {
+            setActivity({ open: true });
+            markFailuresSeen(lastFailureAt.current);
+          }}
+          activityAlert={unseenFailure}
+          onOpenHistory={() => setIsHistoryModalOpen(true)}
+          onOpenSettings={() => setIsSettingsOpen(true)}
+          onRefresh={() => {
+            fetchData(true);
+            fetchPrivileges();
+          }}
+          isRefreshing={isRefreshing}
         />
 
         {/* Standby / Demo Mode Notification Banner (Visible when socket is not attached) */}
@@ -576,6 +565,14 @@ export default function App() {
             setViewMode('compose');
           }}
           onShowPorts={() => setIsPortsOpen(true)}
+        />
+
+        {/* Arrange apps by stack or by group */}
+        <ViewBar
+          viewMode={viewMode}
+          onViewModeChange={setViewMode}
+          onOpenGroupManager={() => setIsGroupManagerOpen(true)}
+          onOpenCreateStack={() => setIsCreateStackModalOpen(true)}
         />
 
         {/* Error Notification */}
