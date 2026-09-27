@@ -519,7 +519,20 @@ export async function executeStreamingPipeline(
         });
         log(`Created new stack ${req.targetStackName} in ${targetDir}.`, 5);
       }
-      const up = await runComposeCapture(targetDir, 'up -d', {
+      // Start only the apps being moved in (and anything they depend on). The stack's own apps are
+      // already running and are left alone, so a stale entry elsewhere in its file can't sink the move.
+      const listed = (text?: string): string[] => {
+        try {
+          return Object.keys(yaml.parse(text || '')?.services || {});
+        } catch {
+          return [];
+        }
+      };
+      const already = new Set(listed(preMergeTargetCompose));
+      const incoming = listed(req.yamlContent).filter((n) => !already.has(n));
+      const safe = incoming.length > 0 && incoming.every((n) => /^[A-Za-z0-9._-]+$/.test(n));
+      if (safe) log(`Starting ${incoming.join(', ')}.`, 5);
+      const up = await runComposeCapture(targetDir, safe ? `up -d ${incoming.join(' ')}` : 'up -d', {
         extraDirs: Array.from(sourceGroups.values()).map((g) => g.workingDir),
       });
       if (!up.ok) {
@@ -633,8 +646,8 @@ async function rollbackFailedMove(params: {
       } catch {
         // fall through: compose below still restores the stack
       }
+      // Its own apps were never stopped, so putting the file back is all that's needed
       await writeHostFile(path.posix.join(targetDir, 'docker-compose.yml'), preMergeTargetCompose);
-      await runComposeInDir(targetDir, 'up -d');
       log('Restored the previous compose file for the target stack. Its own apps kept running.');
     } else {
       // A brand-new stack only contains the moved apps

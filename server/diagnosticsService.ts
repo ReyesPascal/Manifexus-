@@ -11,6 +11,9 @@ import { environmentSnapshot } from './observability';
 import { logStats, getLogSettings, listActivities, queryEvents, redactText } from './activityLog';
 import { getSoftwareUpdateState } from './updateService';
 import { listRestorePoints } from './restoreService';
+import { readHostFile } from './hostFsService';
+import { getRegisteredCreatedStacks } from './stackService';
+import yaml from 'yaml';
 
 export interface Check {
   id: string;
@@ -220,6 +223,77 @@ function freeSpace(dir: string): { free: number; total: number } | undefined {
   }
 }
 
+/**
+ * An app listed in two stacks' compose files (same container_name). Only one container can have
+ * that name, so starting the other stack as a whole fails with "name already in use".
+ */
+async function duplicateAppsCheck(): Promise<Check | undefined> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const list = await queryDockerEngine<any[]>('/containers/json?all=1');
+  // container name -> the stack and service that made it ('' = started on its own)
+  const owner = new Map<string, { project: string; service: string; oneoff: boolean }>();
+  const files = new Map<string, string>(); // compose file -> stack
+  for (const c of list || []) {
+    const labels = c.Labels || {};
+    if (labels['dev.manifexus.helper']) continue;
+    const name = String(c.Names?.[0] || '').replace(/^\//, '');
+    const project = labels['com.docker.compose.project'] || '';
+    if (name) owner.set(name, { project, service: labels['com.docker.compose.service'] || '', oneoff: labels['com.docker.compose.oneoff'] !== 'False' });
+    const file = String(labels['com.docker.compose.project.config_files'] || '').split(',')[0]?.trim();
+    if (project && file?.startsWith('/')) files.set(file, project);
+  }
+  for (const st of getRegisteredCreatedStacks()) {
+    const file = String(st.configFiles || '').split(',')[0]?.trim();
+    if (st.project && file?.startsWith('/') && !files.has(file)) files.set(file, st.project);
+  }
+  const found: { app: string; stack: string; file: string; runsIn: string }[] = [];
+  const DETACHED = '\u0000'; // same stack name, but not a container this file made
+  await Promise.all(
+    Array.from(files.entries()).map(async ([file, stack]) => {
+      const text = await readHostFile(file).catch(() => null);
+      if (!text) return;
+      let services: Record<string, { container_name?: string }> = {};
+      try {
+        services = yaml.parse(text)?.services || {};
+      } catch {
+        return;
+      }
+      for (const [key, svc] of Object.entries(services)) {
+        const n = svc?.container_name;
+        if (!n || !owner.has(n)) continue;
+        const o = owner.get(n)!;
+        // Compose only adopts a container it made for this very service; anything else is in the way
+        if (o.project === stack && o.service === key && !o.oneoff) continue;
+        found.push({ app: n, stack, file, runsIn: o.project === stack ? DETACHED : o.project });
+      }
+    })
+  );
+  if (!found.length) return undefined;
+  const first = found[0];
+  const where =
+    first.runsIn === DETACHED
+      ? `the ${first.app} that’s running wasn’t created from that file, so Docker won’t reuse it`
+      : first.runsIn
+        ? `the ${first.app} that’s running belongs to ${first.runsIn}`
+        : `the ${first.app} that’s running was started on its own`;
+  return {
+    id: 'duplicates',
+    level: 'warn',
+    title:
+      first.runsIn === DETACHED && found.length === 1
+        ? `${first.app} can’t be started from ${first.stack}’s file`
+        : found.length === 1
+          ? `${first.app} is listed in two stacks`
+          : `${found.length} apps are listed in two stacks`,
+    detail:
+      `${first.stack}’s compose file ${first.runsIn === DETACHED ? 'lists' : 'also lists'} ${first.app}, but ${where}. Starting ${first.stack} as a whole would fail. ` +
+      (first.runsIn === DETACHED
+        ? `Either remove it from ${first.file}, or replace the container with one made from the file: docker rm -f ${first.app}, then docker compose up -d ${first.app} in ${first.file.replace(/\/[^/]+$/, '')} (its volumes and folders are kept).`
+        : `Remove ${first.app} from ${first.file}.`) +
+      (found.length > 1 ? ` Also: ${found.slice(1).map((f) => `${f.app} in ${f.stack}`).join(', ')}.` : ''),
+  };
+}
+
 export async function systemDiagnostics() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const env: any = await environmentSnapshot(true);
@@ -257,6 +331,10 @@ export async function systemDiagnostics() {
       ? { id: 'folders', level: 'ok', title: 'Stack folders visible', detail: `Can see ${binds.map((m: { source: string }) => m.source).join(', ')}.` }
       : { id: 'folders', level: 'info', title: 'No stack folders mounted', detail: 'Stack files are reached through Docker helpers instead of a direct mount. That works, but is a little slower.' }
   );
+
+  // Apps listed in two stacks
+  const dup = await duplicateAppsCheck().catch(() => undefined);
+  if (dup) checks.push(dup);
 
   // Backups
   const backupDir = resolveBackupDir();

@@ -44,6 +44,34 @@ import { record, currentActivityId } from './activityLog';
 // Settings
 // ----------------------------------------------------------------------------
 
+
+/** Services in a compose file whose container_name is taken by a container of a different stack */
+async function heldElsewhere(compose: string, project: string): Promise<{ service: string; name: string; owner: string }[]> {
+  let services: Record<string, { container_name?: string }> = {};
+  try {
+    services = yaml.parse(compose)?.services || {};
+  } catch {
+    return [];
+  }
+  const out: { service: string; name: string; owner: string }[] = [];
+  for (const [service, def] of Object.entries(services)) {
+    const name = def?.container_name;
+    if (!name) continue;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const c = await queryDockerEngine<any>(`/containers/${encodeURIComponent(name)}/json`);
+      const labels = c?.Config?.Labels || {};
+      const owner = labels['com.docker.compose.project'] || '';
+      // Compose only adopts a container it made for this very service; anything else is in the way
+      const adopted = owner === project && labels['com.docker.compose.service'] === service && labels['com.docker.compose.oneoff'] === 'False';
+      if (!adopted) out.push({ service, name, owner });
+    } catch {
+      // no container by that name: nothing in the way
+    }
+  }
+  return out;
+}
+
 export interface RestoreSettings {
   /** Days to keep backups; 0 = forever */
   keepDays: number;
@@ -601,8 +629,26 @@ export async function executeRestore(id: string, emit: Emit, opts: { filesOnly?:
           log('Left stopped. Start it from the dashboard when you’re ready.');
           return;
         }
+        // An app this file lists whose name is still held by another stack is a leftover duplicate
+        // (stacks giving apps back are put back first). Leave just that entry out instead of failing.
+        const skipped = await heldElsewhere(compose, t.project);
+        for (const h of skipped)
+          log(
+            h.owner && h.owner !== t.project
+              ? `Left ${h.name} out: it’s running in ${h.owner}, and is also listed in this stack’s file.`
+              : `Left ${h.name} out: a container with that name already exists that this stack’s file didn’t create.`
+          );
+        const keep = services.filter((n) => !skipped.some((h) => h.service === n));
+        const namesOk = keep.every((n) => /^[A-Za-z0-9._-]+$/.test(n));
+        if (services.length && !keep.length) {
+          log(`${t.project}’s apps are all running in other stacks; nothing to start here.`);
+          return;
+        }
         // Compose makes the stack match the file: apps no longer in it are removed, missing ones started
-        const up = await runComposeCapture(t.dir, services.length ? 'up -d --remove-orphans' : 'down --remove-orphans');
+        const up = await runComposeCapture(
+          t.dir,
+          !services.length ? 'down --remove-orphans' : skipped.length && namesOk ? `up -d --remove-orphans ${keep.join(' ')}` : 'up -d --remove-orphans'
+        );
         if (!up.ok) {
           const why = composeErrorTail(up.output);
           throw new Error(`Docker couldn’t start ${t.project}${why ? `: ${why.split('\n').pop()}` : '.'}`);
