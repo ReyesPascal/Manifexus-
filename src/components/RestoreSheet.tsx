@@ -890,6 +890,16 @@ export const RestoreSheet: React.FC<{ open: boolean; onClose: () => void; onChan
         </Button>
       </div>
     );
+  } else if (view.kind === 'list' && points && points.length > 0) {
+    footer = (
+      <div className="flex items-center justify-between text-[13px]" style={{ color: ios.secondary }}>
+        <span className="tabular-nums">
+          {plural(live.length, 'change')}
+          {archived.length ? ` · ${archived.length} archived` : ''}
+        </span>
+        <span className="tabular-nums">Backups use {fmtBytes(storage.bytes)}</span>
+      </div>
+    );
   } else if (view.kind === 'archive' && archived.length > 0) {
     footer = (
       <div className="flex justify-center">

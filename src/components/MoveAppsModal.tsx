@@ -19,6 +19,8 @@ import {
   ios,
   sheetBackdropClass,
   sheetPanelClass,
+  sheetPanelStyle,
+  sheetBodyStyle,
   sheetFooterClass,
 } from './ui/ios';
 
@@ -902,7 +904,7 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
         aria-modal="true"
         aria-labelledby="move-apps-title"
         className={sheetPanelClass}
-        style={{ background: ios.sheet, boxShadow: '0 30px 80px rgba(0,0,0,0.55)', WebkitFontSmoothing: 'antialiased' }}
+        style={sheetPanelStyle}
       >
         {/* Navigation bar */}
         <div className="relative px-4 pt-3.5 pb-3" style={{ borderBottom: `0.5px solid ${ios.separator}` }}>
@@ -941,7 +943,7 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
         </div>
 
         {/* Body */}
-        <div ref={bodyRef} className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-5 pt-5 pb-8">
+        <div ref={bodyRef} className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-5 pt-5 pb-10" style={sheetBodyStyle}>
           <div key={page} className={page === 'data' || page === 'compose' ? 'motion-safe:animate-[ios-push-in_200ms_ease-out]' : ''}>
             {content}
           </div>

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { sheetBackdropClass, sheetPanelClass } from './ui/ios';
+import { sheetBackdropClass, sheetPanelClass, sheetPanelStyle } from './ui/ios';
 import {
   X,
   FileCode,
@@ -83,7 +83,8 @@ export const InspectModal: React.FC<InspectModalProps> = ({
   return (
     <div className={`${sheetBackdropClass} z-50`}>
       <div
-        className={`${sheetPanelClass} relative bg-[#0b0f19] sm:border sm:border-slate-700/80 shadow-2xl font-mono text-slate-200`}
+        className={`${sheetPanelClass} relative bg-[#0b0f19] font-mono text-slate-200`}
+        style={{ boxShadow: sheetPanelStyle.boxShadow }}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Modal Header */}

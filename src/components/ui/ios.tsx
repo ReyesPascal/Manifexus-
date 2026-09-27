@@ -350,7 +350,18 @@ export const sheetBackdropClass = 'fixed inset-0 flex items-stretch sm:items-cen
 // Height uses the visible window (dvh), so the bottom of the sheet and its buttons are always on screen,
 // even with browser toolbars; the body scrolls, the footer stays put.
 export const sheetPanelClass =
-  'w-full sm:max-w-[760px] h-[100dvh] sm:h-[min(800px,calc(100dvh-48px))] flex flex-col sm:rounded-[14px] overflow-hidden motion-safe:animate-[ios-sheet-in_220ms_ease-out]';
+  'w-full sm:max-w-[760px] h-[100dvh] sm:h-[min(760px,calc(100dvh-112px))] flex flex-col sm:rounded-[16px] overflow-hidden motion-safe:animate-[ios-sheet-in_220ms_ease-out]';
+/** Panel look: a hairline edge all the way round so the sheet has a clear bottom, and a soft shadow */
+export const sheetPanelStyle: React.CSSProperties = {
+  background: ios.sheet,
+  boxShadow: '0 0 0 0.5px rgba(255,255,255,0.14), 0 30px 80px rgba(0,0,0,0.6)',
+  WebkitFontSmoothing: 'antialiased',
+};
+/** Scrolling area: content fades out just above the bottom edge instead of being cut off */
+export const sheetBodyStyle: React.CSSProperties = {
+  maskImage: 'linear-gradient(to bottom, #000 calc(100% - 28px), transparent)',
+  WebkitMaskImage: 'linear-gradient(to bottom, #000 calc(100% - 28px), transparent)',
+};
 /** Footer bar for custom sheets: pinned under the scrolling body, clear of a phone's home indicator */
 export const sheetFooterClass = 'flex-shrink-0 px-4 sm:px-5 pt-3 pb-[max(12px,env(safe-area-inset-bottom))]';
 
@@ -406,7 +417,7 @@ export const Sheet: React.FC<{
         aria-modal="true"
         aria-label={title}
         className={sheetPanelClass}
-        style={{ background: ios.sheet, boxShadow: '0 30px 80px rgba(0,0,0,0.55)', WebkitFontSmoothing: 'antialiased' }}
+        style={sheetPanelStyle}
       >
         <div className="relative px-4 pt-3.5 pb-3" style={{ borderBottom: `0.5px solid ${ios.separator}` }}>
           <div className="h-[28px] flex items-center justify-between">
@@ -438,7 +449,9 @@ export const Sheet: React.FC<{
             {toolbar}
           </div>
         )}
-        <div ref={bodyRef} className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-5 pt-5 pb-8">{children}</div>
+        <div ref={bodyRef} className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-5 pt-5 pb-10" style={sheetBodyStyle}>
+          {children}
+        </div>
         {footer && (
           <div className={sheetFooterClass} style={{ borderTop: `0.5px solid ${ios.separator}` }}>
             {footer}

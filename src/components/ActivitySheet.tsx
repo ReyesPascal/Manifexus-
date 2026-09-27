@@ -725,7 +725,9 @@ type RangeFilter = '1h' | '24h' | '7d' | 'all';
 const EventsView: React.FC<{
   subscribe: Subscribe;
   onOpenActivity: (id: string) => void;
-}> = ({ subscribe, onOpenActivity }) => {
+  /** Reports how many events are shown (for the sheet's footer) */
+  onCount?: (n: number, more: boolean) => void;
+}> = ({ subscribe, onOpenActivity, onCount }) => {
   const [search, setSearch] = useState('');
   const [debounced, setDebounced] = useState('');
   const [level, setLevel] = useState<LevelFilter>('all');
@@ -734,6 +736,8 @@ const EventsView: React.FC<{
   const [range, setRange] = useState<RangeFilter>('24h');
   const [live, setLive] = useState(true);
   const [events, setEvents] = useState<LogEvent[]>([]);
+  const [moreAvailable, setMoreAvailable] = useState(false);
+  useEffect(() => onCount?.(events.length, moreAvailable), [events.length, moreAvailable, onCount]);
   const [cursor, setCursor] = useState<string | undefined>();
   const [loading, setLoading] = useState(false);
 
@@ -774,6 +778,7 @@ const EventsView: React.FC<{
         const j = await r.json();
         setEvents((prev) => (more ? [...prev, ...(j.events || [])] : j.events || []));
         setCursor(j.nextCursor);
+        setMoreAvailable(Boolean(j.nextCursor));
       } finally {
         setLoading(false);
       }
@@ -1059,6 +1064,8 @@ export const ActivitySheet: React.FC<{
   const [cursor, setCursor] = useState<string | undefined>();
   const [loading, setLoading] = useState(false);
   const [eventsMounted, setEventsMounted] = useState(false);
+  const [eventCount, setEventCount] = useState<{ n: number; more: boolean }>({ n: 0, more: false });
+  const onEventCount = useCallback((n: number, more: boolean) => setEventCount({ n, more }), []);
   const listeners = useRef(new Set<(msg: LiveMessage) => void>());
   const subscribe = useCallback<Subscribe>((fn) => {
     listeners.current.add(fn);
@@ -1222,13 +1229,28 @@ export const ActivitySheet: React.FC<{
         )
       }
       toolbar={toolbar}
+      footer={
+        view.kind === 'list' ? (
+          <div className="flex items-center justify-between text-[13px]" style={{ color: ios.secondary }}>
+            <span className="tabular-nums">
+              {tab === 'events'
+                ? `${eventCount.n.toLocaleString()}${eventCount.more ? '+' : ''} event${eventCount.n === 1 ? '' : 's'}`
+                : `${items.length}${cursor ? '+' : ''} activit${items.length === 1 ? 'y' : 'ies'}`}
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="w-[7px] h-[7px] rounded-full motion-safe:animate-pulse" style={{ background: ios.green }} />
+              Recording
+            </span>
+          </div>
+        ) : undefined
+      }
     >
       {view.kind === 'settings' && <LogSettingsView />}
       {view.kind === 'detail' && <ActivityDetail id={view.id} subscribe={subscribe} />}
       {/* Stays mounted behind an opened activity, so Back returns to the same filters and results */}
       {eventsMounted && (
         <div hidden={view.kind !== 'list' || tab !== 'events'}>
-          <EventsView subscribe={subscribe} onOpenActivity={openDetail} />
+          <EventsView subscribe={subscribe} onOpenActivity={openDetail} onCount={onEventCount} />
         </div>
       )}
       {view.kind === 'list' && tab === 'activity' && (
