@@ -321,7 +321,7 @@ export async function systemDiagnostics() {
   };
 }
 
-/** A Markdown report of the checks, environment and recent Manifexus output, for pasting into Claude. */
+/** A Markdown report of the checks, environment and recent Manifexus output, for pasting into any AI assistant or a support request. */
 export async function systemReport(): Promise<string> {
   const d = await systemDiagnostics();
   const L: string[] = [];

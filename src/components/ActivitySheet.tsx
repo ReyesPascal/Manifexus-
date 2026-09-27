@@ -4,8 +4,8 @@ import {
   BackButton,
   Button,
   Checkmark,
-  Chip,
   Group,
+  MenuButton,
   IconTile,
   LinkButton,
   Row,
@@ -134,9 +134,9 @@ function fmtTime(iso: string): string {
   return new Date(iso).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
 }
 
+/** 2:45:10 AM (exact milliseconds are in the event's details and exports) */
 function fmtClock(iso: string): string {
-  const d = new Date(iso);
-  return `${d.toLocaleTimeString(undefined, { hour12: false })}.${String(d.getMilliseconds()).padStart(3, '0')}`;
+  return new Date(iso).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit' });
 }
 
 function dayLabel(iso: string): string {
@@ -555,7 +555,7 @@ const ActivityDetail: React.FC<{ id: string; subscribe: Subscribe }> = ({ id, su
   const hiddenCount = bundle.events.length - bundle.events.filter((e) => e.level !== 'trace' && e.level !== 'debug').length;
   const env = bundle.environment as { manifexus?: { build?: string; installMode?: string }; docker?: { version?: string; os?: string } };
 
-  const copyForClaude = async () => {
+  const copyReport = async () => {
     setCopyState('copying');
     try {
       const r = await fetch(`/api/logs/activities/${encodeURIComponent(id)}/export?format=markdown`);
@@ -578,18 +578,22 @@ const ActivityDetail: React.FC<{ id: string; subscribe: Subscribe }> = ({ id, su
           {a.durationMs !== undefined ? ` after ${fmtDuration(a.durationMs)}` : ''} · {dayLabel(a.startedAt)} at {fmtTime(a.startedAt)}
         </p>
         <div className="mt-4 flex flex-wrap justify-center gap-2">
-          <Button onClick={copyForClaude} variant="tinted" className="!h-[36px] !text-[14px] !px-4">
-            {copyState === 'copying' ? 'Preparing…' : copyState === 'copied' ? 'Copied Report' : copyState === 'failed' ? 'Couldn’t Copy' : 'Copy for Claude'}
+          <Button onClick={copyReport} variant="tinted" className="!h-[36px] !text-[14px] !px-4">
+            {copyState === 'copying' ? 'Preparing…' : copyState === 'copied' ? 'Copied' : copyState === 'failed' ? 'Couldn’t Copy' : 'Copy Report'}
           </Button>
-          <Button onClick={() => download(`/api/logs/activities/${encodeURIComponent(id)}/export?format=markdown&download=1`)} tone="gray" className="!h-[36px] !text-[14px] !px-4">
-            Report (.md)
-          </Button>
-          <Button onClick={() => download(`/api/logs/activities/${encodeURIComponent(id)}/export?format=json`)} tone="gray" className="!h-[36px] !text-[14px] !px-4">
-            Everything (.json)
-          </Button>
+          <MenuButton
+            ariaLabel="Download"
+            label="Download"
+            align="left"
+            className="!h-[36px] !rounded-[12px] !text-[14px] font-semibold !px-4"
+            items={[
+              { key: 'md', label: 'Report (.md)', onSelect: () => download(`/api/logs/activities/${encodeURIComponent(id)}/export?format=markdown&download=1`) },
+              { key: 'json', label: 'Everything (.json)', onSelect: () => download(`/api/logs/activities/${encodeURIComponent(id)}/export?format=json`) },
+            ]}
+          />
         </div>
         <p className="mt-2 text-[12px] max-w-[440px]" style={{ color: ios.tertiary }}>
-          The report includes every step, command, output, file written and the environment. Passwords and tokens are hidden.
+          Paste it into any AI assistant or a support request. It includes every step, command, output, file written and the environment. Passwords and tokens are hidden.
         </p>
       </div>
 
@@ -722,12 +726,8 @@ const ActivityDetail: React.FC<{ id: string; subscribe: Subscribe }> = ({ id, su
 type LevelFilter = 'all' | 'info' | 'warn' | 'error';
 type RangeFilter = '1h' | '24h' | '7d' | 'all';
 
-const EventsView: React.FC<{
-  subscribe: Subscribe;
-  onOpenActivity: (id: string) => void;
-  /** Reports how many events are shown (for the sheet's footer) */
-  onCount?: (n: number, more: boolean) => void;
-}> = ({ subscribe, onOpenActivity, onCount }) => {
+/** Filters for All Events; they live in the sheet so they can sit in its fixed toolbar and footer */
+function useEventFilters() {
   const [search, setSearch] = useState('');
   const [debounced, setDebounced] = useState('');
   const [level, setLevel] = useState<LevelFilter>('all');
@@ -735,11 +735,6 @@ const EventsView: React.FC<{
   const [cats, setCats] = useState<string[]>([]);
   const [range, setRange] = useState<RangeFilter>('24h');
   const [live, setLive] = useState(true);
-  const [events, setEvents] = useState<LogEvent[]>([]);
-  const [moreAvailable, setMoreAvailable] = useState(false);
-  useEffect(() => onCount?.(events.length, moreAvailable), [events.length, moreAvailable, onCount]);
-  const [cursor, setCursor] = useState<string | undefined>();
-  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     const t = setTimeout(() => setDebounced(search), 250);
@@ -748,7 +743,7 @@ const EventsView: React.FC<{
 
   const levels = useMemo(() => {
     const base: Level[] = level === 'error' ? ['error'] : level === 'warn' ? ['warn', 'error'] : ['info', 'warn', 'error'];
-    return lowLevel && level === 'all' ? (['trace', 'debug', ...base] as Level[]) : level === 'all' || level === 'info' ? base : base;
+    return lowLevel && level === 'all' ? (['trace', 'debug', ...base] as Level[]) : base;
   }, [level, lowLevel]);
 
   const since = useMemo(() => {
@@ -769,6 +764,67 @@ const EventsView: React.FC<{
     },
     [levels, cats, debounced, since]
   );
+
+  const toggleCat = (c: string) => setCats((prev) => (prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c]));
+
+  return { search, setSearch, debounced, level, setLevel, lowLevel, setLowLevel, cats, setCats, toggleCat, range, setRange, live, setLive, levels, params };
+}
+type EventFilters = ReturnType<typeof useEventFilters>;
+
+const RANGE_LABEL: Record<RangeFilter, string> = { '1h': 'Last Hour', '24h': 'Last 24 Hours', '7d': 'Last 7 Days', all: 'All Time' };
+const LEVEL_LABEL: Record<LevelFilter, string> = { all: 'All Levels', info: 'All Levels', warn: 'Warnings & Errors', error: 'Errors Only' };
+/** Shorter labels for the buttons themselves, so all three fit on one line on a phone */
+const RANGE_SHORT: Record<RangeFilter, string> = { '1h': '1 Hour', '24h': '24 Hours', '7d': '7 Days', all: 'All Time' };
+const LEVEL_SHORT: Record<LevelFilter, string> = { all: 'All Levels', info: 'All Levels', warn: 'Warnings', error: 'Errors' };
+
+/** Search plus three quiet menus: level, time and kind */
+const EventsToolbar: React.FC<{ f: EventFilters }> = ({ f }) => (
+  <>
+    <SearchField value={f.search} onChange={f.setSearch} label="Search events" placeholder="Search events" />
+    <div className="flex gap-2 [&>button]:flex-1 [&>button]:min-w-0 [&>button]:justify-between sm:[&>button]:flex-none sm:[&>button]:justify-start">
+      <MenuButton
+        ariaLabel="Level"
+        align="left"
+        label={LEVEL_SHORT[f.level]}
+        tint={f.level === 'error' ? ios.red : f.level === 'warn' ? ios.orange : undefined}
+        items={[
+          ...(['all', 'warn', 'error'] as LevelFilter[]).map((l) => ({ key: l, label: LEVEL_LABEL[l], checked: f.level === l, onSelect: () => f.setLevel(l) })),
+          { key: 'low', divider: true, keepOpen: true, label: 'Include Low-Level Detail', checked: f.lowLevel && f.level === 'all', onSelect: () => { f.setLevel('all'); f.setLowLevel(!f.lowLevel); } },
+        ]}
+      />
+      <MenuButton
+        ariaLabel="Time"
+        align="left"
+        label={RANGE_SHORT[f.range]}
+        items={(['1h', '24h', '7d', 'all'] as RangeFilter[]).map((r) => ({ key: r, label: RANGE_LABEL[r], checked: f.range === r, onSelect: () => f.setRange(r) }))}
+      />
+      <MenuButton
+        ariaLabel="Kind"
+        align="left"
+        label={f.cats.length === 0 ? 'All Kinds' : f.cats.length === 1 ? CATEGORY_LABEL[f.cats[0]] : `${f.cats.length} Kinds`}
+        tint={f.cats.length ? ios.blue : undefined}
+        items={[
+          { key: 'all', label: 'All Kinds', checked: f.cats.length === 0, onSelect: () => f.setCats([]) },
+          ...Object.entries(CATEGORY_LABEL).map(([k, label], i) => ({ key: k, label, divider: i === 0, keepOpen: true, checked: f.cats.includes(k), onSelect: () => f.toggleCat(k) })),
+        ]}
+      />
+    </div>
+  </>
+);
+
+const EventsView: React.FC<{
+  subscribe: Subscribe;
+  onOpenActivity: (id: string) => void;
+  /** Reports how many events are shown (for the sheet's footer) */
+  onCount?: (n: number, more: boolean) => void;
+  filters: EventFilters;
+}> = ({ subscribe, onOpenActivity, onCount, filters }) => {
+  const { params, live, levels, cats, debounced } = filters;
+  const [events, setEvents] = useState<LogEvent[]>([]);
+  const [moreAvailable, setMoreAvailable] = useState(false);
+  useEffect(() => onCount?.(events.length, moreAvailable), [events.length, moreAvailable, onCount]);
+  const [cursor, setCursor] = useState<string | undefined>();
+  const [loading, setLoading] = useState(false);
 
   const load = useCallback(
     async (more = false) => {
@@ -818,70 +874,8 @@ const EventsView: React.FC<{
     return Array.from(m.entries());
   }, [events]);
 
-  const toggleCat = (c: string) => setCats((prev) => (prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c]));
-
   return (
     <div className="space-y-5">
-      <div className="space-y-3">
-        <SearchField value={search} onChange={setSearch} label="Search events" placeholder="Search messages, commands, output, paths…" />
-        <div className="flex flex-col sm:flex-row gap-2">
-          <div className="sm:flex-1">
-            <Segmented
-              label="Severity"
-              value={level}
-              onChange={setLevel}
-              size="sm"
-              options={[
-                { value: 'all', label: 'All' },
-                { value: 'warn', label: 'Warnings' },
-                { value: 'error', label: 'Errors' },
-              ]}
-            />
-          </div>
-          <div className="sm:w-[260px]">
-            <Segmented
-              label="Time range"
-              value={range}
-              onChange={setRange}
-              size="sm"
-              options={[
-                { value: '1h', label: '1 Hour' },
-                { value: '24h', label: '24 Hours' },
-                { value: '7d', label: '7 Days' },
-                { value: 'all', label: 'All' },
-              ]}
-            />
-          </div>
-        </div>
-        <div className="flex sm:flex-wrap gap-1.5 overflow-x-auto sm:overflow-visible pb-1 -mx-1 px-1" role="group" aria-label="Categories">
-          {Object.entries(CATEGORY_LABEL).map(([k, label]) => (
-            <Chip key={k} on={cats.includes(k)} onClick={() => toggleCat(k)}>
-              {label}
-            </Chip>
-          ))}
-        </div>
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <label className="flex items-center gap-2.5 text-[13px] cursor-pointer" style={{ color: ios.label }}>
-            <Switch checked={lowLevel} onChange={setLowLevel} label="Include low-level events" />
-            <span>Low-level events</span>
-          </label>
-          <div className="flex items-center gap-4">
-            <button
-              type="button"
-              onClick={() => setLive((l) => !l)}
-              aria-pressed={live}
-              className="flex items-center gap-1.5 text-[13px] font-medium"
-              style={{ color: live ? ios.green : ios.secondary }}
-            >
-              <span className={`w-2 h-2 rounded-full ${live ? 'animate-pulse motion-reduce:animate-none' : ''}`} style={{ background: live ? ios.green : ios.tertiary }} />
-              {live ? 'Live' : 'Paused'}
-            </button>
-            <LinkButton onClick={() => download(`/api/logs/events/export?${params({ format: 'jsonl' })}`)}>Export JSON</LinkButton>
-            <LinkButton onClick={() => download(`/api/logs/events/export?${params({ format: 'csv' })}`)}>Export CSV</LinkButton>
-          </div>
-        </div>
-      </div>
-
       {events.length === 0 ? (
         <p className="text-[15px] text-center py-14" style={{ color: ios.secondary }}>
           {loading ? 'Loading…' : 'No events match these filters.'}
@@ -892,7 +886,7 @@ const EventsView: React.FC<{
             <SectionHeader>{day}</SectionHeader>
             <Group>
               {list.map((e) => (
-                <EventRow key={e.id} ev={e} time={fmtClock(e.ts)} timeWidth={92} onOpenActivity={onOpenActivity} />
+                <EventRow key={e.id} ev={e} time={fmtClock(e.ts)} timeWidth={84} onOpenActivity={onOpenActivity} />
               ))}
             </Group>
           </section>
@@ -969,7 +963,7 @@ const LogSettingsView: React.FC = () => {
         'Actions you start (moves, deletes, updates, settings) are always recorded in full, whatever you choose here.'
       )}
       {pick(
-        'Keep Logs For',
+        'Keep Activity For',
         [
           { value: 7, label: '7 days' },
           { value: 30, label: '30 days' },
@@ -989,7 +983,7 @@ const LogSettingsView: React.FC = () => {
         ],
         s.maxStorageMB,
         (v) => save({ maxStorageMB: v }),
-        'When logs reach the limit, the oldest days are removed first.'
+        'When Activity reaches the limit, the oldest days are removed first.'
       )}
 
       <section>
@@ -1024,13 +1018,13 @@ const LogSettingsView: React.FC = () => {
 
       <section>
         <Group>
-          <Row onClick={() => setConfirmClear(true)} title={<span style={{ color: ios.red }}>Clear All Logs</span>} />
+          <Row onClick={() => setConfirmClear(true)} title={<span style={{ color: ios.red }}>Clear All Activity</span>} />
         </Group>
       </section>
 
       <Alert
         open={confirmClear}
-        title="Clear all logs?"
+        title="Clear all activity?"
         message="Every activity and event is deleted. Activities still in progress are kept."
         confirmLabel="Clear"
         destructive
@@ -1064,6 +1058,7 @@ export const ActivitySheet: React.FC<{
   const [cursor, setCursor] = useState<string | undefined>();
   const [loading, setLoading] = useState(false);
   const [eventsMounted, setEventsMounted] = useState(false);
+  const eventFilters = useEventFilters();
   const [eventCount, setEventCount] = useState<{ n: number; more: boolean }>({ n: 0, more: false });
   const onEventCount = useCallback((n: number, more: boolean) => setEventCount({ n, more }), []);
   const listeners = useRef(new Set<(msg: LiveMessage) => void>());
@@ -1178,33 +1173,73 @@ export const ActivitySheet: React.FC<{
   };
 
   const isList = view.kind === 'list';
-  const title = view.kind === 'settings' ? 'Log Settings' : view.kind === 'detail' ? 'Activity' : 'Activity';
+  const onEvents = tab === 'events';
+  const title = view.kind === 'settings' ? 'Activity Settings' : view.kind === 'detail' ? 'Activity' : onEvents ? 'All Events' : 'Activity';
+  const ev = eventFilters;
 
-  const toolbar = isList ? (
-    <>
-      <Segmented
-        label="View"
-        value={tab}
-        onChange={setTab}
-        options={[
-          { value: 'activity', label: 'Activity' },
-          { value: 'events', label: 'All Events' },
-        ]}
+  const toolbar = !isList ? undefined : onEvents ? (
+    <EventsToolbar f={ev} />
+  ) : (
+    <div className="flex gap-2">
+      <div className="flex-1 min-w-0">
+        <SearchField value={search} onChange={setSearch} label="Search activity" placeholder="Search" />
+      </div>
+      <MenuButton
+        ariaLabel="Show"
+        label={filter === 'all' ? 'All Activity' : f.label}
+        tint={filter === 'problems' ? ios.red : filter !== 'all' ? ios.blue : undefined}
+        items={TYPE_FILTERS.map((t, i) => ({
+          key: t.key,
+          label: t.key === 'all' ? 'All Activity' : t.label,
+          checked: filter === t.key,
+          dot: t.key === 'problems' ? ios.red : undefined,
+          divider: i === 2,
+          onSelect: () => setFilter(t.key),
+        }))}
       />
-      {tab === 'activity' && (
-        <>
-          <SearchField value={search} onChange={setSearch} label="Search activity" placeholder="Search activity" />
-          <div className="flex gap-1.5 overflow-x-auto pb-0.5 -mx-1 px-1" role="group" aria-label="Filter">
-            {TYPE_FILTERS.map((t) => (
-              <Chip key={t.key} on={filter === t.key} onClick={() => setFilter(t.key)} tone={t.key === 'problems' ? ios.red : undefined}>
-                {t.label}
-              </Chip>
-            ))}
-          </div>
-        </>
-      )}
-    </>
-  ) : undefined;
+    </div>
+  );
+
+  const footer = !isList ? undefined : onEvents ? (
+    <div className="flex items-center justify-between gap-3 text-[13px]" style={{ color: ios.secondary }}>
+      <span className="tabular-nums">{`${eventCount.n.toLocaleString()}${eventCount.more ? '+' : ''} event${eventCount.n === 1 ? '' : 's'}`}</span>
+      <span className="flex items-center gap-5">
+        <button
+          type="button"
+          onClick={() => ev.setLive(!ev.live)}
+          aria-pressed={ev.live}
+          title={ev.live ? 'New events appear as they happen. Tap to pause.' : 'Paused. Tap to show new events as they happen.'}
+          className="inline-flex items-center gap-1.5 font-medium rounded focus-visible:outline-2 focus-visible:outline-[#0A84FF]"
+          style={{ color: ev.live ? ios.green : ios.secondary }}
+        >
+          <span className={`w-[7px] h-[7px] rounded-full ${ev.live ? 'motion-safe:animate-pulse' : ''}`} style={{ background: ev.live ? ios.green : ios.tertiary }} />
+          {ev.live ? 'Live' : 'Paused'}
+        </button>
+        <MenuButton
+          look="link"
+          ariaLabel="Export"
+          label="Export"
+          items={[
+            { key: 'jsonl', label: 'JSON Lines (.jsonl)', onSelect: () => download(`/api/logs/events/export?${ev.params({ format: 'jsonl' })}`) },
+            { key: 'csv', label: 'Spreadsheet (.csv)', onSelect: () => download(`/api/logs/events/export?${ev.params({ format: 'csv' })}`) },
+          ]}
+        />
+      </span>
+    </div>
+  ) : (
+    <div className="flex items-center justify-between text-[13px]" style={{ color: ios.secondary }}>
+      <span className="inline-flex items-center gap-1.5 tabular-nums">
+        <span className="w-[7px] h-[7px] rounded-full" style={{ background: ios.green }} title="Recording" />
+        {`${items.length}${cursor ? '+' : ''} activit${items.length === 1 ? 'y' : 'ies'}`}
+      </span>
+      <LinkButton onClick={() => { listScroll.current = 0; setTab('events'); requestAnimationFrame(() => bodyRef.current?.scrollTo({ top: 0 })); }}>
+        <span className="inline-flex items-center gap-1">
+          All Events
+          <svg width="6" height="10" viewBox="0 0 8 13" aria-hidden="true"><path d="M1.5 1.5 6.5 6.5 1.5 11.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+        </span>
+      </LinkButton>
+    </div>
+  );
 
   return (
     <Sheet
@@ -1215,12 +1250,14 @@ export const ActivitySheet: React.FC<{
       bodyRef={bodyRef}
       leftAction={
         view.kind !== 'list' ? (
-          <BackButton label={tab === 'events' && view.kind === 'detail' ? 'Events' : 'Activity'} onClick={back} />
+          <BackButton label={onEvents && view.kind === 'detail' ? 'All Events' : 'Activity'} onClick={back} />
+        ) : onEvents ? (
+          <BackButton label="Activity" onClick={() => setTab('activity')} />
         ) : (
           <button
             type="button"
             onClick={() => setView({ kind: 'settings' })}
-            aria-label="Log settings"
+            aria-label="Activity settings"
             className="p-1 -ml-1 rounded hover:opacity-80 focus-visible:outline-2 focus-visible:outline-[#0A84FF]"
             style={{ color: ios.blue }}
           >
@@ -1229,28 +1266,14 @@ export const ActivitySheet: React.FC<{
         )
       }
       toolbar={toolbar}
-      footer={
-        view.kind === 'list' ? (
-          <div className="flex items-center justify-between text-[13px]" style={{ color: ios.secondary }}>
-            <span className="tabular-nums">
-              {tab === 'events'
-                ? `${eventCount.n.toLocaleString()}${eventCount.more ? '+' : ''} event${eventCount.n === 1 ? '' : 's'}`
-                : `${items.length}${cursor ? '+' : ''} activit${items.length === 1 ? 'y' : 'ies'}`}
-            </span>
-            <span className="inline-flex items-center gap-1.5">
-              <span className="w-[7px] h-[7px] rounded-full motion-safe:animate-pulse" style={{ background: ios.green }} />
-              Recording
-            </span>
-          </div>
-        ) : undefined
-      }
+      footer={footer}
     >
       {view.kind === 'settings' && <LogSettingsView />}
       {view.kind === 'detail' && <ActivityDetail id={view.id} subscribe={subscribe} />}
       {/* Stays mounted behind an opened activity, so Back returns to the same filters and results */}
       {eventsMounted && (
         <div hidden={view.kind !== 'list' || tab !== 'events'}>
-          <EventsView subscribe={subscribe} onOpenActivity={openDetail} onCount={onEventCount} />
+          <EventsView subscribe={subscribe} onOpenActivity={openDetail} onCount={onEventCount} filters={eventFilters} />
         </div>
       )}
       {view.kind === 'list' && tab === 'activity' && (

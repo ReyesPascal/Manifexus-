@@ -31,9 +31,9 @@ Manifexus is a lightweight, self-hosted central command hub that automatically t
 ### 4. Activity: a complete record for troubleshooting
 * **Everything you do is an activity:** moves, deletes, restores, updates, new stacks, app start/stop/restart and settings changes are each recorded from start to finish, with every step, Docker API call, host command (with its full output and exit code), file written (with its contents) and the request that started it.
 * **See exactly why something failed:** a failed activity shows Docker's own error text and the command that produced it, plus what your containers were doing around that time (crashes, out-of-memory kills, restarts, health changes).
-* **Copy for Claude:** one tap copies a Markdown troubleshooting report; *Everything (.json)* downloads the full record including the environment (Manifexus build, Docker version, mounts, permissions).
-* **All Events:** search, filter by severity, category and time, follow live, and export as JSON Lines or CSV.
-* **Stored on disk** in `/data/logs` (daily JSON Lines files). Retention (7 days to 1 year), a storage limit and background detail are set in Activity → Settings. Passwords, tokens and keys are replaced with `••••••` before anything is saved.
+* **Copy Report:** one tap copies a Markdown troubleshooting report to paste into any AI assistant or support request; *Download → Everything (.json)* saves the full record including the environment (Manifexus build, Docker version, mounts, permissions).
+* **All Events** (bottom of Activity): search, filter by level, time and kind, follow live, and export as JSON Lines or CSV.
+* **Stored on disk** in `/data/logs` (daily JSON Lines files). Retention (7 days to 1 year), a storage limit and background detail are set in Activity Settings. Passwords, tokens and keys are replaced with `••••••` before anything is saved.
 
 ### 5. Restore: go back to before any change
 * **Every change keeps a backup:** moving apps and deleting a stack save the compose files (and, unless you turn it off, the stack folders and volumes) first.
@@ -47,8 +47,8 @@ Manifexus is a lightweight, self-hosted central command hub that automatically t
 * **Health in plain words:** Diagnostics (in the header) checks Docker, automation, stack folders, backup space, recent problems and updates, with anything that needs you listed first. Every app has the same view from its card's **Details** button.
 * **See why an app stopped:** a crashed app shows what its exit code means and the last thing it wrote to its logs.
 * **Right now:** memory, CPU, processes and network for the app or Manifexus itself.
-* **Logs:** search, choose how much to show, copy or download. Errors are red and warnings orange.
-* **Copy for Claude** copies a full troubleshooting report; **Download** saves it as a Markdown file.
+* **App Output:** what the app itself has printed. Search, choose how much to show, copy or download. Errors are red and warnings orange. (For Manifexus itself, Diagnostics links to Activity instead.)
+* **Copy Report** copies a full troubleshooting report to paste into any AI assistant; **Download** saves it as a Markdown file.
 
 ---
 

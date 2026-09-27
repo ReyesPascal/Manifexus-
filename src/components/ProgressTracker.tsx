@@ -283,7 +283,7 @@ export const ProgressView: React.FC<{
             )}
             {run.activityId && (
               <Button onClick={copyReport} tone="gray" className="!h-[38px] !text-[15px] !px-5">
-                {copy === 'busy' ? 'Preparing…' : copy === 'done' ? 'Copied' : copy === 'failed' ? 'Couldn’t Copy' : 'Copy for Claude'}
+                {copy === 'busy' ? 'Preparing…' : copy === 'done' ? 'Copied' : copy === 'failed' ? 'Couldn’t Copy' : 'Copy Report'}
               </Button>
             )}
             {onClose && (

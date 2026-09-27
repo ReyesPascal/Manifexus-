@@ -4,7 +4,7 @@
  *
  * Colors follow Apple's dark-mode system palette so the pieces read as one family.
  */
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 export const ios = {
   sheet: '#1c1c1e',
@@ -386,6 +386,17 @@ export const Sheet: React.FC<{
   /** Stacking order; raise it for sheets that open on top of other screens */
   zIndex?: number;
 }> = ({ open, title, subtitle, onClose, closeLabel = 'Done', rightAction, leftAction, footer, toolbar, children, bodyRef, zIndex = 50 }) => {
+  // Focus the sheet itself when it opens (not its first button, which would look selected),
+  // and hand focus back to whatever opened it when it closes
+  const panelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const opener = document.activeElement as HTMLElement | null;
+    panelRef.current?.focus({ preventScroll: true });
+    return () => {
+      if (opener && document.contains(opener)) opener.focus({ preventScroll: true });
+    };
+  }, [open]);
   // Escape closes only the sheet on top, not every open sheet underneath it
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
@@ -413,10 +424,12 @@ export const Sheet: React.FC<{
       }}
     >
       <div
+        ref={panelRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className={sheetPanelClass}
+        className={`${sheetPanelClass} outline-none`}
         style={sheetPanelStyle}
       >
         <div className="relative px-4 pt-3.5 pb-3" style={{ borderBottom: `0.5px solid ${ios.separator}` }}>
@@ -554,3 +567,170 @@ export const SearchField: React.FC<{ value: string; onChange: (v: string) => voi
     )}
   </div>
 );
+
+// ----------------------------------------------------------------------------
+// Pull-down menu
+// ----------------------------------------------------------------------------
+
+export interface MenuItem {
+  key: string;
+  label: React.ReactNode;
+  /** Shows a checkmark in the leading column */
+  checked?: boolean;
+  /** Small colored dot before the label (e.g. red for Problems) */
+  dot?: string;
+  /** Draws a divider above this item */
+  divider?: boolean;
+  /** Keep the menu open after choosing (for multi-select) */
+  keepOpen?: boolean;
+  onSelect: () => void;
+}
+
+/** Pop-up button chevrons (like chevron.up.chevron.down) */
+const PopupChevrons: React.FC = () => (
+  <svg width="9" height="13" viewBox="0 0 9 13" aria-hidden="true" className="flex-shrink-0 opacity-80">
+    <path d="M1.5 4.5 4.5 1.5l3 3M1.5 8.5l3 3 3-3" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+);
+
+/**
+ * Apple-style pull-down menu: a quiet button that opens a floating list with checkmarks.
+ * `look="field"` matches a search field (for toolbars); `look="link"` is plain blue text (for footers).
+ * Opens upward when there isn't room below.
+ */
+export const MenuButton: React.FC<{
+  label: React.ReactNode;
+  ariaLabel: string;
+  items: MenuItem[];
+  look?: 'field' | 'link';
+  /** Tint the label, e.g. blue when a filter is active */
+  tint?: string;
+  align?: 'left' | 'right';
+  className?: string;
+}> = ({ label, ariaLabel, items, look = 'field', tint, align = 'right', className = '' }) => {
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ top?: number; bottom?: number; left?: number; right?: number; maxHeight: number }>();
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    if (!open || !btnRef.current) return;
+    const r = btnRef.current.getBoundingClientRect();
+    const vh = window.innerHeight;
+    const vw = window.innerWidth;
+    const below = vh - r.bottom - 12;
+    const above = r.top - 12;
+    const up = below < 260 && above > below;
+    const horiz = align === 'right' ? { right: Math.max(8, vw - r.right) } : { left: Math.max(8, r.left) };
+    setPos(up ? { bottom: vh - r.top + 6, maxHeight: above - 6, ...horiz } : { top: r.bottom + 6, maxHeight: below - 6, ...horiz });
+  }, [open, align]);
+
+  useEffect(() => {
+    if (!open) return;
+    // A tap outside only dismisses the menu (as on iOS); it doesn't also press what's underneath
+    const onDown = (e: MouseEvent) => {
+      if (menuRef.current?.contains(e.target as Node) || btnRef.current?.contains(e.target as Node)) return;
+      e.stopPropagation();
+      e.preventDefault();
+      setOpen(false);
+      const swallow = (ev: MouseEvent) => {
+        ev.stopPropagation();
+        ev.preventDefault();
+      };
+      window.addEventListener('click', swallow, { capture: true, once: true });
+      setTimeout(() => window.removeEventListener('click', swallow, true), 400);
+    };
+    // Capture phase: Escape closes the menu without also closing the sheet underneath
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopImmediatePropagation();
+        setOpen(false);
+        btnRef.current?.focus();
+      }
+    };
+    const onScroll = (e: Event) => {
+      if (!menuRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    window.addEventListener('mousedown', onDown, true);
+    window.addEventListener('keydown', onKey, true);
+    window.addEventListener('scroll', onScroll, true);
+    const onResize = () => setOpen(false);
+    window.addEventListener('resize', onResize);
+    return () => {
+      window.removeEventListener('resize', onResize);
+      window.removeEventListener('mousedown', onDown, true);
+      window.removeEventListener('keydown', onKey, true);
+      window.removeEventListener('scroll', onScroll, true);
+    };
+  }, [open]);
+
+  const anyChecks = items.some((i) => i.checked !== undefined);
+
+  return (
+    <>
+      <button
+        ref={btnRef}
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={ariaLabel}
+        onClick={() => setOpen((o) => !o)}
+        className={
+          look === 'field'
+            ? `h-9 pl-3 pr-2.5 rounded-[10px] inline-flex items-center gap-1.5 text-[15px] whitespace-nowrap flex-shrink-0 transition-colors hover:bg-white/[0.06] focus-visible:outline-2 focus-visible:outline-[#0A84FF] ${className}`
+            : `inline-flex items-center gap-1 text-[13px] font-medium rounded hover:opacity-80 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0A84FF] ${className}`
+        }
+        style={look === 'field' ? { background: open ? ios.groupPressed : ios.fill, color: tint || ios.label } : { color: tint || ios.blue }}
+      >
+        <span className="truncate">{label}</span>
+        <PopupChevrons />
+      </button>
+      {open && (
+        <div
+          ref={menuRef}
+          role="menu"
+          aria-label={ariaLabel}
+          className="fixed z-[100] min-w-[230px] max-w-[300px] py-1.5 rounded-[13px] overflow-y-auto"
+          style={{
+            ...pos,
+            visibility: pos ? 'visible' : 'hidden',
+            background: 'rgba(40,40,42,0.94)',
+            backdropFilter: 'blur(30px) saturate(1.6)',
+            WebkitBackdropFilter: 'blur(30px) saturate(1.6)',
+            boxShadow: '0 0 0 0.5px rgba(255,255,255,0.12), 0 18px 48px rgba(0,0,0,0.55)',
+            fontFamily: ios.font,
+          }}
+        >
+          {items.map((it) => (
+            <React.Fragment key={it.key}>
+              {it.divider && <div className="my-1.5 h-[6px]" style={{ background: 'rgba(0,0,0,0.28)' }} role="separator" />}
+              <button
+                type="button"
+                role={it.checked !== undefined ? 'menuitemcheckbox' : 'menuitem'}
+                aria-checked={it.checked}
+                onClick={() => {
+                  it.onSelect();
+                  if (!it.keepOpen) setOpen(false);
+                }}
+                className="w-full h-[38px] flex items-center gap-2 pr-4 text-left text-[15px] text-white hover:bg-white/[0.08] focus-visible:bg-white/[0.08] focus:outline-none"
+                style={{ paddingLeft: anyChecks ? 10 : 16 }}
+              >
+                {anyChecks && (
+                  <span className="w-[16px] flex justify-center flex-shrink-0">
+                    {it.checked && (
+                      <svg width="13" height="11" viewBox="0 0 14 11" aria-hidden="true">
+                        <path d="M1.5 5.8 5.2 9.5 12.5 1.5" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    )}
+                  </span>
+                )}
+                {it.dot && <span className="w-[7px] h-[7px] rounded-full flex-shrink-0" style={{ background: it.dot }} />}
+                <span className="truncate">{it.label}</span>
+              </button>
+            </React.Fragment>
+          ))}
+        </div>
+      )}
+    </>
+  );
+};

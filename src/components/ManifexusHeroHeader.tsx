@@ -219,7 +219,7 @@ export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
               <ToolButton
                 icon={<Stethoscope className={iconCls} />}
                 label="Diagnostics"
-                tip="Health, mounts, environment and logs for the Manifexus container."
+                tip="Health checks, resources and details for Manifexus."
                 onClick={() => onInspectContainer(container)}
               />
             )}

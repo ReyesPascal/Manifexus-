@@ -412,13 +412,10 @@ export const AppDetailsSheet: React.FC<{
             {system ? (
               <>
                 <Button onClick={copyReport} variant="tinted" className="!h-[36px] !px-4 !text-[14px]">
-                  {report === 'busy' ? 'Preparing…' : report === 'done' ? 'Copied Report' : report === 'failed' ? 'Couldn’t Copy' : 'Copy for Claude'}
+                  {report === 'busy' ? 'Preparing…' : report === 'done' ? 'Copied' : report === 'failed' ? 'Couldn’t Copy' : 'Copy Report'}
                 </Button>
                 <Button onClick={() => download('/api/diagnostics/report?download=1')} tone="gray" className="!h-[36px] !px-4 !text-[14px]">
                   Download
-                </Button>
-                <Button onClick={() => push('logs')} tone="gray" className="!h-[36px] !px-4 !text-[14px]">
-                  Logs
                 </Button>
               </>
             ) : (
@@ -438,9 +435,6 @@ export const AppDetailsSheet: React.FC<{
                     {busyAction === 'stop' ? 'Stopping…' : busyAction === 'start' ? 'Starting…' : running ? 'Stop' : 'Start'}
                   </Button>
                 )}
-                <Button onClick={() => push('logs')} tone="gray" className="!h-[36px] !px-4 !text-[14px]">
-                  Logs
-                </Button>
               </>
             )}
           </div>
@@ -536,7 +530,11 @@ export const AppDetailsSheet: React.FC<{
               trailing={<span className="tabular-nums">{container.ports.filter((p) => p.publicPort).length || ''}</span>}
               chevron
             />
-            <Row onClick={() => push('logs')} leading={<NavTile d={G.logs} color="#30D158" />} title="Logs" chevron />
+            {system ? (
+              <Row onClick={() => followLink('activity')} leading={<NavTile d={G.logs} color="#30D158" />} title="Activity" subtitle="Everything Manifexus has done" chevron />
+            ) : (
+              <Row onClick={() => push('logs')} leading={<NavTile d={G.logs} color="#30D158" />} title="App Output" subtitle="What the app itself has printed" chevron />
+            )}
             {!system && <Row onClick={() => push('customize')} leading={<NavTile d={G.pencil} color="#FF9F0A" />} title="Customize" subtitle="Name, group, launch link, icon and notes" chevron />}
           </Group>
         </section>
@@ -634,7 +632,7 @@ export const AppDetailsSheet: React.FC<{
       </div>
     );
   } else if (view === 'logs') {
-    title = 'Logs';
+    title = 'App Output';
     const lines = (logs || '').split('\n');
     const q = logQuery.trim().toLowerCase();
     const shown = q ? lines.filter((l) => l.toLowerCase().includes(q)) : lines;
@@ -642,7 +640,7 @@ export const AppDetailsSheet: React.FC<{
       <div className="space-y-4">
         <div className="flex flex-col sm:flex-row gap-2">
           <div className="flex-1">
-            <SearchField value={logQuery} onChange={setLogQuery} label="Search logs" placeholder="Search logs" />
+            <SearchField value={logQuery} onChange={setLogQuery} label="Search output" placeholder="Search output" />
           </div>
           <div className="sm:w-[280px]">
             <Segmented
@@ -658,9 +656,9 @@ export const AppDetailsSheet: React.FC<{
           </div>
         </div>
         {logs === null ? (
-          <p className="text-[15px] text-center py-16" style={{ color: ios.secondary }}>Reading logs…</p>
+          <p className="text-[15px] text-center py-16" style={{ color: ios.secondary }}>Reading…</p>
         ) : !logs.trim() ? (
-          <p className="text-[15px] text-center py-16" style={{ color: ios.secondary }}>Nothing in the logs yet.</p>
+          <p className="text-[15px] text-center py-16" style={{ color: ios.secondary }}>The app hasn’t printed anything yet.</p>
         ) : (
           <div className="rounded-[12px] px-3.5 py-3 font-mono text-[12px] leading-[18px] overflow-x-auto" style={{ background: 'rgba(0,0,0,0.35)' }}>
             {shown.map((l, i) => (
