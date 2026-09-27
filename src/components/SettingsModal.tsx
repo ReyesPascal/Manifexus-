@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { X, Settings, Server, Globe, Save, FolderOpen } from 'lucide-react';
-import { ManifexusConfig } from '../types';
+import { X, Settings, Server, Globe, Save, FolderOpen, Zap, ChevronRight } from 'lucide-react';
+import { ManifexusConfig, AutomationPrivileges } from '../types';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -9,6 +9,9 @@ interface SettingsModalProps {
   onSaveConfig: (updated: Partial<ManifexusConfig>) => Promise<void>;
   /** The folder Manifexus would use if no location is saved (shown as the placeholder) */
   detectedStacksDir?: string;
+  privileges?: AutomationPrivileges | null;
+  /** Opens the Host Automation & Privileges window */
+  onOpenAutomationModal?: () => void;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -17,6 +20,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   config,
   onSaveConfig,
   detectedStacksDir,
+  privileges,
+  onOpenAutomationModal,
 }) => {
   // Hooks must run on every render, so they come before the early return
   const [hostAddress, setHostAddress] = useState(config?.hostAddress || 'localhost');
@@ -35,6 +40,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   }, [isOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!isOpen) return null;
+
+  const isElevated = privileges?.mode === 'elevated';
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -77,7 +84,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         </div>
 
         {/* Form */}
-        <form onSubmit={handleSubmit} className="p-6 space-y-4 text-xs">
+        <form onSubmit={handleSubmit} className="p-6 space-y-4 text-xs max-h-[calc(100vh-8rem)] overflow-y-auto">
           {/* Host IP / Domain */}
           <div className="space-y-1.5">
             <label className="flex items-center gap-1.5 text-slate-300 font-bold">
@@ -138,6 +145,41 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               Frequency for querying the Docker daemon socket for new containers and status changes.
             </p>
           </div>
+
+          {/* Automation privileges */}
+          {onOpenAutomationModal && (
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-1.5 text-slate-300 font-bold">
+                <Zap className="w-4 h-4 text-cyan-400" />
+                <span>Automation Privileges</span>
+              </div>
+              <button
+                type="button"
+                onClick={onOpenAutomationModal}
+                className={`w-full px-3 py-2 rounded-lg border flex items-center justify-between gap-3 text-left transition-colors ${
+                  isElevated
+                    ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-300 hover:border-emerald-400'
+                    : 'bg-cyan-950/30 border-cyan-500/40 text-cyan-300 hover:border-cyan-400'
+                }`}
+              >
+                <div>
+                  <div className="font-bold flex items-center gap-1.5">
+                    {isElevated ? 'ELEVATED AUTOMATION' : 'SANDBOXED MODE'}
+                    <span className="text-[10px] opacity-70 font-normal">
+                      ({privileges?.isHostFsMounted ? 'Host FS Mounted' : 'Docker Socket'})
+                    </span>
+                  </div>
+                  <div className="text-[10px] text-slate-400">
+                    {isElevated ? 'Full 1-click AST deployment active' : 'Click to elevate permissions'}
+                  </div>
+                </div>
+                <ChevronRight className="w-4 h-4 opacity-70 flex-shrink-0" />
+              </button>
+              <p className="text-[11px] text-slate-400">
+                Controls whether Manifexus can edit files on the host to deploy changes in one click.
+              </p>
+            </div>
+          )}
 
           <div className="p-3 rounded-xl bg-slate-950/70 border border-slate-800 text-[11px] text-slate-400 space-y-1">
             <div className="text-slate-300 font-semibold">Persistence Note</div>

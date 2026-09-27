@@ -1,24 +1,10 @@
-import React, { useState } from 'react';
-import {
-  Shield,
-  Cpu,
-  Layers,
-  Clock,
-  Terminal,
-  ExternalLink,
-  Lock,
-  Zap,
-  Info,
-  ChevronRight,
-  Search,
-} from 'lucide-react';
-import { DeepContainerMetadata, SystemStatus, AutomationPrivileges } from '../types';
+import React from 'react';
+import { Shield, Layers, Clock, Search, GitCommit } from 'lucide-react';
+import { DeepContainerMetadata, SystemStatus } from '../types';
 
 interface ManifexusHeroHeaderProps {
   container?: DeepContainerMetadata;
   systemStatus: SystemStatus | null;
-  privileges: AutomationPrivileges | null;
-  onOpenElevateModal: () => void;
   onInspectContainer?: (container: DeepContainerMetadata) => void;
   versionLabel?: string;
   updateAvailable?: boolean;
@@ -27,34 +13,63 @@ interface ManifexusHeroHeaderProps {
   stackCount?: number;
 }
 
+/** A small label with a tooltip that appears above it on hover or keyboard focus */
+const Pill: React.FC<{
+  tip: string;
+  className?: string;
+  onClick?: () => void;
+  children: React.ReactNode;
+}> = ({ tip, className = '', onClick, children }) => {
+  const base = `group relative flex items-center gap-1.5 px-2 py-0.5 rounded-md border transition-colors ${className}`;
+  const tooltip = (
+    <span
+      role="tooltip"
+      className="pointer-events-none absolute left-1/2 bottom-full z-20 mb-2 w-max max-w-[220px] -translate-x-1/2 translate-y-1 rounded-lg border border-slate-700/80 bg-slate-950/95 px-2.5 py-1.5 text-[10.5px] font-sans font-normal leading-snug text-slate-300 opacity-0 shadow-xl shadow-black/40 backdrop-blur transition-all duration-150 delay-150 group-hover:translate-y-0 group-hover:opacity-100 group-focus-visible:translate-y-0 group-focus-visible:opacity-100 whitespace-normal text-center"
+    >
+      {tip}
+      <span className="absolute left-1/2 top-full -translate-x-1/2 border-4 border-transparent border-t-slate-700/80" />
+    </span>
+  );
+  return onClick ? (
+    <button type="button" onClick={onClick} aria-label={tip} className={`${base} cursor-pointer focus:outline-none`}>
+      {children}
+      {tooltip}
+    </button>
+  ) : (
+    <span tabIndex={0} aria-label={tip} className={`${base} cursor-default focus:outline-none`}>
+      {children}
+      {tooltip}
+    </span>
+  );
+};
+
+const neutral = 'bg-slate-900/90 border-slate-800 text-slate-300 hover:border-slate-700';
+
 export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
   container,
   systemStatus,
-  privileges,
-  onOpenElevateModal,
   onInspectContainer,
   versionLabel,
   updateAvailable,
   onOpenUpdates,
   stackCount,
 }) => {
-  const [showQuickLogs, setShowQuickLogs] = useState(false);
-
-  const isElevated = privileges?.mode === 'elevated';
   const port = container?.ports?.[0]?.publicPort || 3334;
   const socketOn = !!systemStatus?.dockerConnected;
+  // The server labels builds "Build <revision>" or "Development build"; show just the revision after "Build:"
+  const build = !versionLabel ? undefined : versionLabel.startsWith('Build ') ? versionLabel.slice(6) : 'dev';
 
   return (
     <div className="w-full mb-6">
-      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-[#0d1424] via-[#090e1c] to-[#070a14] border border-cyan-500/30 shadow-[0_4px_30px_rgba(6,182,212,0.08)]">
-        
+      <div className="relative rounded-2xl bg-gradient-to-r from-[#0d1424] via-[#090e1c] to-[#070a14] border border-cyan-500/30 shadow-[0_4px_30px_rgba(6,182,212,0.08)]">
         {/* Subtle Decorative Background Glow */}
-        <div className="absolute top-0 right-0 w-96 h-full bg-gradient-to-l from-cyan-500/5 to-transparent pointer-events-none" />
-        <div className="absolute -top-12 -left-12 w-48 h-48 rounded-full bg-cyan-500/10 blur-3xl pointer-events-none" />
+        <div className="absolute inset-0 overflow-hidden rounded-2xl pointer-events-none">
+          <div className="absolute top-0 right-0 w-96 h-full bg-gradient-to-l from-cyan-500/5 to-transparent" />
+          <div className="absolute -top-12 -left-12 w-48 h-48 rounded-full bg-cyan-500/10 blur-3xl" />
+        </div>
 
         <div className="relative p-5 sm:p-6 flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6">
-          
-          {/* Left: Identity & Protected Status */}
+          {/* Left: Identity */}
           <div className="flex items-start gap-4">
             <div className="relative flex-shrink-0">
               <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-cyan-500/20 via-slate-800 to-slate-900 border border-cyan-400/40 flex items-center justify-center shadow-lg shadow-cyan-950/50">
@@ -67,30 +82,7 @@ export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
             </div>
 
             <div>
-              <div className="flex flex-wrap items-center gap-2.5">
-                <h2 className="text-xl font-black tracking-tight text-white flex items-center gap-2">
-                  Manifexus
-                  <button
-                    type="button"
-                    onClick={onOpenUpdates}
-                    className={`text-xs font-mono font-medium px-2 py-0.5 rounded-full border transition-colors ${
-                      updateAvailable
-                        ? 'bg-[#0A84FF]/15 text-[#6CB6FF] border-[#0A84FF]/50 hover:bg-[#0A84FF]/25'
-                        : 'bg-cyan-950/90 text-cyan-300 border-cyan-500/40 hover:border-cyan-400'
-                    }`}
-                    title={updateAvailable ? 'An update is available' : 'Software Update'}
-                  >
-                    {versionLabel || '…'}
-                    {updateAvailable ? ' · Update available' : ''}
-                  </button>
-                </h2>
-
-                {/* Directive 1: Distinctive "System Orchestrator / Protected Stack" badge */}
-                <div className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold font-mono uppercase bg-cyan-950/80 border border-cyan-400/50 text-cyan-300 shadow-sm">
-                  <Lock className="w-3 h-3 text-cyan-400" />
-                  System Orchestrator · Protected Stack
-                </div>
-              </div>
+              <h2 className="text-xl font-black tracking-tight text-white">Manifexus</h2>
 
               <p className="text-xs text-slate-400 mt-1.5 max-w-xl leading-relaxed">
                 Immutable core control plane managing host compose synthesis, automated AST migrations, and zero-loss container orchestration.
@@ -98,104 +90,65 @@ export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
 
               {/* Telemetry Pills */}
               <div className="flex flex-wrap items-center gap-2 sm:gap-3 mt-3 text-[11px] font-mono text-slate-400">
-                <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-slate-900/90 border border-slate-800 text-slate-300">
-                  <Layers className="w-3.5 h-3.5 text-purple-400" />
-                  Stacks: <code className="text-purple-300 font-bold">{stackCount ?? '…'}</code>
-                </span>
+                <Pill
+                  tip={
+                    updateAvailable
+                      ? 'The Manifexus version you are running. An update is available. Click to open Software Update.'
+                      : 'The Manifexus version you are running. Click to open Software Update.'
+                  }
+                  onClick={onOpenUpdates}
+                  className={
+                    updateAvailable
+                      ? 'bg-[#0A84FF]/15 border-[#0A84FF]/50 text-[#6CB6FF] hover:bg-[#0A84FF]/25'
+                      : `${neutral} hover:border-cyan-500/50`
+                  }
+                >
+                  <GitCommit className={`w-3.5 h-3.5 ${updateAvailable ? 'text-[#6CB6FF]' : 'text-cyan-400'}`} />
+                  Build: <code className={`font-bold ${updateAvailable ? '' : 'text-cyan-300'}`}>{build || '…'}</code>
+                  {updateAvailable && <span className="w-1.5 h-1.5 rounded-full bg-[#0A84FF]" />}
+                </Pill>
 
-                <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-slate-900/90 border border-slate-800 text-slate-300">
-                  <Clock className="w-3.5 h-3.5 text-slate-400" />
-                  Port: <code className="text-slate-200">:{port}</code>
-                </span>
-
-                <span
-                  className={`flex items-center gap-1.5 px-2 py-0.5 rounded-md border ${
-                    socketOn ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-300' : 'bg-rose-950/40 border-rose-500/40 text-rose-300'
-                  }`}
-                  title={socketOn ? 'Connected to the Docker socket' : 'Not connected to the Docker socket'}
+                <Pill
+                  tip={
+                    socketOn
+                      ? 'Manifexus is connected to Docker and can see and manage your containers.'
+                      : 'Manifexus cannot reach Docker, so containers cannot be seen or managed.'
+                  }
+                  className={
+                    socketOn
+                      ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-300 hover:border-emerald-400/60'
+                      : 'bg-rose-950/40 border-rose-500/40 text-rose-300 hover:border-rose-400/60'
+                  }
                 >
                   <span className={`w-2 h-2 rounded-full ${socketOn ? 'bg-emerald-400' : 'bg-rose-400'}`} />
-                  Docker socket: <code className="font-bold">{socketOn ? 'On' : 'Off'}</code>
-                </span>
+                  Docker Socket: <code className="font-bold">{socketOn ? 'On' : 'Off'}</code>
+                </Pill>
 
+                <Pill tip="The port this Manifexus dashboard is served on." className={neutral}>
+                  <Clock className="w-3.5 h-3.5 text-slate-400" />
+                  Port: <code className="text-slate-200">:{port}</code>
+                </Pill>
+
+                <Pill tip="How many Docker Compose stacks your apps are grouped into." className={neutral}>
+                  <Layers className="w-3.5 h-3.5 text-purple-400" />
+                  Stacks: <code className="text-purple-300 font-bold">{stackCount ?? '…'}</code>
+                </Pill>
               </div>
             </div>
           </div>
 
-          {/* Right: Privilege Mode & Protected Controls (No standard merge/delete!) */}
-          <div className="flex flex-col sm:flex-row lg:flex-col items-stretch lg:items-end gap-3 w-full lg:w-auto flex-shrink-0">
-            {/* Automation Privilege Status Badge */}
-            <div
-              onClick={onOpenElevateModal}
-              className={`px-4 py-2 rounded-xl border flex items-center justify-between gap-3 cursor-pointer transition-all hover:scale-[1.02] ${
-                isElevated
-                  ? 'bg-emerald-950/50 border-emerald-500/40 text-emerald-300 hover:border-emerald-400'
-                  : 'bg-cyan-950/40 border-cyan-500/40 text-cyan-300 hover:border-cyan-400'
-              }`}
+          {/* Right: Read-only inspection */}
+          {container && onInspectContainer && (
+            <button
+              onClick={() => onInspectContainer(container)}
+              className="flex-shrink-0 px-3.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs font-mono text-slate-300 hover:text-white transition-all flex items-center gap-1.5 shadow-sm"
+              title="Inspect container health, mounts, environment, and logs"
             >
-              <div className="flex items-center gap-2.5 text-xs font-mono">
-                <Zap className={`w-4 h-4 ${isElevated ? 'text-emerald-400' : 'text-cyan-400'}`} />
-                <div>
-                  <div className="font-bold flex items-center gap-1.5">
-                    {isElevated ? 'ELEVATED AUTOMATION' : 'SANDBOXED MODE'}
-                    <span className="text-[10px] opacity-70">
-                      ({privileges?.isHostFsMounted ? 'Host FS Mounted' : 'Docker Socket'})
-                    </span>
-                  </div>
-                  <div className="text-[10px] text-slate-400 font-normal">
-                    {isElevated ? 'Full 1-click AST deployment active' : 'Click to elevate permissions'}
-                  </div>
-                </div>
-              </div>
-              <ChevronRight className="w-4 h-4 opacity-70" />
-            </div>
-
-            {/* Read-Only Inspection Buttons (Safe, no mutating controls) */}
-            <div className="flex items-center gap-2">
-              {container && onInspectContainer && (
-                <button
-                  onClick={() => onInspectContainer(container)}
-                  className="px-3.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs font-mono text-slate-300 hover:text-white transition-all flex items-center gap-1.5 shadow-sm"
-                  title="Inspect container health, mounts, environment, and logs"
-                >
-                  <Search className="w-3.5 h-3.5 text-cyan-400" />
-                  Inspect
-                </button>
-              )}
-
-              <button
-                onClick={() => setShowQuickLogs(!showQuickLogs)}
-                className="px-3 py-1.5 rounded-lg bg-slate-900/60 hover:bg-slate-800 border border-slate-800 text-xs font-mono text-slate-400 hover:text-slate-200 transition-all flex items-center gap-1.5"
-              >
-                <Info className="w-3.5 h-3.5 text-slate-400" />
-                {showQuickLogs ? 'Hide Stats' : 'Quick Stats'}
-              </button>
-            </div>
-          </div>
+              <Search className="w-3.5 h-3.5 text-cyan-400" />
+              Inspect
+            </button>
+          )}
         </div>
-
-        {/* Quick Stats Drawer */}
-        {showQuickLogs && (
-          <div className="px-6 py-4 bg-slate-950/80 border-t border-slate-800/80 text-xs font-mono text-slate-400 flex flex-wrap gap-6 items-center">
-            <div>
-              <span className="text-slate-500">Host OS:</span>{' '}
-              <span className="text-slate-200">{systemStatus?.operatingSystem || 'Linux (Docker Container)'}</span>
-            </div>
-            <div>
-              <span className="text-slate-500">Docker Version:</span>{' '}
-              <span className="text-slate-200">{systemStatus?.dockerVersion || 'v27.0+'}</span>
-            </div>
-            <div>
-              <span className="text-slate-500">Root Directory:</span>{' '}
-              <span className="text-cyan-400">{container?.compose?.workingDir || '/app'}</span>
-            </div>
-            <div>
-              <span className="text-slate-500">Self-Protection:</span>{' '}
-              <span className="text-emerald-400 font-bold">ACTIVE (Excluded from Merge Studio)</span>
-            </div>
-          </div>
-        )}
-
       </div>
     </div>
   );

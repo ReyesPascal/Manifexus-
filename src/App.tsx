@@ -526,8 +526,6 @@ export default function App() {
         <ManifexusHeroHeader
           container={manifexusHeroContainer}
           systemStatus={systemStatus}
-          privileges={privileges}
-          onOpenElevateModal={() => setIsAutomationModalOpen(true)}
           onInspectContainer={(c) => setInspectContainer(c)}
           versionLabel={softwareUpdate?.current.label}
           updateAvailable={softwareUpdate?.status === 'available'}
@@ -933,6 +931,8 @@ export default function App() {
         config={config}
         onSaveConfig={handleSaveConfig}
         detectedStacksDir={config?.stacksDir ? undefined : defaultStacksDir}
+        privileges={privileges}
+        onOpenAutomationModal={() => setIsAutomationModalOpen(true)}
       />
 
       {/* Simulate Container Modal */}
