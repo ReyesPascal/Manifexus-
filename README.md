@@ -43,6 +43,13 @@ Manifexus is a lightweight, self-hosted central command hub that automatically t
 * **Recover without restoring everything:** put a deleted stack's files back without starting it, copy a backup into another folder, browse a backup and download single files, or download the whole backup as a `.tar.gz`.
 * **Backups are kept for 30 days** by default (7 days to forever in Restore → Backups). Pin a backup to keep it forever. Expired backups move their change to the Archive. Delete several changes at once with **Select**, or clean up restored changes and deleted empty stacks in one tap from Restore → Backups.
 
+### 6. Diagnostics and app details
+* **Health in plain words:** Diagnostics (in the header) checks Docker, automation, stack folders, backup space, recent problems and updates, with anything that needs you listed first. Every app has the same view from its card's **Details** button.
+* **See why an app stopped:** a crashed app shows what its exit code means and the last thing it wrote to its logs.
+* **Right now:** memory, CPU, processes and network for the app or Manifexus itself.
+* **Logs:** search, choose how much to show, copy or download. Errors are red and warnings orange.
+* **Copy for Claude** copies a full troubleshooting report; **Download** saves it as a Markdown file.
+
 ---
 
 ## 🚀 Quick Start (Single-Line Installation)
@@ -143,7 +150,7 @@ When pushed, the included GitHub Actions workflow (`.github/workflows/docker-pub
 │   │   ├── Navbar.tsx                   # Brand, view switch, search & command bar
 │   │   ├── StatsBar.tsx                 # Real-time fleet metrics
 │   │   ├── AppCard.tsx                  # Large application tile with port links
-│   │   ├── InspectModal.tsx             # Deep container inspection & metadata
+│   │   ├── AppDetailsSheet.tsx          # App details and Diagnostics
 │   │   ├── GroupManagerModal.tsx        # Custom category manager
 │   │   ├── SettingsModal.tsx            # Host IP & telemetry polling config
 │   │   └── SimulateContainerModal.tsx   # Instant container spawner for testing

@@ -28,7 +28,7 @@ import { PortsSheet } from './components/PortsSheet';
 import { SoftwareUpdateSheet, SoftwareUpdateState } from './components/SoftwareUpdateSheet';
 import { ActivitySheet } from './components/ActivitySheet';
 import { AppCard } from './components/AppCard';
-import { InspectModal } from './components/InspectModal';
+import { AppDetailsSheet } from './components/AppDetailsSheet';
 import { GroupManagerModal } from './components/GroupManagerModal';
 import { SettingsModal } from './components/SettingsModal';
 import { SimulateContainerModal } from './components/SimulateContainerModal';
@@ -900,13 +900,18 @@ export default function App() {
         </div>
       </footer>
 
-      {/* Deep Inspection Modal */}
-      <InspectModal
+      {/* App details, and Diagnostics for Manifexus itself */}
+      <AppDetailsSheet
         container={inspectContainer}
+        system={Boolean(inspectContainer && manifexusHeroContainer && inspectContainer.id === manifexusHeroContainer.id)}
         groups={config?.groups || []}
         hostAddress={hostAddress}
         onClose={() => setInspectContainer(null)}
         onSaveOverride={handleSaveOverride}
+        onAction={handleContainerAction}
+        onOpenUpdates={() => { setIsUpdatesOpen(true); refreshSoftwareUpdate(); }}
+        onOpenRestore={() => setIsRestoreOpen(true)}
+        onOpenSettings={() => setIsSettingsOpen(true)}
       />
 
       {/* Custom Group Manager Modal */}

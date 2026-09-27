@@ -174,7 +174,8 @@ export const AppCard: React.FC<AppCardProps> = ({
               onInspect(container);
             }}
             className="p-1.5 rounded-lg bg-slate-900/90 text-slate-400 hover:text-cyan-300 hover:bg-slate-800 border border-slate-800 hover:border-cyan-500/40 transition-all"
-            title="Inspect Deep Container Metadata"
+            title="Details"
+            aria-label={`Details for ${container.cleanName}`}
           >
             <Info className="w-3.5 h-3.5" />
           </button>
@@ -328,7 +329,7 @@ export const AppCard: React.FC<AppCardProps> = ({
                 onClick={() => onInspect(container)}
                 className="flex-1 inline-flex items-center justify-center gap-2 px-3 py-2 rounded-xl text-xs font-mono bg-slate-900 text-slate-400 border border-slate-800 hover:border-slate-700 transition-colors"
               >
-                <span>Inspect Container</span>
+                <span>Details</span>
               </button>
             )}
 

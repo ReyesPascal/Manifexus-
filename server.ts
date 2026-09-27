@@ -89,6 +89,7 @@ import {
   restoreToFolder,
   freshStartOnce,
 } from './server/restoreService';
+import { systemDiagnostics, systemReport, appDiagnostics, appLogs } from './server/diagnosticsService';
 import {
   getSoftwareUpdateState,
   checkForUpdate,
@@ -839,6 +840,36 @@ async function startServer() {
       return null;
     });
     if (targets) res.json({ targets, log: lines });
+  });
+
+  // Diagnostics: health checks for Manifexus and for each app, resources and logs
+  app.get('/api/diagnostics', async (req, res) => {
+    res.json(await systemDiagnostics());
+  });
+
+  app.get('/api/diagnostics/report', async (req, res) => {
+    res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
+    if (req.query.download) res.setHeader('Content-Disposition', `attachment; filename="manifexus-diagnostics-${new Date().toISOString().slice(0, 10)}.md"`);
+    res.send(await systemReport());
+  });
+
+  app.get('/api/containers/:id/diagnostics', async (req, res) => {
+    try {
+      res.json(await appDiagnostics(req.params.id));
+    } catch (err) {
+      res.status(404).json({ error: `Couldn’t inspect this app: ${(err as Error).message}` });
+    }
+  });
+
+  app.get('/api/containers/:id/logs', async (req, res) => {
+    const tail = req.query.tail === 'all' ? 'all' : Math.min(Math.max(Number(req.query.tail) || 300, 10), 20000);
+    const out = await appLogs(req.params.id, tail);
+    if (req.query.download) {
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="${String(req.query.name || req.params.id).replace(/[^a-zA-Z0-9_.-]/g, '_')}-logs.txt"`);
+      return res.send(out.text);
+    }
+    res.json(out);
   });
 
   // Get host automation privileges (detects if sandboxed or elevated)
