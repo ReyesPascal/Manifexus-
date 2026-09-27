@@ -12,7 +12,6 @@ import {
   AlertTriangle,
   FileCode,
   Check,
-  Zap,
   Eye,
   Download,
   Copy,
@@ -20,12 +19,10 @@ import {
   Layers,
   Search,
   X,
-  FileText,
   Activity,
-  ArrowRight,
-  Filter,
 } from 'lucide-react';
-import { DiagnosticBundle, DiagnosticMicroStep } from '../types';
+import { DiagnosticBundle } from '../types';
+import { copyText } from './ActivitySheet';
 
 export interface PipelineStep {
   index: number;
@@ -63,7 +60,7 @@ export const ExecutionPipelineConsole: React.FC<ExecutionPipelineConsoleProps> =
 }) => {
   const [steps, setSteps] = useState<PipelineStep[]>([]);
   const [globalLogs, setGlobalLogs] = useState<string[]>([]);
-  const [activeStepIndex, setActiveStepIndex] = useState<number>(1);
+  const [, setActiveStepIndex] = useState<number>(1);
   const [expandedSteps, setExpandedSteps] = useState<Record<number, boolean>>({});
   const [isCompleted, setIsCompleted] = useState(false);
   const [isFailed, setIsFailed] = useState(false);
@@ -80,6 +77,10 @@ export const ExecutionPipelineConsole: React.FC<ExecutionPipelineConsoleProps> =
   const [logFilterQuery, setLogFilterQuery] = useState('');
   const [logFilterType, setLogFilterType] = useState<'all' | 'micro' | 'docker' | 'error'>('all');
   const [isDownloading, setIsDownloading] = useState(false);
+
+  // The server records everything this run does as an Activity; its ID comes back in a header
+  const [activityId, setActivityId] = useState<string | null>(null);
+  const [reportCopy, setReportCopy] = useState<'idle' | 'copying' | 'copied' | 'failed'>('idle');
 
   const logsEndRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -133,6 +134,8 @@ export const ExecutionPipelineConsole: React.FC<ExecutionPipelineConsoleProps> =
     setIsActionPending(false);
     setDiagnosticBundle(null);
     setIsLogModalOpen(false);
+    setActivityId(null);
+    setReportCopy('idle');
 
     // Expand step 1 by default
     setExpandedSteps({ 1: true });
@@ -150,8 +153,18 @@ export const ExecutionPipelineConsole: React.FC<ExecutionPipelineConsoleProps> =
           signal: controller.signal,
         });
 
+        const recordedAs = res.headers.get('X-Activity-Id');
+        if (recordedAs) setActivityId(recordedAs);
+
         if (!res.ok) {
-          throw new Error(`Server returned HTTP ${res.status}`);
+          let reason = `Server returned HTTP ${res.status}`;
+          try {
+            const body = await res.json();
+            if (body?.error) reason = body.error;
+          } catch {
+            // not JSON
+          }
+          throw new Error(reason);
         }
 
         const reader = res.body?.getReader();
@@ -259,12 +272,15 @@ export const ExecutionPipelineConsole: React.FC<ExecutionPipelineConsoleProps> =
     } else if (event.type === 'auto_reverted') {
       setIsFailed(true);
       setIsAutoReverted(true);
+      // A step still spinning when the run stops is the one that failed
+      setSteps((prev) => prev.map((s) => (s.status === 'running' ? { ...s, status: 'failed' } : s)));
       window.dispatchEvent(new CustomEvent('manifexus:refresh_fleet'));
       if (event.log) {
         setGlobalLogs((prev) => [...prev, `[Auto-Reverted] ${event.log}`]);
       }
     } else if (event.type === 'failed' || event.type === 'error') {
       setIsFailed(true);
+      setSteps((prev) => prev.map((s) => (s.status === 'running' ? { ...s, status: 'failed' } : s)));
       window.dispatchEvent(new CustomEvent('manifexus:refresh_fleet'));
       const errMsg = event.log || (event as any).error;
       if (errMsg) {
@@ -344,14 +360,40 @@ export const ExecutionPipelineConsole: React.FC<ExecutionPipelineConsoleProps> =
     return synthesized;
   };
 
-  // Part 3, Item 3: View Log Handler
+  // View details: the full server-side record in Activity (falls back to the local summary)
   const handleOpenLogModal = async () => {
+    if (activityId) {
+      window.dispatchEvent(new CustomEvent('manifexus:open-activity', { detail: { id: activityId } }));
+      return;
+    }
     await fetchOrCompileDiagnosticBundle();
     setIsLogModalOpen(true);
   };
 
-  // Part 3, Item 4: Export Log Handler
+  // Copies the troubleshooting report (Markdown) for pasting into a chat with Claude
+  const handleCopyReport = async () => {
+    if (!activityId) return;
+    setReportCopy('copying');
+    try {
+      const r = await fetch(`/api/logs/activities/${encodeURIComponent(activityId)}/export?format=markdown`);
+      if (!r.ok) throw new Error();
+      setReportCopy((await copyText(await r.text())) ? 'copied' : 'failed');
+    } catch {
+      setReportCopy('failed');
+    }
+    setTimeout(() => setReportCopy('idle'), 2500);
+  };
+
+  // Export: everything recorded for this run (steps, commands, Docker output, files, environment)
   const handleExportLog = async () => {
+    if (activityId) {
+      const a = document.createElement('a');
+      a.href = `/api/logs/activities/${encodeURIComponent(activityId)}/export?format=json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      return;
+    }
     setIsDownloading(true);
     try {
       const bundle = await fetchOrCompileDiagnosticBundle();
@@ -470,18 +512,18 @@ export const ExecutionPipelineConsole: React.FC<ExecutionPipelineConsoleProps> =
               {/* Button 1: View Log */}
               <button
                 onClick={handleOpenLogModal}
-                title="Open formatted JSON DiagnosticBundle inspection overlay"
+                title={activityId ? 'Open the full record of this run in Activity' : 'Open the diagnostic summary'}
                 className="px-3 py-1.5 rounded-lg text-xs font-mono font-medium border border-cyan-500/40 bg-cyan-950/40 hover:bg-cyan-900/60 text-cyan-300 transition-all flex items-center gap-1.5 shadow-sm hover:shadow-[0_0_12px_rgba(6,182,212,0.25)] active:scale-95 cursor-pointer"
               >
                 <Eye className="w-3.5 h-3.5" />
-                <span>View Log</span>
+                <span>Details</span>
               </button>
 
               {/* Button 2: Export Log */}
               <button
                 onClick={handleExportLog}
                 disabled={isDownloading}
-                title="Download complete diagnostic bundle as JSON file"
+                title={activityId ? 'Download everything recorded for this run (JSON)' : 'Download the diagnostic summary (JSON)'}
                 className="px-3 py-1.5 rounded-lg text-xs font-mono font-medium border border-slate-700 bg-slate-800/80 hover:bg-slate-700 text-slate-200 transition-all flex items-center gap-1.5 shadow-sm hover:shadow-md active:scale-95 cursor-pointer disabled:opacity-50"
               >
                 {isDownloading ? (
@@ -489,7 +531,7 @@ export const ExecutionPipelineConsole: React.FC<ExecutionPipelineConsoleProps> =
                 ) : (
                   <Download className="w-3.5 h-3.5" />
                 )}
-                <span>Export Log</span>
+                <span>Export</span>
               </button>
 
               {/* Status Badge */}
@@ -529,7 +571,7 @@ export const ExecutionPipelineConsole: React.FC<ExecutionPipelineConsoleProps> =
 
           {/* Pipeline Content Body */}
           <div className="flex-1 overflow-y-auto p-6 space-y-4 font-mono text-xs">
-            
+
             {/* Step Sequence List */}
             <div className="space-y-2">
               {steps.map((step) => {
@@ -765,6 +807,34 @@ export const ExecutionPipelineConsole: React.FC<ExecutionPipelineConsoleProps> =
             </div>
           </div>
 
+          {/* Failure: always visible under the steps — one tap to the full record, or copy the report to send */}
+          {isFailed && activityId && (
+            <div className="px-6 py-4 border-t border-rose-500/30 bg-rose-950/20 flex flex-col sm:flex-row sm:items-center justify-between gap-3 flex-shrink-0">
+              <div className="min-w-0">
+                <p className="text-[14px] font-semibold text-rose-200">
+                  {isAutoReverted ? 'This didn’t work, so everything was put back.' : 'This didn’t finish.'}
+                </p>
+                <p className="text-[12.5px] text-slate-400 mt-0.5">
+                  Every command, Docker’s exact output and each file written is saved in Activity.
+                </p>
+              </div>
+              <div className="flex gap-2 flex-shrink-0">
+                <button
+                  onClick={handleCopyReport}
+                  className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-slate-800 hover:bg-slate-700 border border-slate-600 text-white transition-colors"
+                >
+                  {reportCopy === 'copying' ? 'Preparing…' : reportCopy === 'copied' ? 'Copied' : reportCopy === 'failed' ? 'Couldn’t Copy' : 'Copy for Claude'}
+                </button>
+                <button
+                  onClick={handleOpenLogModal}
+                  className="px-3 py-1.5 rounded-lg text-[13px] font-semibold bg-[#FF453A] hover:bg-[#ff5a50] text-white transition-colors"
+                >
+                  See What Happened
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Directive 4: Post-Merge Decision Prompt Overlay */}
           {showDecisionPrompt && mode === 'merge' && (
             <div className="p-5 border-t border-cyan-500/40 bg-gradient-to-b from-[#090f1d] to-[#060a14] flex flex-col sm:flex-row items-center justify-between gap-4 animate-in slide-in-from-bottom-3 duration-300">
@@ -937,7 +1007,7 @@ export const ExecutionPipelineConsole: React.FC<ExecutionPipelineConsoleProps> =
                   <div className="flex items-center justify-between text-xs text-slate-400">
                     <span>Complete serialized DiagnosticBundle JSON representation:</span>
                     <span className="text-cyan-400">
-                      Bytes: {Buffer.byteLength(JSON.stringify(diagnosticBundle || {}), 'utf-8')} B
+                      Bytes: {new TextEncoder().encode(JSON.stringify(diagnosticBundle || {})).length} B
                     </span>
                   </div>
                   <pre className="p-4 rounded-xl bg-[#020306] border border-slate-800 text-xs font-mono text-emerald-400 overflow-x-auto whitespace-pre leading-relaxed select-text shadow-inner">

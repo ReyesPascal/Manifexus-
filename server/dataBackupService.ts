@@ -22,7 +22,8 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { queryDockerEngine, getBestAvailableImage } from './dockerService';
+import { queryDockerEngine, getBestAvailableImage, fetchContainerLogs } from './dockerService';
+import { record } from './activityLog';
 import { resolveBackupDir } from './historyService';
 
 export interface DataArchiveEntry {
@@ -98,13 +99,29 @@ async function runHelper(
   script: string,
   binds: string[],
   timeoutMs: number = DEFAULT_HELPER_TIMEOUT_MS,
-  env: string[] = []
+  env: string[] = [],
+  meta: { purpose: string; probe?: boolean } = { purpose: 'Helper container' }
 ): Promise<number> {
+  return (await runHelperDetailed(script, binds, timeoutMs, env, meta)).code;
+}
+
+/** Like runHelper, but also returns everything the helper printed (stdout + stderr). */
+async function runHelperDetailed(
+  script: string,
+  binds: string[],
+  timeoutMs: number = DEFAULT_HELPER_TIMEOUT_MS,
+  env: string[] = [],
+  /** What this helper does, in plain words; `probe` helpers are low-detail and non-zero exits are expected */
+  meta: { purpose: string; probe?: boolean } = { purpose: 'Helper container' }
+): Promise<{ code: number; output: string }> {
+  const startedAt = Date.now();
+  let captured = '';
   const image = await getBestAvailableImage();
   const backupDir = resolveBackupDir();
   const selfId = await getSelfContainerId();
 
-  const hostConfig: Record<string, unknown> = { Binds: [...binds] };
+  // json-file logging so the output can always be read back, whatever the daemon's default log driver is
+  const hostConfig: Record<string, unknown> = { Binds: [...binds], LogConfig: { Type: 'json-file', Config: {} } };
   if (selfId) {
     hostConfig.VolumesFrom = [selfId];
   } else {
@@ -127,6 +144,9 @@ async function runHelper(
   }
 
   const id = created.Id as string;
+  let outputError: string | undefined;
+  let exitCode: number | undefined;
+  let timedOut = false;
   try {
     await queryDockerEngine(`/containers/${id}/start`, 'POST');
     const deadline = Date.now() + timeoutMs;
@@ -136,14 +156,44 @@ async function runHelper(
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const state = await queryDockerEngine<any>(`/containers/${id}/json`, 'GET');
         if (state?.State && !state.State.Running) {
-          return typeof state.State.ExitCode === 'number' ? state.State.ExitCode : 1;
+          const code: number = typeof state.State.ExitCode === 'number' ? state.State.ExitCode : 1;
+          exitCode = code;
+          const out = await fetchContainerLogs(id, 'all').catch(() => ({ stdout: '', stderr: '', combined: '', error: 'Couldn’t read the output' }));
+          captured = out.combined;
+          outputError = out.error;
+          return { code, output: captured };
         }
       } catch {
         // transient API hiccup: keep polling until the deadline
       }
     }
-    throw new Error('Backup helper timed out');
+    timedOut = true;
+    throw new Error(`${meta.purpose} timed out`);
   } finally {
+    // Keep a full record: what ran, where, and everything it printed
+    const output: { combined: string; stderr?: string; error?: string } =
+      captured || outputError
+        ? { combined: captured, error: outputError }
+        : await fetchContainerLogs(id, 'all').catch(() => ({ stdout: '', stderr: '', combined: '', error: 'Couldn’t read the output' }));
+    const failed = timedOut || (exitCode !== undefined && exitCode !== 0);
+    record(
+      failed && !meta.probe ? 'warn' : meta.probe ? 'debug' : 'info',
+      /compose/.test(meta.purpose) ? 'compose' : /back up|restore/i.test(meta.purpose) ? 'backup' : 'helper',
+      `${meta.purpose} → ${timedOut ? 'timed out' : `exit ${exitCode}`}`,
+      {
+        purpose: meta.purpose,
+        exitCode,
+        timedOut,
+        image,
+        script,
+        binds: hostConfig.Binds,
+        env: env.map((e) => (e.length > 400 ? `${e.slice(0, 400)}… [${e.length - 400} more characters]` : e)),
+        output: output.combined,
+        stderr: output.stderr || undefined,
+        outputError: output.error,
+      },
+      { durationMs: Date.now() - startedAt }
+    );
     try {
       await queryDockerEngine(`/containers/${id}?force=true`, 'DELETE');
     } catch {
@@ -186,7 +236,7 @@ export async function removeHostDirectory(hostDir: string): Promise<boolean> {
   const name = path.posix.basename(normalized);
   const code = await runHelper(`rm -rf /parent/${shellQuote(name)} && [ ! -e /parent/${shellQuote(name)} ]`, [
     `${parent}:/parent`,
-  ]);
+  ], DEFAULT_HELPER_TIMEOUT_MS, [], { purpose: `Delete folder ${normalized}` });
   return code === 0;
 }
 
@@ -220,7 +270,15 @@ export async function provisionStackFolder(
   ]
     .filter(Boolean)
     .join('\n');
-  const code = await runHelper(script, [`${parent}:/parent`], 2 * 60 * 1000, [`COMPOSE_DATA=${composeText}`]);
+  const code = await runHelper(script, [`${parent}:/parent`], 2 * 60 * 1000, [`COMPOSE_DATA=${composeText}`], {
+    purpose: `Write ${normalized}/docker-compose.yml`,
+  });
+  record(code === 0 ? 'info' : 'warn', 'file', code === 0 ? `Wrote ${normalized}/docker-compose.yml (${composeText.length} bytes)` : `Could not write ${normalized}/docker-compose.yml (exit ${code})`, {
+    path: `${normalized}/docker-compose.yml`,
+    exitCode: code,
+    overwrite: Boolean(opts.overwrite),
+    content: composeText,
+  });
   if (code === 17) {
     throw new StackFolderExistsError(`${normalized} already has a compose file. Pick another name or folder.`);
   }
@@ -236,7 +294,9 @@ async function measure(bindSource: string): Promise<number> {
     const code = await runHelper(
       `if [ -d /src ]; then du -sb /src | cut -f1 > ${shellQuote(out)}; else echo 0 > ${shellQuote(out)}; fi`,
       [`${bindSource}:/src:ro`],
-      30 * 60 * 1000
+      30 * 60 * 1000,
+      [],
+      { purpose: `Measure size of ${bindSource}`, probe: true }
     );
     if (code !== 0 || !fs.existsSync(out)) return 0;
     return parseInt(fs.readFileSync(out, 'utf8').trim(), 10) || 0;
@@ -254,7 +314,10 @@ export async function hostDirectoryExists(hostDir: string): Promise<boolean> {
   const parent = path.posix.dirname(hostDir);
   const name = path.posix.basename(hostDir);
   try {
-    const code = await runHelper(`[ -d /parent/${shellQuote(name)} ]`, [`${parent}:/parent:ro`], 60 * 1000);
+    const code = await runHelper(`[ -d /parent/${shellQuote(name)} ]`, [`${parent}:/parent:ro`], 60 * 1000, [], {
+      purpose: `Check folder ${hostDir} exists`,
+      probe: true,
+    });
     return code === 0;
   } catch {
     return false;
@@ -350,7 +413,9 @@ export async function archiveStackData(params: {
   if (workingDir && (await hostDirectoryExists(workingDir))) {
     const file = path.join(dataDir, `${safeProject}__dir.tar.gz`);
     log(`Archiving stack folder ${workingDir}...`);
-    const code = await runHelper(tarScript(file), [`${workingDir}:/src:ro`]);
+    const code = await runHelper(tarScript(file), [`${workingDir}:/src:ro`], DEFAULT_HELPER_TIMEOUT_MS, [], {
+      purpose: `Back up folder ${workingDir}`,
+    });
     if (code !== 0 || !fs.existsSync(file)) {
       throw new Error(`Backing up folder ${workingDir} failed (exit ${code}).`);
     }
@@ -362,7 +427,9 @@ export async function archiveStackData(params: {
   for (const v of await getProjectVolumes(project)) {
     const file = path.join(dataDir, `${safeProject}__vol__${v.name.replace(/[^a-zA-Z0-9_.-]/g, '_')}.tar.gz`);
     log(`Archiving volume ${v.name}...`);
-    const code = await runHelper(tarScript(file), [`${v.name}:/src:ro`]);
+    const code = await runHelper(tarScript(file), [`${v.name}:/src:ro`], DEFAULT_HELPER_TIMEOUT_MS, [], {
+      purpose: `Back up volume ${v.name}`,
+    });
     if (code !== 0 || !fs.existsSync(file)) {
       throw new Error(`Backing up volume ${v.name} failed (exit ${code}).`);
     }
@@ -406,7 +473,7 @@ export async function restoreStackData(
       log(`Restoring folder ${e.source} from backup...`);
       const code = await runHelper(`mkdir -p /dst && tar -C /dst -xzpf ${shellQuote(e.archiveFile)}`, [
         `${e.source}:/dst`,
-      ]);
+      ], DEFAULT_HELPER_TIMEOUT_MS, [], { purpose: `Restore folder ${e.source}` });
       if (code !== 0) throw new Error(`Restoring folder ${e.source} failed (exit ${code}).`);
       log(`Folder ${e.source} restored.`);
     } else {
@@ -430,7 +497,9 @@ export async function restoreStackData(
         });
       }
       log(`Restoring volume ${e.source} from backup...`);
-      const code = await runHelper(`tar -C /dst -xzpf ${shellQuote(e.archiveFile)}`, [`${e.source}:/dst`]);
+      const code = await runHelper(`tar -C /dst -xzpf ${shellQuote(e.archiveFile)}`, [`${e.source}:/dst`], DEFAULT_HELPER_TIMEOUT_MS, [], {
+        purpose: `Restore volume ${e.source}`,
+      });
       if (code !== 0) throw new Error(`Restoring volume ${e.source} failed (exit ${code}).`);
       log(`Volume ${e.source} restored.`);
     }
@@ -448,7 +517,7 @@ export async function runComposeInDir(hostDir: string, args: string, timeoutMs =
     `if docker compose version >/dev/null 2>&1; then docker compose ${args}; ` +
     `elif command -v docker-compose >/dev/null 2>&1; then docker-compose ${args}; else exit 127; fi`;
   try {
-    const code = await runHelper(script, [`${hostDir}:${hostDir}`], timeoutMs);
+    const code = await runHelper(script, [`${hostDir}:${hostDir}`], timeoutMs, [], { purpose: `docker compose ${args} in ${hostDir}` });
     return code === 0;
   } catch {
     return false;
@@ -464,29 +533,19 @@ export async function runComposeCapture(
   args: string,
   opts: { extraDirs?: string[]; timeoutMs?: number } = {}
 ): Promise<{ ok: boolean; output: string }> {
-  const out = tmpFile('compose');
   const script =
     `cd ${shellQuote(hostDir)} || exit 3; ` +
     `if docker compose version >/dev/null 2>&1; then docker compose ${args}; ` +
-    `elif command -v docker-compose >/dev/null 2>&1; then docker-compose ${args}; else echo "Docker Compose is not available"; exit 127; fi > ${shellQuote(out)} 2>&1`;
+    `elif command -v docker-compose >/dev/null 2>&1; then docker-compose ${args}; else echo "Docker Compose is not available"; exit 127; fi`;
   const binds = Array.from(new Set([hostDir, ...(opts.extraDirs || [])])).map((d) => `${d}:${d}`);
   try {
-    const code = await runHelper(script, binds, opts.timeoutMs ?? 10 * 60 * 1000);
-    let output = '';
-    try {
-      output = fs.readFileSync(out, 'utf8');
-    } catch {
-      // no output
-    }
-    return { ok: code === 0, output };
+    const r = await runHelperDetailed(script, binds, opts.timeoutMs ?? 10 * 60 * 1000, [], {
+      purpose: `docker compose ${args} in ${hostDir}`,
+      probe: /\bconfig\b/.test(args),
+    });
+    return { ok: r.code === 0, output: r.output };
   } catch (err) {
     return { ok: false, output: (err as Error).message };
-  } finally {
-    try {
-      fs.unlinkSync(out);
-    } catch {
-      // ignore
-    }
   }
 }
 

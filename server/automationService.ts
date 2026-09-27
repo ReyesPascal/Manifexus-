@@ -20,6 +20,7 @@ import {
   saveMergeHistoryRecord,
 } from './historyService';
 import { readHostFile, writeHostFile, checkHostFileExists, forceRemoveContainer, createHostDirectory } from './hostFsService';
+import { record, setActivityTitle } from './activityLog';
 import {
   archiveStackData,
   restoreStackData,
@@ -291,6 +292,31 @@ export async function executeStreamingPipeline(
     emit({ type: 'step_update', mergeId, stepIndex, stepId, stepName, status, durationMs, timestamp: new Date().toISOString() });
   };
 
+  const movingNames = movingContainers.map((c) => c.compose?.service || c.cleanName);
+  setActivityTitle(
+    `Move ${movingNames.length <= 3 ? movingNames.join(', ').replace(/, ([^,]*)$/, ' and $1') : `${movingNames.length} apps`} into ${req.targetStackName}`
+  );
+  record('info', 'step', 'Move requested', {
+    mergeId,
+    targetStackName: req.targetStackName,
+    targetDirectory: targetDir,
+    backupData,
+    apps: movingContainers.map((c) => ({
+      name: c.cleanName,
+      id: c.id.slice(0, 12),
+      image: c.image,
+      state: c.state,
+      project: c.compose?.project,
+      service: c.compose?.service,
+      workingDir: c.compose?.workingDir,
+      configFiles: c.compose?.configFiles,
+      ports: c.ports,
+      mounts: c.mounts,
+      networks: c.networks,
+    })),
+    composeToWrite: req.yamlContent,
+  });
+
   const STEPS = [
     { index: 1, id: 'preflight', name: 'Checking the plan' },
     { index: 2, id: 'stop_apps', name: 'Stopping the apps being moved' },
@@ -304,7 +330,12 @@ export async function executeStreamingPipeline(
     const st = STEPS[i - 1];
     const t = Date.now();
     updateStep(st.index, st.id, st.name, 'running');
-    await fn();
+    try {
+      await fn();
+    } catch (err) {
+      updateStep(st.index, st.id, st.name, 'failed', Date.now() - t);
+      throw err;
+    }
     updateStep(st.index, st.id, st.name, 'success', Date.now() - t);
   };
 
@@ -517,10 +548,18 @@ export async function executeStreamingPipeline(
       });
       log('Everything is back the way it was.');
       markMergeAsReverted(mergeId, [errorMsg, 'Auto-reverted']);
+      emit({ type: 'auto_reverted', mergeId, log: errorMsg, timestamp: new Date().toISOString() });
     } catch (rollbackErr) {
-      log(`Could not fully roll back: ${(rollbackErr as Error).message}`);
+      const why = (rollbackErr as Error).message;
+      log(`Could not fully roll back: ${why}`);
+      // Not "rolled back": some of it is still changed. The History entry stays, so it can be undone from there.
+      emit({
+        type: 'failed',
+        mergeId,
+        log: `${errorMsg}. Putting things back also failed (${why}); undo it from History.`,
+        timestamp: new Date().toISOString(),
+      });
     }
-    emit({ type: 'auto_reverted', mergeId, log: errorMsg, timestamp: new Date().toISOString() });
   }
 }
 
@@ -683,7 +722,12 @@ export async function executeStreamingRevert(
     const st = STEPS[i - 1];
     const t = Date.now();
     updateStep(st.index, st.id, st.name, 'running');
-    await fn();
+    try {
+      await fn();
+    } catch (err) {
+      updateStep(st.index, st.id, st.name, 'failed', Date.now() - t);
+      throw err;
+    }
     updateStep(st.index, st.id, st.name, 'success', Date.now() - t);
   };
 

@@ -25,6 +25,16 @@ import http from 'http';
 import path from 'path';
 import { queryDockerEngine } from './dockerService';
 import { getSelfContainerId } from './dataBackupService';
+import { fetchContainerLogs } from './dockerService';
+import {
+  currentActivityId,
+  finishActivity,
+  pipelineRecorder,
+  record,
+  runInActivity,
+  startActivity,
+  withActivity,
+} from './activityLog';
 import { globalLogService } from './globalLogService';
 
 const DOCKER_SOCKET_PATH = process.env.DOCKER_SOCKET_PATH || '/var/run/docker.sock';
@@ -408,7 +418,15 @@ export async function checkForUpdate(): Promise<SoftwareUpdateState> {
     checking = false;
     savePersisted(persisted);
   }
-  return getSoftwareUpdateState();
+  const st = await getSoftwareUpdateState();
+  record(st.checkError ? 'warn' : 'info', 'update', st.checkError ? `Update check failed: ${st.checkError}` : st.status === 'available' ? `Update available: ${st.latest?.label}` : `Up to date (${st.current.label})`, {
+    status: st.status,
+    current: st.current,
+    latest: st.latest,
+    error: st.checkError,
+  });
+  if (st.checkError && currentActivityId()) finishActivity(currentActivityId(), 'failed', { message: st.checkError });
+  return st;
 }
 
 export function updateSettings(s: Partial<UpdateSettings>): UpdateSettings {
@@ -595,7 +613,15 @@ export async function startRestartHelper(self: SelfInfo, pulled: any): Promise<s
   fs.mkdirSync(DATA_DIR, { recursive: true });
   fs.writeFileSync(
     JOB_FILE,
-    JSON.stringify({ job, from: fromLabel, to: toLabel, fromImageId: self.imageId, toImageId: pulled.Id, startedAt: new Date().toISOString() })
+    JSON.stringify({
+      job,
+      activityId: currentActivityId(),
+      from: fromLabel,
+      to: toLabel,
+      fromImageId: self.imageId,
+      toImageId: pulled.Id,
+      startedAt: new Date().toISOString(),
+    })
   );
   try {
     fs.unlinkSync(RESULT_FILE);
@@ -647,6 +673,16 @@ fi`;
   }
 
   // 3. Restart — the helper runs the *current* image, which has the Docker CLI and curl
+  record('info', 'update', `Handing over to the restart helper (${self.compose ? 'docker compose' : 'docker run clone'})`, {
+    job,
+    from: fromLabel,
+    to: toLabel,
+    fromImageId: self.imageId,
+    toImageId: pulled.Id,
+    binds,
+    env: env.map((e) => (e.startsWith('CREATE_B64=') ? 'CREATE_B64=[container definition]' : e)),
+    script,
+  });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const helper = await queryDockerEngine<any>('/containers/create', 'POST', {
     Image: self.imageId,
@@ -655,7 +691,8 @@ fi`;
     Env: env,
     User: '0:0',
     Labels: { 'dev.manifexus.update-job': job },
-    HostConfig: { Binds: binds },
+    // json-file so its output can be read back for the update's record, whatever the daemon default is
+    HostConfig: { Binds: binds, LogConfig: { Type: 'json-file', Config: {} } },
   });
   await queryDockerEngine(`/containers/${helper.Id}/start`, 'POST');
   return job;
@@ -665,10 +702,38 @@ fi`;
  * Downloads and installs the latest image, then hands off to a helper that restarts Manifexus.
  * Progress goes to `listener` (and to anyone polling the state).
  */
-export async function installUpdate(listener?: (p: UpdateProgress) => void): Promise<void> {
-  if (listener) installListeners.push(listener);
-  if (installing && installing.stage !== 'error' && installing.stage !== 'done') return;
+let installRun: Promise<void> | null = null;
 
+export async function installUpdate(listener?: (p: UpdateProgress) => void): Promise<{ joined: boolean }> {
+  if (listener) installListeners.push(listener);
+  // Already installing: follow that install's progress until it finishes instead of starting another
+  if (installRun) {
+    try {
+      await installRun;
+    } finally {
+      if (listener) installListeners = installListeners.filter((l) => l !== listener);
+    }
+    return { joined: true };
+  }
+  // Already handed off to the restart helper: Manifexus is about to restart with the new version
+  if (installing && installing.stage === 'restart') {
+    if (listener) {
+      listener(installing);
+      installListeners = installListeners.filter((l) => l !== listener);
+    }
+    return { joined: true };
+  }
+  installRun = runInstall();
+  try {
+    await installRun;
+  } finally {
+    installRun = null;
+    if (listener) installListeners = installListeners.filter((l) => l !== listener);
+  }
+  return { joined: false };
+}
+
+async function runInstall(): Promise<void> {
   try {
     const self = await getSelf();
     const reason = await supportCheck(self);
@@ -709,8 +774,6 @@ export async function installUpdate(listener?: (p: UpdateProgress) => void): Pro
   } catch (err) {
     emit({ stage: 'error', message: (err as Error).message });
     globalLogService.log({ level: 'ERROR', source: 'update', message: 'Update failed', error: err });
-  } finally {
-    if (listener) installListeners = installListeners.filter((l) => l !== listener);
   }
 }
 
@@ -719,56 +782,122 @@ export async function installUpdate(listener?: (p: UpdateProgress) => void): Pro
 // ----------------------------------------------------------------------------
 
 /** Called at startup: records the outcome of an update the previous instance started. */
-export function recordFinishedUpdate(): void {
+/** The activity of an update the previous instance started (it stays open across the restart). */
+export function pendingUpdateActivityId(): string | undefined {
   try {
-    if (!fs.existsSync(JOB_FILE)) return;
-    const job = JSON.parse(fs.readFileSync(JOB_FILE, 'utf8'));
-    let result: { job?: string; status?: string; message?: string; finishedAt?: string } | undefined;
-    try {
-      result = JSON.parse(fs.readFileSync(RESULT_FILE, 'utf8'));
-    } catch {
-      result = undefined;
-    }
-    if (result && result.job !== job.job) result = undefined;
-    // The helper writes its result after the new container is confirmed healthy, which can be a
-    // moment after this process starts. Without a result yet, assume success for now and re-read.
-    const outcome = (): UpdateOutcome => ({
-      status: result?.status === 'rolled_back' ? 'rolled_back' : result?.status === 'failed' ? 'failed' : 'success',
-      from: job.from,
-      to: job.to,
-      message: result?.message || `Updated to ${job.to}`,
-      finishedAt: result?.finishedAt || new Date().toISOString(),
-    });
-    persisted.lastOutcome = outcome();
-    savePersisted(persisted);
-    if (!result) {
-      setTimeout(() => {
-        try {
-          result = JSON.parse(fs.readFileSync(RESULT_FILE, 'utf8'));
-          if (result && result.job === job.job) {
-            persisted.lastOutcome = outcome();
-            savePersisted(persisted);
-          }
-        } catch {
-          // keep assumption
-        }
-      }, 60 * 1000);
-    }
-    fs.unlinkSync(JOB_FILE);
+    return JSON.parse(fs.readFileSync(JOB_FILE, 'utf8')).activityId || undefined;
   } catch {
-    // ignore
+    return undefined;
   }
 }
 
-export function startUpdateScheduler(): void {
-  recordFinishedUpdate();
+/**
+ * Called at startup: records the outcome of an update the previous instance started, attaches the
+ * restart helper's full output to that update's activity, and closes it.
+ */
+export async function recordFinishedUpdate(): Promise<void> {
+  let job: { job: string; activityId?: string; from?: string; to?: string; toImageId?: string } | undefined;
+  try {
+    if (!fs.existsSync(JOB_FILE)) return;
+    job = JSON.parse(fs.readFileSync(JOB_FILE, 'utf8'));
+    fs.unlinkSync(JOB_FILE);
+  } catch {
+    return;
+  }
+  if (!job) return;
+  const readResult = () => {
+    try {
+      const r = JSON.parse(fs.readFileSync(RESULT_FILE, 'utf8'));
+      return r && r.job === job!.job ? (r as { job?: string; status?: string; message?: string; finishedAt?: string }) : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  const helperOutput = async () => {
+    try {
+      const filters = encodeURIComponent(JSON.stringify({ label: [`dev.manifexus.update-job=${job!.job}`] }));
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const list = await queryDockerEngine<any[]>(`/containers/json?all=1&filters=${filters}`);
+      const h = (list || [])[0];
+      if (!h) return undefined;
+      const out = await fetchContainerLogs(h.Id);
+      return { container: String(h.Id).slice(0, 12), state: h.State, output: out.combined };
+    } catch {
+      return undefined;
+    }
+  };
+  const settle = async (final: boolean) => {
+    const result = readResult();
+    if (!result && !final) return false;
+    // No result from the helper: judge by what's actually running
+    let running: string | undefined;
+    if (!result) {
+      try {
+        running = (await getSelf())?.imageId;
+      } catch {
+        running = undefined;
+      }
+    }
+    const noResultOk = !result && (!job!.toImageId || !running || running === job!.toImageId);
+    const status = result
+      ? result.status === 'rolled_back'
+        ? 'rolled_back'
+        : result.status === 'failed'
+          ? 'failed'
+          : 'success'
+      : noResultOk
+        ? 'success'
+        : 'failed';
+    persisted.lastOutcome = {
+      status,
+      from: job!.from,
+      to: job!.to,
+      message: result?.message || (status === 'success' ? `Updated to ${job!.to}` : 'The update didn’t take effect: Manifexus is still running the previous version.'),
+      finishedAt: result?.finishedAt || new Date().toISOString(),
+    };
+    savePersisted(persisted);
+    const helper = await helperOutput();
+    record(status === 'success' ? 'info' : 'error', 'update', `Restart helper finished: ${persisted.lastOutcome.message}`, {
+      result: result || { note: 'The restart helper left no result file', runningImage: running, expectedImage: job!.toImageId },
+      helper,
+    }, { activityId: job!.activityId || null });
+    if (job!.activityId) {
+      finishActivity(
+        job!.activityId,
+        status === 'success' ? 'succeeded' : status === 'rolled_back' ? 'rolled_back' : 'failed',
+        status === 'success' ? undefined : { message: persisted.lastOutcome.message, detail: helper?.output }
+      );
+    }
+    return true;
+  };
+  // The helper writes its result after the new container is confirmed healthy, which can be a
+  // moment after this process starts. Re-check for a while before assuming success.
+  if (!(await settle(false))) {
+    // One check at a time (a slow check must not overlap the next one)
+    void (async () => {
+      for (let tries = 1; tries <= 12; tries++) {
+        await new Promise((r) => setTimeout(r, 10 * 1000));
+        if (await settle(tries >= 12)) return;
+      }
+    })();
+  }
+}
+
+export async function startUpdateScheduler(): Promise<void> {
+  await recordFinishedUpdate();
   const tick = async () => {
     const s = persisted.settings;
     const due = !persisted.lastCheckedAt || Date.now() - new Date(persisted.lastCheckedAt).getTime() >= CHECK_INTERVAL_MS;
-    if ((s.autoCheck || s.autoInstall) && due) await checkForUpdate().catch(() => {});
+    if ((s.autoCheck || s.autoInstall) && due) {
+      await withActivity({ type: 'update', title: 'Automatic update check', actor: { kind: 'system' }, meta: { background: true } }, () => checkForUpdate()).catch(() => {});
+    }
     if (s.autoInstall && new Date().getHours() === AUTO_INSTALL_HOUR) {
       const st = await getSoftwareUpdateState();
-      if (st.supported && st.status === 'available' && !installing) void installUpdate();
+      if (st.supported && st.status === 'available' && !installing) {
+        const a = startActivity({ type: 'update', title: 'Automatic update install', actor: { kind: 'system' } });
+        const rec = pipelineRecorder(a.id);
+        void runInActivity(a.id, () => installUpdate(rec.onEvent)).finally(() => rec.finish());
+      }
     }
   };
   setTimeout(() => void tick(), 45 * 1000);

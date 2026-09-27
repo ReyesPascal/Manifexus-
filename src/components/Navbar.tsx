@@ -1,5 +1,5 @@
 import React from 'react';
-import { Layers, FolderKanban, Settings, RefreshCw, PlusCircle, RotateCcw, FolderPlus } from 'lucide-react';
+import { Layers, FolderKanban, Settings, RefreshCw, PlusCircle, RotateCcw, FolderPlus, Activity } from 'lucide-react';
 import { SystemStatus } from '../types';
 import { UpdateGlyph } from './SoftwareUpdateSheet';
 
@@ -16,6 +16,10 @@ interface NavbarProps {
   onOpenUpdates: () => void;
   updateAvailable: boolean;
   updating: boolean;
+  /** Opens Activity (everything Manifexus did, with full details) */
+  onOpenActivity: () => void;
+  /** Something failed since Activity was last opened */
+  activityAlert: boolean;
   onRefresh: () => void;
   isRefreshing: boolean;
 }
@@ -32,6 +36,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenUpdates,
   updateAvailable,
   updating,
+  onOpenActivity,
+  activityAlert,
   onRefresh,
   isRefreshing,
 }) => {
@@ -91,6 +97,23 @@ export const Navbar: React.FC<NavbarProps> = ({
               <span className="hidden lg:inline">History</span>
             </button>
           )}
+
+          <button
+            onClick={onOpenActivity}
+            className={`px-2.5 py-1.5 rounded-lg bg-slate-900 border text-xs font-mono transition-colors flex items-center gap-1.5 focus-visible:outline-2 focus-visible:outline-cyan-400 ${
+              activityAlert
+                ? 'border-[#FF453A]/50 text-[#FF8A80] hover:bg-[#FF453A]/10'
+                : 'border-slate-700/80 text-slate-300 hover:border-slate-600 hover:bg-slate-800'
+            }`}
+            title={activityAlert ? 'Something failed. Open Activity to see exactly what happened.' : 'Activity: everything Manifexus did, with full details'}
+            aria-label={activityAlert ? 'Activity, something failed' : 'Activity'}
+          >
+            <span className="relative flex">
+              <Activity className="w-3.5 h-3.5" />
+              {activityAlert && <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-[#FF453A] ring-2 ring-[#07090e]" />}
+            </span>
+            <span className="hidden lg:inline">Activity</span>
+          </button>
 
           {systemStatus?.isDemoMode && (
             <button

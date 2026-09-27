@@ -49,6 +49,35 @@ import {
   getHistoryRecordById,
 } from './server/historyService';
 import { globalLogService } from './server/globalLogService';
+import {
+  record,
+  currentActivityId,
+  setActivityTitle,
+  pipelineRecorder,
+  listActivities,
+  getActivity,
+  activityEvents,
+  queryEvents,
+  subscribe,
+  getLogSettings,
+  updateLogSettings,
+  logStats,
+  clearAllLogs,
+  enforceRetention,
+  closeStaleActivities,
+  type Level,
+  type Category,
+  type ActivityStatus,
+} from './server/activityLog';
+import {
+  requestTracker,
+  activityBundle,
+  activityMarkdown,
+  eventsToCsv,
+  environmentSnapshot,
+  watchDockerEvents,
+  recordStartup,
+} from './server/observability';
 import { setupTerminalWebSocket } from './server/terminalService';
 import {
   getSoftwareUpdateState,
@@ -56,6 +85,7 @@ import {
   updateSettings,
   installUpdate,
   startUpdateScheduler,
+  pendingUpdateActivityId,
 } from './server/updateService';
 import fs from 'fs';
 import { DeepContainerMetadata } from './src/types';
@@ -71,9 +101,156 @@ async function startServer() {
       ? parseInt(process.env.PORT, 10)
       : 3000;
 
-  app.use(express.json());
+  app.use(express.json({ limit: '5mb' }));
+  // Every API request is recorded; user actions become Activities with everything underneath attached
+  app.use(requestTracker);
+
+  // Errors thrown by async route handlers go to the error handler at the end (a 500 with the message,
+  // recorded in Activity) instead of leaving the request hanging
+  for (const method of ['get', 'post', 'put', 'delete'] as const) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const register = (app as any)[method].bind(app) as (...args: any[]) => unknown;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (app as any)[method] = (...args: any[]) => {
+      if (args.length < 2) return register(...args); // app.get('setting')
+      const [route, ...handlers] = args;
+      return register(
+        route,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ...handlers.map((h: any) =>
+          typeof h === 'function' && h.length < 4
+            ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              (req: any, res: any, next: any) => {
+                try {
+                  const out = h(req, res, next);
+                  if (out && typeof out.catch === 'function') out.catch(next);
+                } catch (err) {
+                  next(err);
+                }
+              }
+            : h
+        )
+      );
+    };
+  }
 
   // API Routes FIRST
+
+  // ==========================================================================
+  // Activity log API
+  // ==========================================================================
+  const csv = (v: unknown) => (typeof v === 'string' && v ? v.split(',').map((x) => x.trim()).filter(Boolean) : undefined);
+  const eventQueryFrom = (q: Record<string, unknown>) => ({
+    levels: csv(q.levels) as Level[] | undefined,
+    categories: csv(q.categories) as Category[] | undefined,
+    search: typeof q.search === 'string' ? q.search : undefined,
+    activityId: typeof q.activity === 'string' ? q.activity : undefined,
+    since: typeof q.since === 'string' ? q.since : undefined,
+    until: typeof q.until === 'string' ? q.until : undefined,
+    before: typeof q.before === 'string' ? q.before : undefined,
+  });
+
+  app.get('/api/logs/activities', (req, res) => {
+    res.json(
+      listActivities({
+        search: typeof req.query.search === 'string' ? req.query.search : undefined,
+        types: csv(req.query.types),
+        statuses: csv(req.query.statuses) as ActivityStatus[] | undefined,
+        before: typeof req.query.before === 'string' ? req.query.before : undefined,
+        limit: req.query.limit ? Number(req.query.limit) : undefined,
+      })
+    );
+  });
+
+  app.get('/api/logs/activities/:id', async (req, res) => {
+    const a = getActivity(req.params.id);
+    if (!a) return res.status(404).json({ error: 'Activity not found. It may have been removed by log retention.' });
+    const bundle = await activityBundle(a.id);
+    res.json(bundle);
+  });
+
+  app.get('/api/logs/activities/:id/export', async (req, res) => {
+    const format = req.query.format === 'markdown' ? 'markdown' : 'json';
+    const a = getActivity(req.params.id);
+    if (!a) return res.status(404).json({ error: 'Activity not found.' });
+    const stamp = a.startedAt.replace(/[:.]/g, '-').slice(0, 19);
+    if (format === 'markdown') {
+      const md = await activityMarkdown(a.id);
+      res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
+      if (req.query.download) res.setHeader('Content-Disposition', `attachment; filename="manifexus-${a.type}-${stamp}.md"`);
+      return res.send(md);
+    }
+    res.setHeader('Content-Disposition', `attachment; filename="manifexus-${a.type}-${stamp}.json"`);
+    res.json(await activityBundle(a.id));
+  });
+
+  app.get('/api/logs/events', async (req, res) => {
+    const limit = req.query.limit ? Number(req.query.limit) : 300;
+    res.json(await queryEvents({ ...eventQueryFrom(req.query as Record<string, unknown>), limit }));
+  });
+
+  app.get('/api/logs/events/export', async (req, res) => {
+    const format = req.query.format === 'csv' ? 'csv' : 'jsonl';
+    const { events } = await queryEvents({ ...eventQueryFrom(req.query as Record<string, unknown>), limit: 200000 });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    res.setHeader('Content-Disposition', `attachment; filename="manifexus-events-${stamp}.${format}"`);
+    if (format === 'csv') {
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      return res.send(eventsToCsv(events.reverse()));
+    }
+    res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
+    res.send(events.reverse().map((e) => JSON.stringify(e)).join('\n') + '\n');
+  });
+
+  // Live tail (Server-Sent Events): new events and activity changes as they happen
+  app.get('/api/logs/stream', (req, res) => {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    // @ts-ignore
+    if (res.flushHeaders) res.flushHeaders();
+    // A client that stops reading gets disconnected (it reconnects by itself) rather than buffering forever
+    let unsubscribe = () => {};
+    const ping = setInterval(() => res.write(': ping\n\n'), 20000);
+    const close = () => {
+      clearInterval(ping);
+      unsubscribe();
+    };
+    unsubscribe = subscribe((msg) => {
+      if (res.writableLength > 4 * 1024 * 1024) {
+        close();
+        res.end();
+        return;
+      }
+      res.write(`data: ${JSON.stringify(msg)}\n\n`);
+    });
+    req.on('close', close);
+  });
+
+  app.get('/api/logs/settings', (req, res) => res.json(getLogSettings()));
+  app.post('/api/logs/settings', (req, res) => res.json(updateLogSettings(req.body || {})));
+
+  app.get('/api/logs/stats', (req, res) => res.json(logStats()));
+
+  app.get('/api/logs/environment', async (req, res) => res.json(await environmentSnapshot(true)));
+
+  app.post('/api/logs/clear', (req, res) => {
+    clearAllLogs();
+    res.json({ ok: true });
+  });
+
+  // Errors from the dashboard itself (JavaScript errors, failed requests)
+  app.post('/api/logs/client', (req, res) => {
+    const b = req.body || {};
+    record(b.level === 'warn' ? 'warn' : 'error', 'ui', String(b.message || 'Dashboard error').slice(0, 2000), {
+      stack: b.stack,
+      url: b.url,
+      component: b.component,
+      userAgent: req.get('user-agent'),
+    }, { activityId: null });
+    res.json({ ok: true });
+  });
+
   app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', time: new Date().toISOString() });
   });
@@ -169,7 +346,11 @@ async function startServer() {
     }
 
     try {
+      const target = (await getContainersList()).containers.find((c) => c.id === id || c.cleanName === id);
+      if (target) setActivityTitle(`${action.charAt(0).toUpperCase()}${action.slice(1)} ${target.customName || target.cleanName}`);
       const result = await executeContainerAction(id, action);
+      // A failed action is an error for the caller and for Activity, not a 200 with success: false
+      if (!result.success) return res.status(502).json({ ...result, error: result.message });
       res.json(result);
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
@@ -501,6 +682,15 @@ async function startServer() {
         existingComposeContent,
       });
 
+      for (const b of plan.blockers || []) record('warn', 'step', `Blocked: ${b}`);
+      for (const w of plan.warnings || []) record('info', 'step', `Heads up: ${w}`);
+      record('info', 'step', `Planned compose for ${plan.targetStackName}`, {
+        targetDirectory: plan.targetDirectory,
+        mode: plan.mode,
+        compose: plan.generatedComposeYaml,
+        portConflicts: plan.portConflicts,
+        volumes: plan.volumeSafetyAudit,
+      });
       res.json(plan);
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
@@ -532,7 +722,9 @@ async function startServer() {
     // @ts-ignore
     if (res.flushHeaders) res.flushHeaders();
 
+    const recorder = pipelineRecorder(currentActivityId());
     const sendEvent = (data: any) => {
+      recorder.onEvent(data);
       res.write(`data: ${JSON.stringify(data)}\n\n`);
     };
 
@@ -560,6 +752,7 @@ async function startServer() {
     } catch (err) {
       sendEvent({ type: 'failed', log: (err as Error).message });
     } finally {
+      recorder.finish();
       res.end();
     }
   });
@@ -604,7 +797,9 @@ async function startServer() {
     // @ts-ignore
     if (res.flushHeaders) res.flushHeaders();
 
+    const recorder = pipelineRecorder(currentActivityId());
     const sendEvent = (data: any) => {
+      recorder.onEvent(data);
       res.write(`data: ${JSON.stringify(data)}\n\n`);
     };
 
@@ -613,6 +808,7 @@ async function startServer() {
     } catch (err) {
       sendEvent({ type: 'failed', log: (err as Error).message });
     } finally {
+      recorder.finish();
       res.end();
     }
   });
@@ -724,10 +920,18 @@ async function startServer() {
     res.setHeader('Connection', 'keep-alive');
     // @ts-ignore
     if (res.flushHeaders) res.flushHeaders();
-    const send = (p: unknown) => res.write(`data: ${JSON.stringify(p)}\n\n`);
+    const recorder = pipelineRecorder(currentActivityId());
+    const send = (p: unknown) => {
+      recorder.onEvent(p);
+      res.write(`data: ${JSON.stringify(p)}\n\n`);
+    };
+    let joined = false;
     try {
-      await installUpdate(send);
+      joined = (await installUpdate(send)).joined;
+      // This request only followed an install that was already running (that install has its own record)
+      if (joined) setActivityTitle('Follow the update in progress');
     } finally {
+      recorder.finish(joined ? 'succeeded' : undefined);
       res.end();
     }
   });
@@ -748,6 +952,21 @@ async function startServer() {
     });
   }
 
+  // Last: anything a route threw
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  app.use((err: any, req: any, res: any, _next: any) => {
+    record('error', 'api', `${req.method} ${req.originalUrl} failed: ${err?.message || err}`, { stack: err?.stack });
+    if (res.headersSent) {
+      try {
+        res.end();
+      } catch {
+        // already closed
+      }
+      return;
+    }
+    res.status(500).json({ error: err?.message || 'Something went wrong.' });
+  });
+
   // Create HTTP server and attach Directive 1 Web Terminal WebSocket
   const server = http.createServer(app);
   setupTerminalWebSocket(server);
@@ -756,12 +975,24 @@ async function startServer() {
   await refreshSelfMounts();
   setInterval(() => void refreshSelfMounts(), 60 * 1000);
 
+  // Activities cut off by the last shutdown are closed as interrupted, except an update in progress,
+  // which is closed below once its restart helper reports back
+  const pendingUpdate = pendingUpdateActivityId();
+  closeStaleActivities(pendingUpdate ? [pendingUpdate] : []);
+
+  // Software Update: record the outcome of an update the previous instance started (reads the restart
+  // helper's output before cleanup removes it), then check periodically
+  await startUpdateScheduler();
+
   // Remove helper containers left behind by interrupted jobs (they used to show up as stopped apps)
   void cleanupStoppedHelpers();
   setInterval(() => void cleanupStoppedHelpers(), 10 * 60 * 1000);
 
-  // Software Update: record the outcome of an update the previous instance started, then check periodically
-  startUpdateScheduler();
+  // Activity log: boot record, Docker container events, retention
+  void recordStartup();
+  watchDockerEvents();
+  enforceRetention();
+  setInterval(() => enforceRetention(), 60 * 60 * 1000);
 
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`[Manifexus Core Engine] Server and Web Terminal running on http://0.0.0.0:${PORT}`);

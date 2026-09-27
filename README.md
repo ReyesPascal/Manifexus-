@@ -28,6 +28,13 @@ Manifexus is a lightweight, self-hosted central command hub that automatically t
   * **Custom User Groups View:** Organize containers into user-defined categories (e.g., *Media & Streaming*, *Networking & DNS*, *Databases & Storage*, *Home Automation*, *Monitoring & Ops*).
 * **Data Persistence:** User configurations, custom groups, custom friendly names, icon overrides, and port customizations are stored in `/data/config.json` (mapped to `./data` on the host), surviving container restarts and image updates.
 
+### 4. Activity: a complete record for troubleshooting
+* **Everything you do is an activity:** moves, deletes, undo, updates, new stacks, app start/stop/restart and settings changes are each recorded from start to finish, with every step, Docker API call, host command (with its full output and exit code), file written (with its contents) and the request that started it.
+* **See exactly why something failed:** a failed activity shows Docker's own error text and the command that produced it, plus what your containers were doing around that time (crashes, out-of-memory kills, restarts, health changes).
+* **Copy for Claude:** one tap copies a Markdown troubleshooting report; *Everything (.json)* downloads the full record including the environment (Manifexus build, Docker version, mounts, permissions).
+* **All Events:** search, filter by severity, category and time, follow live, and export as JSON Lines or CSV.
+* **Stored on disk** in `/data/logs` (daily JSON Lines files). Retention (7 days to 1 year), a storage limit and background detail are set in Activity → Settings. Passwords, tokens and keys are replaced with `••••••` before anything is saved.
+
 ---
 
 ## 🚀 Quick Start (Single-Line Installation)

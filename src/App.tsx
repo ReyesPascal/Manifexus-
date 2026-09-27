@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   FolderKanban,
   Layers,
@@ -27,6 +27,7 @@ import { Navbar } from './components/Navbar';
 import { StatsBar } from './components/StatsBar';
 import { PortsSheet } from './components/PortsSheet';
 import { SoftwareUpdateSheet, SoftwareUpdateState } from './components/SoftwareUpdateSheet';
+import { ActivitySheet } from './components/ActivitySheet';
 import { AppCard } from './components/AppCard';
 import { InspectModal } from './components/InspectModal';
 import { GroupManagerModal } from './components/GroupManagerModal';
@@ -109,6 +110,61 @@ export default function App() {
     return () => clearInterval(t);
   }, [refreshSoftwareUpdate]);
 
+  // Activity: the record of everything Manifexus did. Any screen can open it on a specific
+  // activity with window.dispatchEvent(new CustomEvent('manifexus:open-activity', { detail: { id } })).
+  const [activity, setActivity] = useState<{ open: boolean; id?: string }>({ open: false });
+  // The badge compares server timestamps only (the newest failure vs. the newest one already seen),
+  // so a browser clock that's off can't hide it or make it stick
+  const [unseenFailure, setUnseenFailure] = useState(false);
+  const lastFailureAt = useRef<string | undefined>(undefined);
+  const SEEN_KEY = 'manifexus.activity.seenFailureAt';
+  const markFailuresSeen = useCallback((upTo: string | undefined) => {
+    if (upTo) {
+      try {
+        localStorage.setItem(SEEN_KEY, upTo);
+      } catch {
+        // storage unavailable
+      }
+    }
+    setUnseenFailure(false);
+  }, []);
+  const refreshActivityBadge = useCallback(async (markSeen = false) => {
+    try {
+      const r = await fetch('/api/logs/stats', { cache: 'no-store' });
+      if (!r.ok) return;
+      const s: { lastFailureAt?: string } = await r.json();
+      lastFailureAt.current = s.lastFailureAt;
+      if (markSeen) return markFailuresSeen(s.lastFailureAt);
+      let seen: string | null = null;
+      try {
+        seen = localStorage.getItem(SEEN_KEY);
+      } catch {
+        // storage unavailable
+      }
+      setUnseenFailure(Boolean(s.lastFailureAt && (!seen || s.lastFailureAt > seen)));
+    } catch {
+      // offline or restarting
+    }
+  }, [markFailuresSeen]);
+  useEffect(() => {
+    refreshActivityBadge();
+    const t = setInterval(() => refreshActivityBadge(), 60 * 1000);
+    const onOpen = (e: Event) => {
+      const id = (e as CustomEvent<{ id?: string }>).detail?.id;
+      setActivity({ open: true, id });
+      markFailuresSeen(lastFailureAt.current);
+    };
+    // A move or undo just finished: check straight away rather than waiting a minute
+    const onFleetChange = () => setTimeout(() => refreshActivityBadge(), 1500);
+    window.addEventListener('manifexus:open-activity', onOpen);
+    window.addEventListener('manifexus:refresh_fleet', onFleetChange);
+    return () => {
+      clearInterval(t);
+      window.removeEventListener('manifexus:open-activity', onOpen);
+      window.removeEventListener('manifexus:refresh_fleet', onFleetChange);
+    };
+  }, [refreshActivityBadge, markFailuresSeen]);
+
   // Fetch Container Telemetry & System Status
   const fetchData = useCallback(async (showRefreshingState = false) => {
     if (showRefreshingState) setIsRefreshing(true);
@@ -179,9 +235,10 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action }),
       });
-      if (res.ok) {
-        await fetchData(true);
-      }
+      // Refresh either way: a failed action can still have changed the app's state.
+      // Failures are recorded in Activity, which lights up its badge.
+      await fetchData(true);
+      if (!res.ok) refreshActivityBadge();
     } catch (err) {
       console.error(`Failed to ${action} container:`, err);
     }
@@ -451,6 +508,11 @@ export default function App() {
         }}
         updateAvailable={softwareUpdate?.status === 'available'}
         updating={Boolean(softwareUpdate?.installing && ['download', 'prepare', 'restart'].includes(softwareUpdate.installing.stage))}
+        onOpenActivity={() => {
+          setActivity({ open: true });
+          markFailuresSeen(lastFailureAt.current);
+        }}
+        activityAlert={unseenFailure}
         onRefresh={() => {
           fetchData(true);
           fetchPrivileges();
@@ -957,6 +1019,16 @@ export default function App() {
         onClose={() => setIsUpdatesOpen(false)}
         state={softwareUpdate}
         onStateChange={setSoftwareUpdate}
+      />
+
+      <ActivitySheet
+        open={activity.open}
+        initialActivityId={activity.id}
+        onClose={() => {
+          setActivity({ open: false });
+          // Anything that failed while it was open was on screen
+          refreshActivityBadge(true);
+        }}
       />
 
       <PortsSheet

@@ -2,6 +2,7 @@ import http from 'http';
 import fs from 'fs';
 import { DeepContainerMetadata, ContainerPort, ContainerMount, ComposeMetadata } from '../src/types';
 import { globalLogService } from './globalLogService';
+import { record, type Level } from './activityLog';
 
 const DOCKER_SOCKET_PATH = process.env.DOCKER_SOCKET_PATH || '/var/run/docker.sock';
 
@@ -56,13 +57,80 @@ export async function cleanupStoppedHelpers(): Promise<number> {
   return removed;
 }
 
-// Low-level HTTP request over Unix Domain Socket with Granular Diagnostic Execution Logging
-export function queryDockerEngine<T>(path: string, method: string = 'GET', body?: unknown): Promise<T> {
+/**
+ * Records a Docker Engine API call in the activity log. Inside an activity everything is kept (with
+ * the request body and a generous slice of the response); outside, only failures surface by default.
+ */
+/** Helper env can carry whole compose files or a base64 container definition: keep the names, not the blobs. */
+function trimLargeEnv(v: unknown): unknown {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return v;
+  const trim = (env: unknown) =>
+    Array.isArray(env)
+      ? env.map((e) => {
+          if (typeof e !== 'string' || e.length <= 300) return e;
+          const eq = e.indexOf('=');
+          return `${e.slice(0, eq + 1)}[${e.length - eq - 1} characters omitted]`;
+        })
+      : env;
+  const o = v as Record<string, unknown>;
+  const out: Record<string, unknown> = { ...o };
+  if (Array.isArray(o.Env)) out.Env = trim(o.Env);
+  const cfg = o.Config as Record<string, unknown> | undefined;
+  if (cfg && typeof cfg === 'object' && Array.isArray(cfg.Env)) out.Config = { ...cfg, Env: trim(cfg.Env) };
+  return out;
+}
+
+function recordDockerCall(c: { method: string; path: string; status: number; durationMs: number; payload?: string | null; response?: string; error?: string }) {
+  const ok = c.status >= 200 && c.status < 300;
+  const level: Level = c.error
+    ? 'warn'
+    : ok
+      ? c.method === 'GET'
+        ? 'trace'
+        : 'debug'
+      : c.status === 404 || c.status === 304
+        ? 'debug'
+        : 'warn';
+  let request: unknown;
+  if (c.payload) {
+    try {
+      request = JSON.parse(c.payload);
+    } catch {
+      request = c.payload;
+    }
+  }
+  const limit = ok ? (c.method === 'GET' ? 16 * 1024 : 8 * 1024) : 64 * 1024;
+  let response: unknown;
+  if (c.response) {
+    const text = c.response.length > limit ? `${c.response.slice(0, limit)}… [${c.response.length - limit} more characters]` : c.response;
+    try {
+      response = c.response.length <= limit ? JSON.parse(c.response) : text;
+    } catch {
+      response = text;
+    }
+  }
+  record(
+    level,
+    'docker',
+    `${c.method} ${c.path.replace(/\b([0-9a-f]{12})[0-9a-f]{52}\b/g, '$1')} → ${c.error ? c.error : c.status}`,
+    { method: c.method, path: c.path, status: c.status, request: trimLargeEnv(request), response: trimLargeEnv(response), error: c.error },
+    { durationMs: c.durationMs }
+  );
+}
+
+/**
+ * How long to wait for Docker. Stopping or restarting waits for the app's own shutdown (Docker's grace
+ * period, 10 s by default and often longer), so those get minutes rather than seconds.
+ */
+function defaultTimeoutMs(path: string, method: string): number {
+  if (method === 'POST' && /^\/containers\/[^/]+\/(stop|restart|wait)(\?|$)/.test(path)) return 3 * 60 * 1000;
+  return 10 * 1000;
+}
+
+// Low-level HTTP request over Unix Domain Socket (every call is recorded in the activity log)
+export function queryDockerEngine<T>(path: string, method: string = 'GET', body?: unknown, timeoutMs?: number): Promise<T> {
   const startTime = Date.now();
-  // Extract target container ID if the path is a container-specific endpoint like /containers/{id}/...
-  const containerMatch = path.match(/\/containers\/([a-zA-Z0-9_-]+)/);
-  const targetContainer = containerMatch ? containerMatch[1] : undefined;
-  const commandDesc = `DOCKER_SOCK ${method} ${path}`;
+  const timeout = timeoutMs ?? defaultTimeoutMs(path, method);
 
   // Every container Manifexus creates itself is a short-lived helper (file access, backups,
   // compose runs, terminals). Tag them so they never show up or get counted as apps.
@@ -89,9 +157,11 @@ export function queryDockerEngine<T>(path: string, method: string = 'GET', body?
       path: path,
       method: method,
       headers: headers,
-      timeout: 10000,
+      timeout,
     };
 
+    // A timed-out request also emits 'error' when destroyed: record and settle only once
+    let settled = false;
     const req = http.request(options, (res) => {
       let data = '';
       res.setEncoding('utf8');
@@ -99,25 +169,15 @@ export function queryDockerEngine<T>(path: string, method: string = 'GET', body?
         data += chunk;
       });
       res.on('end', () => {
+        if (settled) return;
+        settled = true;
         const durationMs = Date.now() - startTime;
         const statusCode = res.statusCode || 0;
-        const isSuccess = statusCode >= 200 && statusCode < 300;
+        // 304: already in the requested state (starting a running app, stopping a stopped one)
+        const isSuccess = (statusCode >= 200 && statusCode < 300) || statusCode === 304;
 
         if (isSuccess) {
-          // Log socket execution telemetry
-          // Filter out spammy top-level container polling listings unless query parameter or error
-          if (!path.startsWith('/containers/json') || method !== 'GET') {
-            globalLogService.logDockerExec({
-              command: commandDesc,
-              targetContainer,
-              stdout: data.length > 2000 ? `${data.substring(0, 2000)}... [TRUNCATED]` : data,
-              stderr: '',
-              exitCode: 0,
-              durationMs,
-              payload: payload ? { requestPayload: payload } : undefined,
-            });
-          }
-
+          recordDockerCall({ method, path, status: statusCode, durationMs, payload, response: data });
           try {
             resolve(data ? JSON.parse(data) : ({} as T));
           } catch {
@@ -125,49 +185,33 @@ export function queryDockerEngine<T>(path: string, method: string = 'GET', body?
             resolve(data as unknown as T);
           }
         } else {
-          const errMsg = `Docker API ${path} returned status ${statusCode}: ${data}`;
-          globalLogService.logDockerExec({
-            command: commandDesc,
-            targetContainer,
-            stdout: '',
-            stderr: data,
-            exitCode: statusCode,
-            durationMs,
-            error: new Error(errMsg),
-          });
+          let reason = data.trim();
+          try {
+            reason = JSON.parse(data).message || reason;
+          } catch {
+            // not JSON
+          }
+          const errMsg = `Docker API ${path} returned status ${statusCode}: ${reason}`;
+          recordDockerCall({ method, path, status: statusCode, durationMs, payload, response: data });
           reject(new Error(errMsg));
         }
       });
     });
 
     req.on('error', (err) => {
-      const durationMs = Date.now() - startTime;
-      globalLogService.logDockerExec({
-        command: commandDesc,
-        targetContainer,
-        stdout: '',
-        stderr: err.message,
-        exitCode: 1,
-        durationMs,
-        error: err,
-      });
+      if (settled) return;
+      settled = true;
+      recordDockerCall({ method, path, status: 0, durationMs: Date.now() - startTime, payload, error: err.message });
       reject(err);
     });
 
     req.on('timeout', () => {
+      if (settled) return;
+      settled = true;
       req.destroy();
-      const durationMs = Date.now() - startTime;
-      const timeoutErr = new Error(`Docker API request to ${path} timed out`);
-      globalLogService.logDockerExec({
-        command: commandDesc,
-        targetContainer,
-        stdout: '',
-        stderr: 'Request timed out after 10000ms',
-        exitCode: 124,
-        durationMs,
-        error: timeoutErr,
-      });
-      reject(timeoutErr);
+      const secs = Math.round(timeout / 1000);
+      recordDockerCall({ method, path, status: 0, durationMs: Date.now() - startTime, payload, error: `No answer from Docker after ${secs} s` });
+      reject(new Error(`Docker didn't answer ${method} ${path} within ${secs} s`));
     });
 
     if (payload) {
@@ -1509,3 +1553,69 @@ export async function getContainerByComposeService(
   return match || null;
 }
 
+
+/**
+ * Reads a container's stdout/stderr, correctly de-multiplexing Docker's 8-byte frame headers
+ * (reading them as text corrupts frame sizes above 127 bytes). Returns the last `tail` lines.
+ */
+export function fetchContainerLogs(
+  id: string,
+  tail: number | 'all' = 3000
+): Promise<{ stdout: string; stderr: string; combined: string; error?: string }> {
+  return new Promise((resolve) => {
+    const req = http.request(
+      {
+        socketPath: DOCKER_SOCKET_PATH,
+        path: `/containers/${encodeURIComponent(id)}/logs?stdout=1&stderr=1&tail=${tail}`,
+        method: 'GET',
+        headers: { Host: 'docker.local' },
+        timeout: 30000,
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (c: Buffer) => chunks.push(c));
+        res.on('end', () => {
+          const buf = Buffer.concat(chunks);
+          // An error (e.g. a log driver that can't be read back) is not the container's output
+          if ((res.statusCode || 0) >= 300) {
+            let reason = buf.toString('utf8').trim();
+            try {
+              reason = JSON.parse(reason).message || reason;
+            } catch {
+              // not JSON
+            }
+            resolve({ stdout: '', stderr: '', combined: '', error: `Couldn't read the output (HTTP ${res.statusCode}): ${reason}` });
+            return;
+          }
+          let stdout = '';
+          let stderr = '';
+          let combined = '';
+          const framed = buf.length >= 8 && (buf[0] === 1 || buf[0] === 2) && buf[1] === 0 && buf[2] === 0 && buf[3] === 0;
+          if (!framed) {
+            const t = buf.toString('utf8');
+            resolve({ stdout: t, stderr: '', combined: t });
+            return;
+          }
+          let pos = 0;
+          while (pos + 8 <= buf.length) {
+            const type = buf[pos];
+            const size = buf.readUInt32BE(pos + 4);
+            const text = buf.subarray(pos + 8, pos + 8 + size).toString('utf8');
+            if (type === 2) stderr += text;
+            else stdout += text;
+            combined += text;
+            pos += 8 + size;
+          }
+          resolve({ stdout, stderr, combined });
+        });
+        res.on('error', () => resolve({ stdout: '', stderr: '', combined: '' }));
+      }
+    );
+    req.on('error', () => resolve({ stdout: '', stderr: '', combined: '' }));
+    req.on('timeout', () => {
+      req.destroy();
+      resolve({ stdout: '', stderr: '', combined: '' });
+    });
+    req.end();
+  });
+}

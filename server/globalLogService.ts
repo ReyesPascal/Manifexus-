@@ -1,16 +1,34 @@
 /**
- * Minimal internal logger.
- *
- * Manifexus no longer has a Logs screen or keeps log files. Warnings and errors are written to
- * stdout/stderr so they show up in `docker logs manifexus`; routine info is dropped unless
- * MANIFEXUS_DEBUG=1 is set. The method shapes are kept so existing call sites don't change.
+ * Compatibility layer: older call sites log through this; everything is forwarded to the
+ * activity log (server/activityLog.ts), so it lands in the right activity with full context.
  */
+import { record, type Category, type Level } from './activityLog';
+
 export type LogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR' | 'CRITICAL';
 export type LogEventType = 'API_CALL' | 'DOCKER_EXEC' | 'STATE_CHANGE' | 'SYSTEM' | 'AUTH' | 'STACK_OP';
 
+const LEVEL: Record<string, Level> = { DEBUG: 'debug', INFO: 'info', WARN: 'warn', ERROR: 'error', CRITICAL: 'error' };
+
+function category(eventType?: string, source?: string): Category {
+  if (source && /update/i.test(source)) return 'update';
+  if (source && /backup/i.test(source)) return 'backup';
+  switch (eventType) {
+    case 'STACK_OP':
+      return 'stack';
+    case 'DOCKER_EXEC':
+      return 'docker';
+    case 'API_CALL':
+      return 'api';
+    case 'STATE_CHANGE':
+      return 'container';
+    default:
+      return 'system';
+  }
+}
+
 interface LogInput {
-  level: LogLevel;
-  eventType?: LogEventType;
+  level: LogLevel | Lowercase<LogLevel> | string;
+  eventType?: LogEventType | string;
   source?: string;
   message: string;
   payload?: unknown;
@@ -18,20 +36,14 @@ interface LogInput {
   [key: string]: unknown;
 }
 
-const DEBUG = process.env.MANIFEXUS_DEBUG === '1' || process.env.MANIFEXUS_DEBUG === 'true';
-
-function write(level: LogLevel, source: string | undefined, message: string, error?: unknown): void {
-  const important = level === 'WARN' || level === 'ERROR' || level === 'CRITICAL';
-  if (!important && !DEBUG) return;
-  const line = `[${new Date().toISOString()}] ${level}${source ? ` ${source}` : ''}: ${message}`;
-  const detail = error instanceof Error ? ` (${error.message})` : error ? ` (${String((error as { message?: unknown }).message ?? error)})` : '';
-  if (level === 'ERROR' || level === 'CRITICAL') console.error(line + detail);
-  else console.log(line + detail);
-}
-
 export const globalLogService = {
   log(entry: LogInput): void {
-    write(entry.level, entry.source, entry.message, entry.error);
+    const lvl = LEVEL[String(entry.level).toUpperCase()] || 'info';
+    const data: Record<string, unknown> = {};
+    if (entry.payload !== undefined) data.payload = entry.payload;
+    if (entry.error !== undefined) data.error = entry.error instanceof Error ? { message: entry.error.message, stack: entry.error.stack } : entry.error;
+    if (entry.source) data.source = entry.source;
+    record(lvl, category(entry.eventType, entry.source), entry.message, Object.keys(data).length ? data : undefined);
   },
   logDockerExec(params: {
     command: string;
@@ -43,9 +55,14 @@ export const globalLogService = {
     [key: string]: unknown;
   }): void {
     const failed = (params.exitCode !== undefined && params.exitCode !== 0) || Boolean(params.error);
-    write(params.level || (failed ? 'WARN' : 'DEBUG'), 'docker', params.message || params.command, params.error);
+    const lvl = params.level ? LEVEL[params.level] || 'info' : failed ? 'warn' : 'debug';
+    const { error, ...rest } = params;
+    record(lvl, 'docker', params.message || params.command, {
+      ...rest,
+      error: error instanceof Error ? { message: error.message, stack: error.stack } : error,
+    });
   },
   logStateChange(params: { message: string; source?: string; level?: LogLevel; [key: string]: unknown }): void {
-    write(params.level || 'INFO', params.source, params.message);
+    record(params.level ? LEVEL[params.level] || 'info' : 'info', 'container', params.message, params);
   },
 };

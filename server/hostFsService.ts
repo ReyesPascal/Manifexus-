@@ -2,6 +2,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { queryDockerEngine, getBestAvailableImage } from './dockerService';
+import { record } from './activityLog';
 
 const DOCKER_SOCKET_PATH = process.env.DOCKER_SOCKET_PATH || '/var/run/docker.sock';
 
@@ -63,7 +64,7 @@ export function resolveContainerPath(hostPath: string): string | null {
  * If Manifexus does not have the host mounted directly, it uses the Docker socket helper container
  * to read the exact host file with zero container filesystem barriers.
  */
-export async function readHostFile(hostFilePath: string): Promise<string | null> {
+async function readHostFileImpl(hostFilePath: string): Promise<string | null> {
   // 1. Direct filesystem check
   const localCandidate = resolveContainerPath(hostFilePath);
   if (localCandidate && fs.existsSync(localCandidate)) {
@@ -120,7 +121,7 @@ export async function readHostFile(hostFilePath: string): Promise<string | null>
 /**
  * Writes a text file directly to the host filesystem.
  */
-export async function writeHostFile(hostFilePath: string, content: string): Promise<boolean> {
+async function writeHostFileImpl(hostFilePath: string, content: string): Promise<boolean> {
   const localCandidate = resolveContainerPath(hostFilePath);
   const localParent = localCandidate ? path.dirname(localCandidate) : null;
 
@@ -177,7 +178,7 @@ export async function writeHostFile(hostFilePath: string, content: string): Prom
 /**
  * Provisions a directory on the host filesystem, bypassing container isolation.
  */
-export async function createHostDirectory(hostDirPath: string): Promise<boolean> {
+async function createHostDirectoryImpl(hostDirPath: string): Promise<boolean> {
   const localCandidate = resolveContainerPath(hostDirPath);
   try {
     if (localCandidate) {
@@ -225,7 +226,7 @@ export async function createHostDirectory(hostDirPath: string): Promise<boolean>
 /**
  * Checks if a file exists on the host.
  */
-export async function checkHostFileExists(hostFilePath: string): Promise<boolean> {
+async function checkHostFileExistsImpl(hostFilePath: string): Promise<boolean> {
   const localCandidate = resolveContainerPath(hostFilePath);
   if (localCandidate && fs.existsSync(localCandidate)) {
     return true;
@@ -276,7 +277,7 @@ export async function forceRemoveContainer(containerNameOrId: string): Promise<b
 /**
  * Deletes a directory and its contents from the host filesystem.
  */
-export async function deleteHostDirectory(hostDirPath: string): Promise<boolean> {
+async function deleteHostDirectoryImpl(hostDirPath: string): Promise<boolean> {
   const normalized = path.posix.normalize(hostDirPath.trim());
   if (['/', '/home', '/root', '/etc', '/var', '/usr'].includes(normalized)) {
     throw new Error(`Refusing to delete critical root directory: ${normalized}`);
@@ -347,4 +348,56 @@ function cleanDockerLogs(raw: string | unknown): string {
     return cleaned || raw.substring(8);
   }
   return raw;
+}
+
+// ----------------------------------------------------------------------------
+// Recorded entry points: every host file operation shows up in the activity log
+// ----------------------------------------------------------------------------
+
+const how = (p: string) => (resolveContainerPath(p) ? 'direct' : 'helper container');
+
+export async function readHostFile(hostFilePath: string): Promise<string | null> {
+  const t = Date.now();
+  const text = await readHostFileImpl(hostFilePath);
+  record('trace', 'file', `Read ${hostFilePath} → ${text === null ? 'not found' : `${text.length} bytes`}`, {
+    path: hostFilePath,
+    via: how(hostFilePath),
+    found: text !== null,
+    bytes: text?.length,
+    content: text && text.length <= 64 * 1024 ? text : undefined,
+  }, { durationMs: Date.now() - t });
+  return text;
+}
+
+export async function writeHostFile(hostFilePath: string, content: string): Promise<boolean> {
+  const t = Date.now();
+  const ok = await writeHostFileImpl(hostFilePath, content);
+  record(ok ? 'info' : 'warn', 'file', `${ok ? 'Wrote' : 'Could not write'} ${hostFilePath} (${content.length} bytes)`, {
+    path: hostFilePath,
+    via: how(hostFilePath),
+    ok,
+    bytes: content.length,
+    content,
+  }, { durationMs: Date.now() - t });
+  return ok;
+}
+
+export async function createHostDirectory(hostDirPath: string): Promise<boolean> {
+  const t = Date.now();
+  const ok = await createHostDirectoryImpl(hostDirPath);
+  record(ok ? 'debug' : 'warn', 'file', `${ok ? 'Folder ready' : 'Could not create folder'}: ${hostDirPath}`, { path: hostDirPath, via: how(hostDirPath), ok }, { durationMs: Date.now() - t });
+  return ok;
+}
+
+export async function checkHostFileExists(hostFilePath: string): Promise<boolean> {
+  const ok = await checkHostFileExistsImpl(hostFilePath);
+  record('trace', 'file', `${hostFilePath} ${ok ? 'exists' : 'does not exist'}`, { path: hostFilePath, exists: ok });
+  return ok;
+}
+
+export async function deleteHostDirectory(hostDirPath: string): Promise<boolean> {
+  const t = Date.now();
+  const ok = await deleteHostDirectoryImpl(hostDirPath);
+  record(ok ? 'info' : 'warn', 'file', `${ok ? 'Deleted folder' : 'Could not delete folder'} ${hostDirPath}`, { path: hostDirPath, via: how(hostDirPath), ok }, { durationMs: Date.now() - t });
+  return ok;
 }

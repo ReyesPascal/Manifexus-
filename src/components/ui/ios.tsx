@@ -337,6 +337,9 @@ export const FieldRow: React.FC<{
   </label>
 );
 
+/** Open sheets, bottom to top, so Escape only closes the top one. */
+const openSheets: symbol[] = [];
+
 /**
  * Standard sheet: dimmed backdrop, nav bar with a left action and centered title, scrolling body.
  * Escape and clicking the backdrop close it. Use this for every new full screen.
@@ -348,23 +351,39 @@ export const Sheet: React.FC<{
   onClose: () => void;
   closeLabel?: string;
   rightAction?: React.ReactNode;
+  /** Replaces the empty left slot, e.g. with a BackButton */
+  leftAction?: React.ReactNode;
   footer?: React.ReactNode;
   width?: number;
+  /** Extra content under the title bar that doesn't scroll (filters, segmented controls) */
+  toolbar?: React.ReactNode;
   children: React.ReactNode;
-}> = ({ open, title, subtitle, onClose, closeLabel = 'Done', rightAction, footer, width = 600, children }) => {
+  bodyRef?: React.Ref<HTMLDivElement>;
+  /** Stacking order; raise it for sheets that open on top of other screens */
+  zIndex?: number;
+}> = ({ open, title, subtitle, onClose, closeLabel = 'Done', rightAction, leftAction, footer, width = 600, toolbar, children, bodyRef, zIndex = 50 }) => {
+  // Escape closes only the sheet on top, not every open sheet underneath it
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
   useEffect(() => {
     if (!open) return;
+    const id = Symbol('sheet');
+    openSheets.push(id);
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape' && openSheets[openSheets.length - 1] === id) closeRef.current();
     };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      const i = openSheets.indexOf(id);
+      if (i >= 0) openSheets.splice(i, 1);
+    };
+  }, [open]);
   if (!open) return null;
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-6 bg-black/55"
-      style={{ fontFamily: ios.font }}
+      className="fixed inset-0 flex items-end sm:items-center justify-center sm:p-6 bg-black/55"
+      style={{ fontFamily: ios.font, zIndex }}
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -378,7 +397,7 @@ export const Sheet: React.FC<{
       >
         <div className="relative px-4 pt-3.5 pb-3" style={{ borderBottom: `0.5px solid ${ios.separator}` }}>
           <div className="h-[28px] flex items-center justify-between">
-            <span className="w-[70px]" />
+            <span className="flex items-center min-w-[70px]">{leftAction}</span>
             <span className="flex items-center justify-end min-w-[70px]">
               {rightAction ?? (
                 <button
@@ -401,7 +420,12 @@ export const Sheet: React.FC<{
             </p>
           )}
         </div>
-        <div className="flex-1 overflow-y-auto px-4 sm:px-5 pt-5 pb-8">{children}</div>
+        {toolbar && (
+          <div className="px-4 sm:px-5 pt-3 pb-3 space-y-3" style={{ borderBottom: `0.5px solid ${ios.separator}` }}>
+            {toolbar}
+          </div>
+        )}
+        <div ref={bodyRef} className="flex-1 overflow-y-auto px-4 sm:px-5 pt-5 pb-8">{children}</div>
         {footer && (
           <div className="px-4 sm:px-5 py-3" style={{ borderTop: `0.5px solid ${ios.separator}` }}>
             {footer}
@@ -411,3 +435,96 @@ export const Sheet: React.FC<{
     </div>
   );
 };
+
+/** "‹ Back" button for the left side of a Sheet's title bar. */
+export const BackButton: React.FC<{ label: string; onClick: () => void }> = ({ label, onClick }) => (
+  <button
+    type="button"
+    onClick={onClick}
+    className="-ml-1 inline-flex items-center gap-1 text-[17px] rounded focus-visible:outline-2 focus-visible:outline-[#0A84FF] hover:opacity-80"
+    style={{ color: ios.blue }}
+  >
+    <svg width="11" height="18" viewBox="0 0 11 18" aria-hidden="true">
+      <path d="M9 2 2 9l7 7" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+    {label}
+  </button>
+);
+
+/** iOS segmented control. */
+export function Segmented<T extends string>({
+  value,
+  options,
+  onChange,
+  label,
+  size = 'md',
+}: {
+  value: T;
+  options: { value: T; label: React.ReactNode }[];
+  onChange: (v: T) => void;
+  label: string;
+  size?: 'sm' | 'md';
+}) {
+  return (
+    <div role="radiogroup" aria-label={label} className="inline-flex p-[2px] rounded-[9px] w-full" style={{ background: ios.fill }}>
+      {options.map((o) => {
+        const on = o.value === value;
+        return (
+          <button
+            key={o.value}
+            type="button"
+            role="radio"
+            aria-checked={on}
+            onClick={() => onChange(o.value)}
+            className={`flex-1 rounded-[7px] ${size === 'sm' ? 'h-[26px] text-[12px]' : 'h-[30px] text-[13px]'} font-medium transition-colors focus-visible:outline-2 focus-visible:outline-[#0A84FF] whitespace-nowrap px-2`}
+            style={on ? { background: '#636366', color: '#fff', boxShadow: '0 3px 8px rgba(0,0,0,0.12)' } : { color: ios.label }}
+          >
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Rounded filter chip (toggle). */
+export const Chip: React.FC<{ on: boolean; onClick: () => void; children: React.ReactNode; tone?: string }> = ({ on, onClick, children, tone }) => (
+  <button
+    type="button"
+    aria-pressed={on}
+    onClick={onClick}
+    className="h-[28px] px-3 rounded-full text-[13px] font-medium whitespace-nowrap flex-shrink-0 transition-colors focus-visible:outline-2 focus-visible:outline-[#0A84FF]"
+    style={on ? { background: tone || ios.blue, color: '#fff' } : { background: ios.fill, color: ios.label }}
+  >
+    {children}
+  </button>
+);
+
+/** Search field in the iOS style. */
+export const SearchField: React.FC<{ value: string; onChange: (v: string) => void; placeholder?: string; label: string }> = ({ value, onChange, placeholder = 'Search', label }) => (
+  <div className="relative">
+    <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={ios.secondary} strokeWidth="2.4" strokeLinecap="round" aria-hidden="true">
+      <circle cx="11" cy="11" r="7" />
+      <path d="m20 20-3.5-3.5" />
+    </svg>
+    <input
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder={placeholder}
+      aria-label={label}
+      className="w-full h-9 pl-8 pr-8 rounded-[10px] text-[15px] text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0A84FF] placeholder:text-[rgba(235,235,245,0.6)]"
+      style={{ background: ios.fill }}
+    />
+    {value && (
+      <button
+        type="button"
+        onClick={() => onChange('')}
+        aria-label="Clear search"
+        className="absolute right-2 top-1/2 -translate-y-1/2 w-[18px] h-[18px] rounded-full flex items-center justify-center"
+        style={{ background: 'rgba(235,235,245,0.3)' }}
+      >
+        <svg width="8" height="8" viewBox="0 0 10 10"><path d="M2 2l6 6M8 2 2 8" stroke="#1c1c1e" strokeWidth="2" strokeLinecap="round" /></svg>
+      </button>
+    )}
+  </div>
+);
