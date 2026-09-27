@@ -37,9 +37,11 @@ Manifexus is a lightweight, self-hosted central command hub that automatically t
 
 ### 5. Restore: go back to before any change
 * **Every change keeps a backup:** moving apps and deleting a stack save the compose files (and, unless you turn it off, the stack folders and volumes) first.
-* **Restore to before a change** from the Restore screen. Manifexus first checks whether anything was edited since and shows exactly what will happen. If newer changes touched the same stacks, they're restored first, newest to oldest, in one run, so nothing conflicts.
+* **Restore to before a change** from the Restore screen. Manifexus first checks whether anything was edited since and shows exactly what will happen to each stack. If newer changes touched the same stacks, they're covered too: each stack is put back once, as it was before the oldest of them, instead of undoing changes one by one.
+* **Restores can be undone:** every restore saves how the stacks looked just before it, and shows up in Restore like any other change.
+* **Standalone apps** (started with `docker run`) that were moved into a stack are recreated exactly as they were — same settings, volumes, ports and restart policy — when the move is restored.
 * **Recover without restoring everything:** put a deleted stack's files back without starting it, copy a backup into another folder, browse a backup and download single files, or download the whole backup as a `.tar.gz`.
-* **Backups are kept for 30 days** by default (7 days to forever in Restore → Backups). Pin a backup to keep it forever. When a backup is removed, its change moves to the Archive as history.
+* **Backups are kept for 30 days** by default (7 days to forever in Restore → Backups). Pin a backup to keep it forever. Expired backups move their change to the Archive. Delete several changes at once with **Select**, or clean up restored changes and deleted empty stacks in one tap from Restore → Backups.
 
 ---
 

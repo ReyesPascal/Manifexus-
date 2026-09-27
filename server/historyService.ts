@@ -28,7 +28,7 @@ export interface MergeHistoryRecord {
   archiveSizeBytes: number;
   summary: string;
   logs?: string[];
-  type?: 'MERGE' | 'COMPOSE_INSTALL' | 'STACK_DELETE';
+  type?: 'MERGE' | 'COMPOSE_INSTALL' | 'STACK_DELETE' | 'RESTORE';
   // Present on STACK_DELETE records: what is needed to re-provision and re-register the stack on revert
   deletedStack?: {
     project: string;
@@ -45,8 +45,16 @@ export interface MergeHistoryRecord {
   installMode?: 'existing-stack' | 'new-stack';
   sourceUrl?: string;
   remappedPorts?: { service: string; originalHostPort: number; allocatedHostPort: number }[];
-  /** Files exactly as the change left them, to tell later whether anything changed since */
-  resultFiles?: { path: string; content: string }[];
+  /** Files exactly as the change left them (null = the stack's folder was removed), to tell later whether anything changed since */
+  resultFiles?: { path: string; content: string | null }[];
+  /** RESTORE records: how each stack looked just before the restore, so the restore itself can be undone */
+  dirSnapshots?: { dir: string; project: string; existed: boolean; compose?: string | null; env?: string | null }[];
+  /** RESTORE records: the changes this restore put back */
+  revertedIds?: string[];
+  /** RESTORE records: standalone apps it recreated (removed again if the restore is undone) */
+  recreatedApps?: string[];
+  /** Moves: apps that were standalone (docker run) containers, with everything needed to recreate them */
+  standaloneApps?: { name: string; spec: Record<string, unknown> }[];
   /** The Activity record of the change (full log) */
   activityId?: string;
   /** Keep this backup forever (never removed by the keep-for setting) */

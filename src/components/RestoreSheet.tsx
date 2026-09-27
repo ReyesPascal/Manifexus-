@@ -13,6 +13,7 @@ import {
   SectionFooter,
   SectionHeader,
   Segmented,
+  SelectCircle,
   Sheet,
   Switch,
   ios,
@@ -23,7 +24,7 @@ import { ProgressView, useRun } from './ProgressTracker';
 // Types (mirror server/restoreService.ts)
 // ----------------------------------------------------------------------------
 
-type Kind = 'move' | 'delete' | 'install';
+type Kind = 'move' | 'delete' | 'install' | 'restore';
 type State = 'available' | 'restored' | 'failed' | 'archived';
 
 interface RestorePoint {
@@ -47,13 +48,16 @@ interface RestorePoint {
     volumes: string[];
   };
   newer: number;
+  onlyCopy: boolean;
+  emptyStack: boolean;
   activityId?: string;
   restoreActivityId?: string;
 }
 
 interface Plan {
   point: RestorePoint;
-  changes: { point: RestorePoint; actions: string[] }[];
+  changes: RestorePoint[];
+  stacks: { project: string; dir: string; action: string; from?: string; notes: string[] }[];
   checks: { level: 'ok' | 'warn' | 'block'; message: string }[];
   canRestore: boolean;
   canRestoreFilesOnly: boolean;
@@ -148,6 +152,7 @@ const KIND: Record<Kind, { color: string; d: string }> = {
   move: { color: '#5E5CE6', d: G.move },
   delete: { color: '#FF453A', d: G.trash },
   install: { color: '#30D158', d: G.plus },
+  restore: { color: '#0A84FF', d: G.restore },
 };
 
 const KindTile: React.FC<{ p: RestorePoint; size?: number }> = ({ p, size = 32 }) => (
@@ -183,8 +188,38 @@ const StatusPill: React.FC<{ p: RestorePoint }> = ({ p }) => {
 // List row: the whole row opens the details; Restore sits on the right
 // ----------------------------------------------------------------------------
 
-const PointRow: React.FC<{ p: RestorePoint; onOpen: () => void; onRestore: () => void }> = ({ p, onOpen, onRestore }) => {
+const PointRow: React.FC<{ p: RestorePoint; onOpen: () => void; onRestore: () => void; selecting?: boolean; selected?: boolean }> = ({
+  p,
+  onOpen,
+  onRestore,
+  selecting,
+  selected,
+}) => {
   const dim = p.state !== 'available';
+  if (selecting) {
+    return (
+      <div className="ios-row relative">
+        <button
+          type="button"
+          role="checkbox"
+          aria-checked={Boolean(selected)}
+          onClick={onOpen}
+          className="w-full flex items-center gap-3 pl-4 pr-4 min-h-[60px] text-left transition-colors hover:bg-white/[0.04] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[#0A84FF]"
+        >
+          <SelectCircle on={Boolean(selected)} />
+          <KindTile p={p} />
+          <span className="min-w-0 flex-1 py-[10px]">
+            <span className="block text-[15px] leading-[20px] truncate" style={{ color: dim ? ios.secondary : ios.label }}>
+              {p.title}
+            </span>
+            <span className="block text-[13px] leading-[18px] mt-0.5 truncate" style={{ color: ios.tertiary }}>
+              {[p.detail, fmtTime(p.at), p.backup.bytes ? fmtBytes(p.backup.bytes) : ''].filter(Boolean).join(' · ')}
+            </span>
+          </span>
+        </button>
+      </div>
+    );
+  }
   const sub =
     p.state === 'restored'
       ? `Restored ${p.restoredAt ? when(p.restoredAt) : ''}`
@@ -255,7 +290,8 @@ const Detail: React.FC<{
   onBrowse: () => void;
   onCopy: () => void;
   onChanged: (p: RestorePoint) => void;
-}> = ({ p, onRestore, canFilesOnly, onBrowse, onCopy, onChanged }) => {
+  onDeleted: () => void;
+}> = ({ p, onRestore, canFilesOnly, onBrowse, onCopy, onChanged, onDeleted }) => {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [busy, setBusy] = useState(false);
   const hasBackup = p.state !== 'archived' && !p.backup.deletedAt;
@@ -266,11 +302,11 @@ const Detail: React.FC<{
     const r = await fetch(`/api/restore/${encodeURIComponent(p.id)}/pin`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pinned: on }) });
     if (r.ok) onChanged(await r.json());
   };
-  const removeBackup = async () => {
+  const removeChange = async () => {
     setBusy(true);
-    const r = await fetch(`/api/restore/${encodeURIComponent(p.id)}/delete-backup`, { method: 'POST' });
+    const r = await fetch('/api/restore/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: [p.id] }) });
     setBusy(false);
-    if (r.ok) onChanged(await r.json());
+    if (r.ok) onDeleted();
   };
 
   const contents = [
@@ -293,11 +329,11 @@ const Detail: React.FC<{
         {p.state === 'available' && (
           <div className="mt-5 flex flex-col items-center gap-1.5">
             <Button onClick={() => onRestore(false)} className="!h-[40px] !px-6 !text-[15px]">
-              {p.newer ? `Restore ${p.newer + 1} Changes…` : 'Restore…'}
+              {p.kind === 'restore' ? 'Undo This Restore…' : 'Restore…'}
             </Button>
             {p.newer > 0 && (
               <p className="text-[12px] max-w-[380px]" style={{ color: ios.tertiary }}>
-                {plural(p.newer, 'newer change')} to the same stack{p.stacks.length > 1 ? 's' : ''} will be restored first, so nothing conflicts.
+                Also covers {plural(p.newer, 'newer change')} to the same stack{p.stacks.length > 1 ? 's' : ''}. Each stack is put back once, as it was before this change.
               </p>
             )}
           </div>
@@ -322,6 +358,12 @@ const Detail: React.FC<{
             </>
           )}
           {p.kind === 'install' && <Row title="Stack" trailing={<span>{p.stacks[0]}</span>} />}
+          {p.kind === 'restore' && (
+            <>
+              <Row title="Restored" trailing={<span className="truncate">{p.detail?.replace(/^to before /, 'Before ')}</span>} />
+              <Row title={p.stacks.length === 1 ? 'Stack' : 'Stacks'} trailing={<span>{p.stacks.join(', ')}</span>} />
+            </>
+          )}
         </Group>
       </section>
 
@@ -404,24 +446,24 @@ const Detail: React.FC<{
         </section>
       )}
 
-      {hasBackup && (
+      {(
         <section>
           <Group>
-            <Row onClick={() => setConfirmDelete(true)} disabled={busy} title={<span style={{ color: ios.red }}>{busy ? 'Deleting…' : 'Delete Backup'}</span>} />
+            <Row onClick={() => setConfirmDelete(true)} disabled={busy} title={<span style={{ color: ios.red }}>{busy ? 'Deleting…' : 'Delete This Change'}</span>} />
           </Group>
           <SectionFooter>
-            {p.kind === 'delete'
-              ? `This backup is the only copy of ${p.stacks[0]}. Deleting it means ${p.stacks[0]} can’t be brought back.`
-              : 'Removes only this saved copy. Your stacks and their data aren’t touched.'}
+            {p.onlyCopy
+              ? `Removes it from Restore with its backup. The backup is the only copy of ${p.stacks[0]}, so it couldn’t be brought back.`
+              : 'Removes it from Restore with its backup. Your stacks and their data aren’t touched.'}
           </SectionFooter>
         </section>
       )}
 
       <Alert
         open={confirmDelete}
-        title={p.kind === 'delete' ? `Delete the only copy of ${p.stacks[0]}?` : 'Delete this backup?'}
+        title={p.onlyCopy ? `Delete the only copy of ${p.stacks[0]}?` : 'Delete this change?'}
         message={
-          p.kind === 'delete'
+          p.onlyCopy
             ? `${p.stacks[0]}’s files and settings will be gone for good. This can’t be undone.`
             : 'Your stacks and their data stay as they are. You just won’t be able to restore to before this change.'
         }
@@ -430,7 +472,7 @@ const Detail: React.FC<{
         onCancel={() => setConfirmDelete(false)}
         onConfirm={() => {
           setConfirmDelete(false);
-          removeBackup();
+          removeChange();
         }}
       />
     </div>
@@ -466,7 +508,7 @@ const Review: React.FC<{ plan: Plan | null; error?: string; filesOnly?: boolean 
           <Glyph d={G.restore} size={32} stroke={2} />
         </IconTile>
         <h3 className="mt-4 text-[21px] leading-[26px] font-semibold text-white px-4">
-          {filesOnly ? `Restore ${plan.point.stacks[0]}’s Files` : 'Restore to Before'}
+          {filesOnly ? `Restore ${plan.point.stacks[0]}’s Files` : plan.point.kind === 'restore' ? 'Undo This Restore' : 'Restore to Before'}
         </h3>
         <p className="mt-1 text-[14px] max-w-[460px] px-4" style={{ color: ios.secondary }}>
           {plan.point.title} · {when(plan.point.at)}
@@ -484,39 +526,40 @@ const Review: React.FC<{ plan: Plan | null; error?: string; filesOnly?: boolean 
 
       {plan.canRestore && (
         <section>
-          <SectionHeader>{many ? `Restores ${plan.changes.length} changes, newest first` : 'What Will Happen'}</SectionHeader>
-          {many ? (
-            <Group>
-              {plan.changes.map((c, i) => (
-                <div key={c.point.id} className="ios-row relative flex items-start gap-3 px-4 py-[11px]">
-                  <span
-                    className="w-[24px] h-[24px] rounded-full flex items-center justify-center flex-shrink-0 text-[12px] font-semibold tabular-nums"
-                    style={{ background: 'rgba(10,132,255,0.18)', color: '#6CB6FF' }}
-                  >
-                    {i + 1}
-                  </span>
-                  <span className="min-w-0">
-                    <span className="block text-[15px] leading-[20px] text-white">{c.point.title}</span>
-                    <span className="block text-[13px] leading-[18px] mt-0.5" style={{ color: ios.secondary }}>
-                      {when(c.point.at)} · {c.actions.join(' · ')}
-                    </span>
-                  </span>
-                </div>
-              ))}
-            </Group>
-          ) : (
-            <Group>
-              {(filesOnly ? plan.changes[0].actions.filter((a) => !a.startsWith('Start ')) : plan.changes[0].actions).map((a) => (
-                <Row key={a} title={<span className="whitespace-normal">{a}</span>} />
-              ))}
-              {filesOnly && <Row title={<span style={{ color: ios.secondary }}>Leave it stopped, ready to start from the dashboard</span>} />}
-            </Group>
-          )}
+          <SectionHeader>What Will Happen</SectionHeader>
+          <Group>
+            {plan.stacks.map((st) => (
+              <Row
+                key={`${st.project}:${st.dir}`}
+                title={<span className="whitespace-normal">{filesOnly ? st.action.replace(/^Bring back/, 'Put back') : st.action}</span>}
+                subtitle={
+                  filesOnly
+                    ? 'Left stopped, ready to start from the dashboard'
+                    : [st.from ? `As of ${when(st.from)}` : '', ...st.notes].filter(Boolean).join(' · ').replace(/^./, (c) => c.toUpperCase())
+                }
+              />
+            ))}
+          </Group>
           <SectionFooter>
-            {plan.point.kind === 'move' && !filesOnly
-              ? 'Your apps’ data stays where it is. Moves never delete data.'
-              : 'If a step fails, Manifexus stops and tells you exactly what happened.'}
+            Before anything changes, Manifexus saves how these stacks look now, so this restore can be undone from Restore too.
           </SectionFooter>
+        </section>
+      )}
+
+      {plan.canRestore && many && (
+        <section>
+          <SectionHeader>{`Covers ${plan.changes.length} changes`}</SectionHeader>
+          <Group>
+            {plan.changes.map((c) => (
+              <Row
+                key={c.id}
+                leading={<KindTile p={c} size={26} />}
+                title={<span className="text-[14px]">{c.title}</span>}
+                trailing={<span className="text-[13px]">{when(c.at)}</span>}
+              />
+            ))}
+          </Group>
+          <SectionFooter>Each stack is put back once, as it was before the oldest of these, instead of undoing them one by one.</SectionFooter>
         </section>
       )}
     </div>
@@ -683,6 +726,10 @@ export const RestoreSheet: React.FC<{ open: boolean; onClose: () => void; onChan
   const [confirmClear, setConfirmClear] = useState(false);
   const [copyBusy, setCopyBusy] = useState(false);
   const [copied, setCopied] = useState<string[] | null>(null);
+  // Select mode: delete several changes at once
+  const [selecting, setSelecting] = useState(false);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [confirmDeleteMany, setConfirmDeleteMany] = useState<{ ids: string[]; title: string; message: string } | null>(null);
   const copySubmit = useRef<(() => void) | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const run = useRun();
@@ -712,6 +759,8 @@ export const RestoreSheet: React.FC<{ open: boolean; onClose: () => void; onChan
     setStack([{ kind: 'list' }]);
     setFilter('all');
     setShowAll(false);
+    setSelecting(false);
+    setSelected([]);
     run.reset();
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -739,6 +788,25 @@ export const RestoreSheet: React.FC<{ open: boolean; onClose: () => void; onChan
   const visible = filter === 'pinned' ? live.filter((p) => p.pinned) : live;
   const limited = showAll ? visible : visible.slice(0, 30);
 
+  const askDelete = (ids: string[], what?: string) => {
+    const list = (points || []).filter((p) => ids.includes(p.id));
+    const only = list.filter((p) => p.onlyCopy && !p.emptyStack);
+    const n = list.length;
+    setConfirmDeleteMany({
+      ids,
+      title: what || `Delete ${n === 1 ? 'this change' : `${n} changes`}?`,
+      message: only.length
+        ? `${only.map((p) => p.stacks[0]).join(', ')} ${only.length === 1 ? 'was deleted and this is its only copy' : 'were deleted and these are their only copies'}, so ${only.length === 1 ? 'it' : 'they'} couldn’t be brought back. Everything else just can’t be restored anymore; your stacks aren’t touched.`
+        : 'They can’t be restored anymore. Your stacks and their data aren’t touched.',
+    });
+  };
+  const deleteMany = async (ids: string[]) => {
+    await fetch('/api/restore/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids }) });
+    setSelected([]);
+    setSelecting(false);
+    await load();
+  };
+
   const startRestore = (id: string, filesOnly?: boolean) => {
     push({ kind: 'progress', id, count: plan?.point.id === id ? plan.changes.length : 1, filesOnly });
     void run.start(`/api/restore/${encodeURIComponent(id)}/run`, { filesOnly: Boolean(filesOnly) });
@@ -761,14 +829,49 @@ export const RestoreSheet: React.FC<{ open: boolean; onClose: () => void; onChan
     return prev.kind === 'list' ? 'Restore' : prev.kind === 'archive' ? 'Archive' : prev.kind === 'detail' ? 'Details' : 'Back';
   })();
 
+  const textButton = (label: string, onClick: () => void, bold = false) => (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`text-[17px] rounded hover:opacity-80 focus-visible:outline-2 focus-visible:outline-[#0A84FF] ${bold ? 'font-semibold' : ''}`}
+      style={{ color: ios.blue }}
+    >
+      {label}
+    </button>
+  );
   const leftAction =
-    view.kind === 'progress' ? undefined : stack.length > 1 ? <BackButton label={backLabel} onClick={pop} /> : undefined;
+    view.kind === 'progress'
+      ? undefined
+      : stack.length > 1
+        ? <BackButton label={backLabel} onClick={pop} />
+        : view.kind === 'list' && (points?.length || 0) > 0
+          ? selecting
+            ? textButton('Cancel', () => {
+                setSelecting(false);
+                setSelected([]);
+              })
+            : textButton('Select', () => setSelecting(true))
+          : undefined;
 
   // ---------------------------------------------------------------- footer
   let footer: React.ReactNode;
-  if (view.kind === 'review' && plan?.canRestore) {
+  if (view.kind === 'list' && selecting) {
+    const all = visible.map((p) => p.id);
+    const allOn = all.length > 0 && all.every((id) => selected.includes(id));
+    footer = (
+      <div className="flex items-center justify-between gap-3">
+        <LinkButton onClick={() => setSelected(allOn ? [] : all)}>{allOn ? 'Deselect All' : 'Select All'}</LinkButton>
+        <span className="text-[13px] tabular-nums" style={{ color: ios.secondary }}>
+          {selected.length ? `${selected.length} selected` : 'Tap changes to select them'}
+        </span>
+        <Button tone="red" disabled={!selected.length} onClick={() => askDelete(selected)} className="sm:min-w-[120px]">
+          Delete
+        </Button>
+      </div>
+    );
+  } else if (view.kind === 'review' && plan?.canRestore) {
     const warn = plan.checks.some((c) => c.level === 'warn');
-    const label = view.filesOnly ? 'Restore Files' : plan.changes.length > 1 ? `Restore ${plan.changes.length} Changes` : 'Restore';
+    const label = view.filesOnly ? 'Restore Files' : plan.point.kind === 'restore' ? 'Undo Restore' : 'Restore';
     footer = (
       <div className="flex justify-end gap-2">
         <Button tone="gray" onClick={pop} className="sm:min-w-[110px]">
@@ -806,7 +909,7 @@ export const RestoreSheet: React.FC<{ open: boolean; onClose: () => void; onChan
       <p className="text-[15px] text-center py-16" style={{ color: ios.secondary }}>Loading…</p>
     ) : (
       <div className="space-y-7">
-        <Group className="ios-inset-icon">
+        {!selecting && <Group className="ios-inset-icon">
           <Row
             onClick={() => push({ kind: 'storage' })}
             leading={<ActionTile d={G.disk} color="#8E8E93" />}
@@ -814,7 +917,7 @@ export const RestoreSheet: React.FC<{ open: boolean; onClose: () => void; onChan
             subtitle={storage.keepDays ? `Kept for ${plural(storage.keepDays, 'day')} · pinned ones are kept forever` : 'Kept forever'}
             chevron
           />
-        </Group>
+        </Group>}
 
         {visible.length === 0 ? (
           <div className="text-center py-10 px-6">
@@ -831,7 +934,18 @@ export const RestoreSheet: React.FC<{ open: boolean; onClose: () => void; onChan
               <SectionHeader>{day}</SectionHeader>
               <Group>
                 {list.map((p) => (
-                  <PointRow key={p.id} p={p} onOpen={() => push({ kind: 'detail', id: p.id })} onRestore={() => push({ kind: 'review', id: p.id })} />
+                  <PointRow
+                    key={p.id}
+                    p={p}
+                    selecting={selecting}
+                    selected={selected.includes(p.id)}
+                    onOpen={() =>
+                      selecting
+                        ? setSelected((sel) => (sel.includes(p.id) ? sel.filter((x) => x !== p.id) : [...sel, p.id]))
+                        : push({ kind: 'detail', id: p.id })
+                    }
+                    onRestore={() => push({ kind: 'review', id: p.id })}
+                  />
                 ))}
               </Group>
             </section>
@@ -845,7 +959,7 @@ export const RestoreSheet: React.FC<{ open: boolean; onClose: () => void; onChan
           </div>
         )}
 
-        {filter === 'all' && archived.length > 0 && (
+        {filter === 'all' && !selecting && archived.length > 0 && (
           <Group className="ios-inset-icon">
             <Row
               onClick={() => push({ kind: 'archive' })}
@@ -890,6 +1004,35 @@ export const RestoreSheet: React.FC<{ open: boolean; onClose: () => void; onChan
             <Row title="Pinned" trailing={<span className="tabular-nums">{live.filter((p) => p.pinned).length}</span>} />
           </Group>
         </section>
+        {(() => {
+          const restored = (points || []).filter((p) => p.state === 'restored' || p.state === 'failed');
+          const empties = live.filter((p) => p.emptyStack && p.state === 'available');
+          const unpinned = live.filter((p) => !p.pinned);
+          const rows = [
+            { key: 'restored', label: 'Restored Changes', sub: 'Already put back, so nothing is lost', list: restored },
+            { key: 'empty', label: 'Deleted Empty Stacks', sub: 'Stacks that had no apps', list: empties },
+            { key: 'unpinned', label: 'Everything Not Pinned', sub: 'Keeps only pinned backups', list: unpinned },
+          ].filter((r) => r.list.length > 0);
+          if (!rows.length) return null;
+          return (
+            <section>
+              <SectionHeader>Clean Up</SectionHeader>
+              <Group>
+                {rows.map((r) => (
+                  <Row
+                    key={r.key}
+                    onClick={() => askDelete(r.list.map((p) => p.id), `Delete ${plural(r.list.length, r.key === 'empty' ? 'deleted empty stack' : 'change')}?`)}
+                    title={<span style={{ color: ios.red }}>{r.label}</span>}
+                    subtitle={r.sub}
+                    trailing={<span className="tabular-nums">{r.list.length} · {fmtBytes(r.list.reduce((n, p) => n + p.backup.bytes, 0))}</span>}
+                  />
+                ))}
+              </Group>
+              <SectionFooter>Removes those changes and their backups from Restore. Your stacks and their data aren’t touched.</SectionFooter>
+            </section>
+          );
+        })()}
+
         <section>
           <SectionHeader>Keep Backups For</SectionHeader>
           <Group>
@@ -931,6 +1074,10 @@ export const RestoreSheet: React.FC<{ open: boolean; onClose: () => void; onChan
           updatePoint(np);
           if (np.backup.deletedAt) load();
         }}
+        onDeleted={() => {
+          pop();
+          load();
+        }}
       />
     ) : (
       <p className="text-[15px] text-center py-16" style={{ color: ios.secondary }}>This change is no longer here.</p>
@@ -945,7 +1092,7 @@ export const RestoreSheet: React.FC<{ open: boolean; onClose: () => void; onChan
         doneMessage={
           view.filesOnly
             ? 'The files are back. Start the stack from the dashboard when you’re ready.'
-            : 'Everything is back the way it was before this change.'
+            : 'Everything is back the way it was. This restore is saved in Restore, so you can undo it.'
         }
         onDone={() => {
           onChanged?.();
@@ -1024,6 +1171,19 @@ export const RestoreSheet: React.FC<{ open: boolean; onClose: () => void; onChan
         onConfirm={() => {
           setConfirmWarn(false);
           if (view.kind === 'review') startRestore(view.id, view.filesOnly);
+        }}
+      />
+      <Alert
+        open={Boolean(confirmDeleteMany)}
+        title={confirmDeleteMany?.title || ''}
+        message={confirmDeleteMany?.message || ''}
+        confirmLabel="Delete"
+        destructive
+        onCancel={() => setConfirmDeleteMany(null)}
+        onConfirm={() => {
+          const ids = confirmDeleteMany?.ids || [];
+          setConfirmDeleteMany(null);
+          deleteMany(ids);
         }}
       />
       <Alert

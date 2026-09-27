@@ -78,7 +78,7 @@ import {
   planRestore,
   executeRestore,
   setPinned,
-  deleteBackup,
+  deleteChanges,
   clearArchive,
   getRestoreSettings,
   updateRestoreSettings,
@@ -762,6 +762,13 @@ async function startServer() {
     res.json(s);
   });
 
+  // Delete one or many changes with their backups (live stacks are never touched)
+  app.post('/api/restore/delete', (req, res) => {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(String) : [];
+    if (!ids.length) return res.status(400).json({ error: 'Nothing selected.' });
+    res.json({ removed: deleteChanges(ids) });
+  });
+
   app.post('/api/restore/archive/clear', (req, res) => {
     res.json({ removed: clearArchive(Array.isArray(req.body?.ids) ? req.body.ids : undefined) });
   });
@@ -809,10 +816,6 @@ async function startServer() {
     res.json(p);
   });
 
-  app.post('/api/restore/:id/delete-backup', (req, res) => {
-    if (!deleteBackup(req.params.id)) return res.status(404).json({ error: 'This change is no longer in Restore.' });
-    res.json(getRestorePoint(req.params.id));
-  });
 
   app.get('/api/restore/:id/files', async (req, res) => {
     const out = await listBackupFiles(req.params.id);

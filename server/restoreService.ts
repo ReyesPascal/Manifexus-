@@ -1,18 +1,21 @@
 /**
- * Restore: every change Manifexus makes (moving apps, deleting a stack) keeps a backup, and can be
- * restored later. This module turns the history ledger into restore points and handles:
+ * Restore: every change Manifexus makes (moving apps, deleting a stack, restoring) keeps a backup,
+ * and can be restored later.
  *
- *  - Chains: restoring a change also restores any newer changes to the same stacks first (newest
- *    first), so nothing is restored on top of a later change.
- *  - Checks: before restoring, compares each stack with how the last change left it and reports
- *    anything edited since.
- *  - Backups: storage used, keep-for setting (pinned backups never expire), deleting a backup
- *    (the entry moves to the archive), browsing and downloading a backup.
+ *  - One pass per stack: restoring a change also covers newer changes to the same stacks. Instead of
+ *    undoing them one by one, it works out how each stack looked before the oldest of them and puts
+ *    each stack back once.
+ *  - Restores are changes too: every restore saves how the stacks looked just before it, so a
+ *    restore can itself be restored.
+ *  - Checks: before restoring, compares each stack with how the last change left it.
+ *  - Standalone apps (docker run) that were moved into a stack are recreated as they were.
+ *  - Backups: storage, keep-for setting, pins, deleting one or many, browsing and downloading.
  */
 import fs from 'fs';
 import path from 'path';
 import { spawn } from 'child_process';
 import type { Response } from 'express';
+import yaml from 'yaml';
 import {
   getMergeHistory,
   getHistoryRecordById,
@@ -21,10 +24,21 @@ import {
   resolveBackupDir,
   type MergeHistoryRecord,
 } from './historyService';
-import { readHostFile } from './hostFsService';
-import { hostDirectoryIsFree, extractArchiveTo } from './dataBackupService';
-import { executeStreamingRevert } from './automationService';
-import { record } from './activityLog';
+import { readHostFile, writeHostFile, createHostDirectory, forceRemoveContainer } from './hostFsService';
+import {
+  hostDirectoryIsFree,
+  extractArchiveTo,
+  restoreStackData,
+  archiveStackData,
+  runComposeCapture,
+  composeErrorTail,
+  removeHostDirectory,
+  getProjectVolumes,
+  removeVolume,
+  type DataArchiveEntry,
+} from './dataBackupService';
+import { queryDockerEngine } from './dockerService';
+import { record, currentActivityId } from './activityLog';
 
 // ----------------------------------------------------------------------------
 // Settings
@@ -57,13 +71,13 @@ export function updateRestoreSettings(patch: Partial<RestoreSettings>): RestoreS
 // Restore points
 // ----------------------------------------------------------------------------
 
-export type RestoreKind = 'move' | 'delete' | 'install';
+export type RestoreKind = 'move' | 'delete' | 'install' | 'restore';
 export type RestoreState = 'available' | 'restored' | 'failed' | 'archived';
 
 export interface RestorePoint {
   id: string;
   kind: RestoreKind;
-  /** "Moved kavita to music-stack", "Deleted spiderman" */
+  /** "Moved kavita to music-stack", "Deleted spiderman", "Restored luke-stack" */
   title: string;
   /** "from utilities-stack" */
   detail?: string;
@@ -87,6 +101,10 @@ export interface RestorePoint {
   };
   /** Newer changes that would be restored along with this one */
   newer: number;
+  /** A deleted stack that was never brought back: its backup is the only copy */
+  onlyCopy: boolean;
+  /** A deleted stack that had no apps */
+  emptyStack: boolean;
   activityId?: string;
   restoreActivityId?: string;
 }
@@ -94,6 +112,7 @@ export interface RestorePoint {
 const norm = (p?: string) => (p ? path.posix.normalize(p).replace(/\/+$/, '') : '');
 
 function kindOf(r: MergeHistoryRecord): RestoreKind {
+  if (r.type === 'RESTORE') return 'restore';
   if (r.type === 'STACK_DELETE' || r.id.startsWith('delete_')) return 'delete';
   if (r.type === 'COMPOSE_INSTALL') return 'install';
   return 'move';
@@ -102,6 +121,10 @@ function kindOf(r: MergeHistoryRecord): RestoreKind {
 /** Stack folders a change touched */
 function touchedDirs(r: MergeHistoryRecord): Set<string> {
   const s = new Set<string>();
+  if (r.type === 'RESTORE') {
+    for (const d of r.dirSnapshots || []) s.add(norm(d.dir));
+    return s;
+  }
   if (r.targetDirectory) s.add(norm(r.targetDirectory));
   for (const sc of r.sourceConfigs || []) if (sc.workingDir) s.add(norm(sc.workingDir));
   for (const m of r.movedServices || []) if (m.workingDir) s.add(norm(m.workingDir));
@@ -109,13 +132,15 @@ function touchedDirs(r: MergeHistoryRecord): Set<string> {
 }
 
 function stackNames(r: MergeHistoryRecord): string[] {
+  if (r.type === 'RESTORE') return Array.from(new Set((r.dirSnapshots || []).map((d) => d.project)));
   const names = [r.targetStackName, ...(r.movedServices || []).map((m) => m.project), ...(r.sourceConfigs || []).map((s) => s.project)];
   return Array.from(new Set(names.filter((n) => n && n !== 'standalone')));
 }
 
 function appNames(r: MergeHistoryRecord): string[] {
   const moved = (r.movedServices || []).flatMap((m) => m.services);
-  if (moved.length) return Array.from(new Set(moved));
+  const standalone = (r.standaloneApps || []).map((a) => a.name);
+  if (moved.length || standalone.length) return Array.from(new Set([...moved, ...standalone]));
   return Array.from(new Set((r.affectedServices || []).map((a) => a.replace(new RegExp(`^${r.targetStackName}[-_]`), '').replace(/[-_]\d+$/, ''))));
 }
 
@@ -123,12 +148,18 @@ const joinNames = (a: string[]) => (a.length <= 1 ? a.join('') : a.length === 2 
 
 function titleOf(r: MergeHistoryRecord): { title: string; detail?: string } {
   const kind = kindOf(r);
+  if (kind === 'restore') {
+    const stacks = joinNames(stackNames(r)) || 'stacks';
+    if (r.summary?.startsWith('undid')) return { title: `Undid a restore of ${stacks}`, detail: r.summary };
+    return { title: `Restored ${stacks}`, detail: r.summary || undefined };
+  }
   if (kind === 'delete') {
     const n = r.deletedStack?.serviceCount ?? 0;
     return { title: `Deleted ${r.targetStackName}`, detail: n ? `${n} app${n === 1 ? '' : 's'}` : 'empty stack' };
   }
   if (kind === 'install') return { title: `Installed apps into ${r.targetStackName}` };
   const from = (r.movedServices || []).map((m) => m.project).filter((p) => p && p !== r.targetStackName);
+  if ((r.standaloneApps || []).length) from.push('standalone');
   const apps = appNames(r);
   return {
     title: `Moved ${joinNames(apps) || 'apps'} to ${r.targetStackName}`,
@@ -182,9 +213,10 @@ function toPoint(r: MergeHistoryRecord, all: MergeHistoryRecord[], keepDays: num
   const state = stateOf(r);
   const exists = backupExists(r);
   const archives = r.dataArchives || [];
+  const kind = kindOf(r);
   return {
     id: r.id,
-    kind: kindOf(r),
+    kind,
     title,
     detail,
     at: r.timestamp,
@@ -203,6 +235,8 @@ function toPoint(r: MergeHistoryRecord, all: MergeHistoryRecord[], keepDays: num
       volumes: archives.filter((a) => a.kind === 'volume').map((a) => a.source),
     },
     newer: state === 'available' ? chainFor(r, all).length - 1 : 0,
+    onlyCopy: kind === 'delete' && state === 'available',
+    emptyStack: kind === 'delete' && (r.deletedStack?.serviceCount ?? 0) === 0,
     activityId: r.activityId,
     restoreActivityId: r.revertActivityId,
   };
@@ -223,6 +257,115 @@ export function getRestorePoint(id: string): RestorePoint | undefined {
 }
 
 // ----------------------------------------------------------------------------
+// Where each stack goes: one target per stack folder
+// ----------------------------------------------------------------------------
+
+interface StackTarget {
+  dir: string;
+  project: string;
+  /** Should the stack exist after the restore? */
+  exists: boolean;
+  compose?: string | null;
+  env?: string | null;
+  /** Folder and volume backups to bring back if the folder is missing or empty now */
+  data: DataArchiveEntry[];
+  /** The stack loses apps (restore it first so container names and ports are free) */
+  losesApps: boolean;
+  /** When this state is from, for the review ("from Sep 26, 9:04 AM") */
+  from: string;
+}
+
+function readSaved(content?: string, file?: string): string | undefined {
+  if (content && content.trim()) return content;
+  if (file && fs.existsSync(file)) return fs.readFileSync(file, 'utf8');
+  return undefined;
+}
+
+function projectVolumesIn(archives: DataArchiveEntry[], project: string, dir: string): DataArchiveEntry[] {
+  return archives.filter(
+    (a) => (a.kind === 'directory' && norm(a.source) === dir) || (a.kind === 'volume' && a.volumeLabels?.['com.docker.compose.project'] === project)
+  );
+}
+
+/** How `dir` looked just before change `r` */
+function beforeOf(r: MergeHistoryRecord, dir: string): StackTarget {
+  const at = r.timestamp;
+  const archives = r.dataArchives || [];
+  if (r.type === 'RESTORE') {
+    const snap = (r.dirSnapshots || []).find((d) => norm(d.dir) === dir)!;
+    return { dir, project: snap.project, exists: snap.existed, compose: snap.compose, env: snap.env, data: projectVolumesIn(archives, snap.project, dir), losesApps: false, from: at };
+  }
+  if (kindOf(r) === 'delete') {
+    return {
+      dir,
+      project: r.deletedStack?.project || r.targetStackName,
+      exists: true,
+      compose: readSaved(r.preMergeComposeContent, r.targetComposeBackupPath) || 'services: {}\n',
+      env: readSaved(r.preMergeEnvContent, r.targetEnvBackupPath) || null,
+      data: projectVolumesIn(archives, r.deletedStack?.project || r.targetStackName, dir),
+      losesApps: false,
+      from: at,
+    };
+  }
+  if (norm(r.targetDirectory) === dir) {
+    const pre = readSaved(r.preMergeComposeContent, r.targetComposeBackupPath);
+    return { dir, project: r.targetStackName, exists: Boolean(pre), compose: pre || null, env: undefined, data: projectVolumesIn(archives, r.targetStackName, dir), losesApps: true, from: at };
+  }
+  const sc = (r.sourceConfigs || []).find((x) => norm(x.workingDir) === dir);
+  const mv = (r.movedServices || []).find((x) => norm(x.workingDir) === dir);
+  const project = sc?.project || mv?.project || path.posix.basename(dir);
+  return { dir, project, exists: true, compose: sc?.composeContent || null, env: undefined, data: projectVolumesIn(archives, project, dir), losesApps: false, from: at };
+}
+
+/** One target per stack: how it looked before the oldest change in the chain that touched it. */
+function targetsFor(chain: MergeHistoryRecord[]): StackTarget[] {
+  const oldestFirst = [...chain].reverse();
+  const targets = new Map<string, StackTarget>();
+  for (const r of oldestFirst) {
+    for (const d of touchedDirs(r)) {
+      if (!targets.has(d)) targets.set(d, beforeOf(r, d));
+      else if (norm(r.targetDirectory) === d && r.type !== 'RESTORE') targets.get(d)!.losesApps = true;
+    }
+  }
+  // Data: if the oldest change didn't save the folder, use the closest newer backup of it
+  for (const t of targets.values()) {
+    if (!t.exists || t.data.length) continue;
+    for (const r of oldestFirst) {
+      const found = projectVolumesIn(r.dataArchives || [], t.project, t.dir).filter((a) => fs.existsSync(a.archiveFile));
+      if (found.length) {
+        t.data = found;
+        break;
+      }
+    }
+  }
+  // Stacks losing apps first, stacks going away next, then the rest
+  return Array.from(targets.values()).sort((a, b) => Number(b.losesApps) - Number(a.losesApps) || Number(a.exists) - Number(b.exists));
+}
+
+/** Standalone (docker run) apps the chain moved into stacks, oldest change first */
+function standaloneFor(chain: MergeHistoryRecord[]) {
+  const seen = new Set<string>();
+  const out: { name: string; spec: Record<string, unknown> }[] = [];
+  for (const r of [...chain].reverse()) {
+    for (const a of r.standaloneApps || []) {
+      if (!seen.has(a.name)) {
+        seen.add(a.name);
+        out.push(a);
+      }
+    }
+  }
+  return out;
+}
+
+const servicesOf = (text?: string | null): string[] => {
+  try {
+    return Object.keys(yaml.parse(text || '')?.services || {});
+  } catch {
+    return [];
+  }
+};
+
+// ----------------------------------------------------------------------------
 // Review: what a restore will do, and whether anything changed since
 // ----------------------------------------------------------------------------
 
@@ -233,8 +376,11 @@ export interface RestoreCheck {
 
 export interface RestorePlan {
   point: RestorePoint;
-  /** Newest first; the chosen change is last */
-  changes: { point: RestorePoint; actions: string[] }[];
+  /** Every change this restore covers, newest first (the chosen one last) */
+  changes: RestorePoint[];
+  /** What happens to each stack, once */
+  /** `from`: the moment each stack goes back to; `notes`: apps stopped/started and so on */
+  stacks: { project: string; dir: string; action: string; from?: string; notes: string[] }[];
   checks: RestoreCheck[];
   canRestore: boolean;
   /** Only for a single deleted stack: put files back without starting it */
@@ -242,25 +388,6 @@ export interface RestorePlan {
 }
 
 const same = (a?: string | null, b?: string | null) => (a || '').replace(/\s+$/g, '').trim() === (b || '').replace(/\s+$/g, '').trim();
-
-function actionsFor(r: MergeHistoryRecord): string[] {
-  const kind = kindOf(r);
-  if (kind === 'delete') {
-    const out = [`Recreate ${r.targetDirectory}`];
-    if ((r.dataArchives || []).length) out.push(`Restore its files${(r.dataArchives || []).some((a) => a.kind === 'volume') ? ' and volumes' : ''} from the backup`);
-    else if (r.dataBackupSkipped) out.push('Restore the compose file only (the data backup was skipped)');
-    else out.push('Restore the compose file');
-    if ((r.deletedStack?.serviceCount ?? 0) > 0) out.push(`Start ${r.targetStackName}`);
-    return out;
-  }
-  const apps = appNames(r);
-  const from = Array.from(new Set((r.movedServices || []).map((m) => m.project).filter((p) => p !== r.targetStackName)));
-  const out = [`Stop ${joinNames(apps)} in ${r.targetStackName}`];
-  out.push(`Put back the compose files of ${joinNames([r.targetStackName, ...from])}`);
-  if (from.length) out.push(`Start ${joinNames(apps)} in ${joinNames(from)} again`);
-  if (!r.preMergeComposeContent && !r.targetComposeBackupPath) out.push(`Leave ${r.targetStackName} empty (the move created it)`);
-  return out;
-}
 
 export async function planRestore(id: string): Promise<RestorePlan | null> {
   const all = getMergeHistory();
@@ -277,59 +404,83 @@ export async function planRestore(id: string): Promise<RestorePlan | null> {
   const chain = point.state === 'available' ? chainFor(target, all) : [target];
   for (const r of chain) {
     if (r.id !== target.id && !backupExists(r)) {
-      checks.push({ level: 'block', message: `“${titleOf(r).title}” has to be restored first, but its backup was removed.` });
-    }
-    if (backupExists(r)) {
-      for (const a of r.dataArchives || []) {
-        if (!fs.existsSync(a.archiveFile)) checks.push({ level: 'warn', message: `Part of the backup is missing (${a.source}). The rest will still be restored.` });
-      }
+      checks.push({ level: 'block', message: `“${titleOf(r).title}” is covered by this restore, but its backup was removed.` });
     }
   }
 
-  // Has anything changed since? Compare each stack with how the newest change in the chain left it.
-  if (point.state === 'available' && !checks.some((c) => c.level === 'block')) {
-    const expected = new Map<string, { content: string | null; by: MergeHistoryRecord }>(); // compose path -> expected content (null = folder deleted)
-    const unknown = new Set<string>();
+  const targets = point.state === 'available' ? targetsFor(chain) : [];
+  const stacks: RestorePlan['stacks'] = [];
+  const blocked = checks.some((c) => c.level === 'block');
+
+  if (!blocked && point.state === 'available') {
+    // Expected current state = how the newest change touching each stack left it
+    const expected = new Map<string, { content: string | null; by: MergeHistoryRecord } | 'unknown'>();
     for (const r of [...chain].reverse()) {
-      // oldest → newest, so the newest change wins
-      if (kindOf(r) === 'delete') {
-        expected.set(path.posix.join(norm(r.targetDirectory), 'docker-compose.yml'), { content: null, by: r });
-      } else if (r.resultFiles?.length) {
-        for (const f of r.resultFiles) expected.set(norm(f.path), { content: f.content, by: r });
-      } else {
-        unknown.add(r.targetStackName);
-      }
+      if (kindOf(r) === 'delete') expected.set(path.posix.join(norm(r.targetDirectory), 'docker-compose.yml'), { content: null, by: r });
+      else if (r.resultFiles?.length) for (const f of r.resultFiles) expected.set(norm(f.path), { content: f.content, by: r });
+      else for (const d of touchedDirs(r)) expected.set(path.posix.join(d, 'docker-compose.yml'), 'unknown');
     }
-    for (const [file, exp] of expected) {
-      const stack = path.posix.basename(path.posix.dirname(file));
-      if (exp.content === null) {
-        if (!(await hostDirectoryIsFree(path.posix.dirname(file)))) {
+
+    for (const t of targets) {
+      const file = path.posix.join(t.dir, 'docker-compose.yml');
+      const free = await hostDirectoryIsFree(t.dir);
+      const current = free ? null : await readHostFile(file).catch(() => null);
+      const exp = expected.get(file);
+      if (exp === 'unknown') {
+        checks.push({ level: 'warn', message: `A change to ${t.project} was made before Manifexus recorded results, so it can’t check whether ${t.project} changed since.` });
+      } else if (exp) {
+        if (exp.content === null && !free) {
           checks.push({
             level: 'warn',
-            message: `There are already files in ${path.posix.dirname(file)}. Restoring leaves them as they are instead of copying the backed-up files over them, and puts the backed-up compose file back.`,
+            message: `There are files in ${t.dir} now. ${t.exists ? 'They’re left as they are, and the backed-up compose file is put back.' : 'They’re saved in this restore’s backup before the folder is removed.'}`,
           });
+        } else if (exp.content !== null && current !== null && !same(current, exp.content)) {
+          checks.push({ level: 'warn', message: `${t.project}’s compose file was edited after “${titleOf(exp.by).title}”. Restoring replaces those edits.` });
+        } else if (exp.content !== null && current === null) {
+          checks.push({ level: 'warn', message: `${t.project}’s compose file is missing now. Restoring puts the backed-up version back.` });
         }
-        continue;
       }
-      const current = await readHostFile(file).catch(() => null);
-      if (current === null) {
-        checks.push({ level: 'warn', message: `${stack}’s compose file is missing now. Restoring puts the backed-up version back.` });
-      } else if (!same(current, exp.content)) {
+
+      // What happens to this stack, in one line
+      const now = servicesOf(current);
+      const then = servicesOf(t.compose);
+      const stops = now.filter((n) => !then.includes(n));
+      const starts = then.filter((n) => !now.includes(n));
+      let action: string;
+      if (!t.exists) action = free ? `${t.project} is already gone` : `Remove ${t.project}`;
+      else if (free) action = `Bring back ${t.project}${t.data.length ? ' with its files' : ''}`;
+      else action = `Put ${t.project} back as it was`;
+      const bits = [
+        stops.length ? `stops ${joinNames(stops)}` : '',
+        starts.length ? `starts ${joinNames(starts)}` : '',
+        !t.exists && !free ? 'its files are saved first, so you can undo this' : '',
+      ].filter(Boolean);
+      stacks.push({ project: t.project, dir: t.dir, action, from: t.from, notes: bits });
+    }
+
+    for (const a of standaloneFor(chain)) {
+      stacks.push({ project: a.name, dir: '', action: `Recreate ${a.name} as a standalone app`, notes: ['with the same settings, volumes and ports it had'] });
+    }
+    for (const r of chain) {
+      // Moves from before standalone apps were saved can't recreate them
+      const lost =
+        kindOf(r) === 'move' && r.standaloneApps === undefined
+          ? (r.sourceConfigs || []).filter((sc) => sc.project === 'standalone').flatMap((sc) => sc.containers.map((c) => c.name))
+          : [];
+      if (lost.length) {
         checks.push({
           level: 'warn',
-          message: `${stack}’s compose file was edited after “${titleOf(exp.by).title}”. Restoring replaces those edits with the version from before.`,
+          message: `${joinNames(lost)} ${lost.length === 1 ? 'was a standalone app' : 'were standalone apps'} when “${titleOf(r).title}” happened, which was before Manifexus saved standalone apps. ${lost.length === 1 ? 'It' : 'They'} can’t be recreated; ${lost.length === 1 ? 'its' : 'their'} data is kept.`,
         });
       }
-    }
-    for (const s of unknown) {
-      checks.push({ level: 'warn', message: `This change to ${s} was made before Manifexus recorded results, so it can’t check whether ${s} changed since.` });
     }
     if (!checks.length) checks.push({ level: 'ok', message: 'Nothing has changed since. It’s safe to restore.' });
   }
 
   return {
     point,
-    changes: chain.map((r) => ({ point: toPoint(r, all, keepDays), actions: actionsFor(r) })),
+    changes: chain.map((r) => toPoint(r, all, keepDays)),
+    stacks,
     checks,
     canRestore: point.state === 'available' && !checks.some((c) => c.level === 'block'),
     canRestoreFilesOnly: point.state === 'available' && chain.length === 1 && kindOf(target) === 'delete',
@@ -337,56 +488,210 @@ export async function planRestore(id: string): Promise<RestorePlan | null> {
 }
 
 // ----------------------------------------------------------------------------
-// Running a restore (one change, or several in order)
+// Running a restore: each stack once, and a backup of how things were just before
 // ----------------------------------------------------------------------------
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Emit = (e: any) => void;
 
-/**
- * Restores `id` and any newer changes it depends on, newest first, as one run.
- * One change: its own steps. Several: one step per change, with the current action as detail.
- * Stops at the first failure; changes already restored stay restored.
- */
+async function containerExists(name: string): Promise<boolean> {
+  try {
+    await queryDockerEngine(`/containers/${encodeURIComponent(name)}/json`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function executeRestore(id: string, emit: Emit, opts: { filesOnly?: boolean } = {}): Promise<void> {
   const plan = await planRestore(id);
-  if (!plan) {
-    emit({ type: 'failed', log: 'This change is no longer in Restore.' });
-    return;
-  }
-  if (!plan.canRestore) {
-    emit({ type: 'failed', log: plan.checks.find((c) => c.level === 'block')?.message || 'This change can’t be restored.' });
-    return;
-  }
-  const changes = plan.changes;
+  if (!plan) return emit({ type: 'failed', log: 'This change is no longer in Restore.' });
+  if (!plan.canRestore) return emit({ type: 'failed', log: plan.checks.find((c) => c.level === 'block')?.message || 'This change can’t be restored.' });
 
-  if (changes.length === 1) {
-    await executeStreamingRevert(changes[0].point.id, emit, { startApps: !(opts.filesOnly && plan.canRestoreFilesOnly) });
-    return;
-  }
+  const all = getMergeHistory();
+  const chain = plan.changes.map((c) => all.find((r) => r.id === c.id)!).filter(Boolean);
+  const targets = targetsFor(chain);
+  const standalone = standaloneFor(chain);
+  const startApps = !(opts.filesOnly && plan.canRestoreFilesOnly);
 
-  changes.forEach((c, i) => emit({ type: 'step_update', stepIndex: i + 1, stepId: c.point.id, stepName: c.point.title, status: 'pending' }));
-  for (let i = 0; i < changes.length; i++) {
-    const c = changes[i];
+  // This restore's own backup: how every stack looked just before it
+  const restoreId = `restore_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+  const snapDir = path.join(resolveBackupDir(), `snapshot_${restoreId}`);
+  fs.mkdirSync(snapDir, { recursive: true });
+  const snapshots: NonNullable<MergeHistoryRecord['dirSnapshots']> = [];
+  const archives: DataArchiveEntry[] = [];
+  const resultFiles: { path: string; content: string | null }[] = [];
+  const recreated: string[] = [];
+
+  const steps = [
+    ...targets.map((t) => ({ name: !t.exists ? `Removing ${t.project}` : `Restoring ${t.project}` })),
+    ...(standalone.length ? [{ name: `Recreating ${joinNames(standalone.map((a) => a.name))}` }] : []),
+  ];
+  steps.forEach((s, i) => emit({ type: 'step_update', stepIndex: i + 1, stepName: s.name, status: 'pending' }));
+  let i = 0;
+  const run = async (fn: (log: (m: string) => void) => Promise<void>) => {
+    const n = ++i;
     const started = Date.now();
-    emit({ type: 'step_update', stepIndex: i + 1, stepId: c.point.id, stepName: c.point.title, status: 'running' });
-    let failure: string | undefined;
-    await executeStreamingRevert(c.point.id, (e) => {
-      if (e.type === 'log' && e.log) emit({ type: 'log', stepIndex: i + 1, log: e.log });
-      else if (e.type === 'failed') failure = e.log || 'Restore failed';
-    });
-    if (failure) {
-      emit({ type: 'step_update', stepIndex: i + 1, stepId: c.point.id, stepName: c.point.title, status: 'failed', durationMs: Date.now() - started });
-      const done = i;
-      emit({
-        type: 'failed',
-        log: `${failure}${done ? ` The ${done} newer change${done === 1 ? ' was' : 's were'} restored; the rest were left as they are.` : ''}`,
-      });
-      return;
+    emit({ type: 'step_update', stepIndex: n, stepName: steps[n - 1].name, status: 'running' });
+    const log = (m: string) => emit({ type: 'log', stepIndex: n, log: m });
+    try {
+      await fn(log);
+    } catch (err) {
+      emit({ type: 'step_update', stepIndex: n, stepName: steps[n - 1].name, status: 'failed', durationMs: Date.now() - started });
+      throw err;
     }
-    emit({ type: 'step_update', stepIndex: i + 1, stepId: c.point.id, stepName: c.point.title, status: 'success', durationMs: Date.now() - started });
+    emit({ type: 'step_update', stepIndex: n, stepName: steps[n - 1].name, status: 'success', durationMs: Date.now() - started });
+  };
+
+  // Undoing a restore: take away the standalone apps it recreated (their data stays)
+  for (const r of chain) {
+    for (const name of r.recreatedApps || []) {
+      if (await containerExists(name)) await forceRemoveContainer(name);
+    }
   }
-  emit({ type: 'completed', payload: { restored: changes.length } });
+
+  let failure: string | undefined;
+  try {
+    for (const t of targets) {
+      await run(async (log) => {
+        const file = path.posix.join(t.dir, 'docker-compose.yml');
+        const envFile = path.posix.join(t.dir, '.env');
+        const free = await hostDirectoryIsFree(t.dir);
+        const current = free ? null : await readHostFile(file).catch(() => null);
+        const currentEnv = free ? null : await readHostFile(envFile).catch(() => null);
+        snapshots.push({ dir: t.dir, project: t.project, existed: !free, compose: current, env: currentEnv });
+        const safe = t.project.replace(/[^a-zA-Z0-9_.-]/g, '_');
+        if (current !== null) fs.writeFileSync(path.join(snapDir, `${safe}.docker-compose.pre-merge.yml`), current);
+
+        if (!t.exists) {
+          if (free) {
+            log(`${t.project} is already gone.`);
+          } else {
+            log(`Saving ${t.project}’s files first…`);
+            archives.push(...(await archiveStackData({ project: t.project, workingDir: t.dir, archiveDir: snapDir, log })));
+            const down = await runComposeCapture(t.dir, 'down -v --remove-orphans');
+            if (!down.ok) log(composeErrorTail(down.output) || 'Couldn’t stop it cleanly; continuing.');
+            for (const v of await getProjectVolumes(t.project)) await removeVolume(v.name);
+            if (!(await removeHostDirectory(t.dir))) throw new Error(`Couldn’t remove ${t.dir}.`);
+            const { unregisterCreatedStack } = await import('./stackService');
+            unregisterCreatedStack(t.project);
+            log(`Removed ${t.project}. Its files are in this restore’s backup.`);
+          }
+          resultFiles.push({ path: file, content: null });
+          return;
+        }
+
+        if (free) {
+          await createHostDirectory(t.dir);
+          if (t.data.length) await restoreStackData(t.data, { log });
+          else log('No saved files for this folder; putting the compose file back.');
+        }
+        const compose = t.compose && t.compose.trim() ? t.compose : 'services: {}\n';
+        if (!(await writeHostFile(file, compose))) throw new Error(`Couldn’t write ${file}.`);
+        if (t.env) await writeHostFile(envFile, t.env);
+        log(`Put back ${t.project}’s compose file.`);
+        resultFiles.push({ path: file, content: compose });
+
+        const services = servicesOf(compose);
+        if (free) {
+          const { registerCreatedStack } = await import('./stackService');
+          registerCreatedStack({ project: t.project, workingDir: t.dir, configFiles: file, serviceCount: services.length, source: 'provisioned' });
+        }
+        if (!startApps) {
+          log('Left stopped. Start it from the dashboard when you’re ready.');
+          return;
+        }
+        // Compose makes the stack match the file: apps no longer in it are removed, missing ones started
+        const up = await runComposeCapture(t.dir, services.length ? 'up -d --remove-orphans' : 'down --remove-orphans');
+        if (!up.ok) {
+          const why = composeErrorTail(up.output);
+          throw new Error(`Docker couldn’t start ${t.project}${why ? `: ${why.split('\n').pop()}` : '.'}`);
+        }
+        log(services.length ? `${t.project} is running.` : `${t.project} has no apps.`);
+      });
+    }
+
+    if (standalone.length) {
+      await run(async (log) => {
+        for (const a of standalone) {
+          if (await containerExists(a.name)) {
+            log(`${a.name} already exists; left as it is.`);
+            continue;
+          }
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const created = await queryDockerEngine<any>(`/containers/create?name=${encodeURIComponent(a.name)}`, 'POST', a.spec, undefined, { keepLabels: true });
+          await queryDockerEngine(`/containers/${created.Id}/start`, 'POST');
+          recreated.push(a.name);
+          log(`${a.name} is running again as a standalone app.`);
+        }
+      });
+    }
+  } catch (err) {
+    failure = (err as Error).message || 'Restore failed';
+  }
+
+  // Save this restore as a change of its own (even a partial one, so it can be put back)
+  if (snapshots.length) {
+    const titles = plan.changes.map((c) => c.title);
+    const rec: MergeHistoryRecord = {
+      id: restoreId,
+      timestamp: new Date().toISOString(),
+      targetStackName: snapshots[0].project,
+      targetDirectory: snapshots[0].dir,
+      backupArchiveDir: snapDir,
+      sourceStacks: [],
+      affectedServices: [],
+      sourceConfigs: [],
+      status: 'active',
+      archiveSizeBytes: 0,
+      summary:
+        plan.point.kind === 'restore' && titles.length === 1
+          ? `undid “${titles[0]}”`
+          : titles.length === 1
+            ? `to before “${titles[0]}”`
+            : `to before ${titles.length} changes`,
+      type: 'RESTORE',
+      dirSnapshots: snapshots,
+      dataArchives: archives,
+      resultFiles,
+      revertedIds: failure ? [] : chain.map((r) => r.id),
+      recreatedApps: recreated,
+      activityId: currentActivityId(),
+      failed: failure && !resultFiles.length ? true : undefined,
+    };
+    saveMergeHistoryRecord(rec);
+  } else {
+    fs.rmSync(snapDir, { recursive: true, force: true });
+  }
+
+  if (failure) {
+    emit({ type: 'failed', log: `${failure} Stacks already restored stay restored; this restore is saved in Restore so it can be put back.` });
+    return;
+  }
+
+  // Mark what was restored. Undoing a restore brings the changes it had restored back into effect.
+  const now = new Date().toISOString();
+  const activityId = currentActivityId();
+  for (const r of chain) {
+    const fresh = getHistoryRecordById(r.id);
+    if (!fresh) continue;
+    fresh.status = 'reverted';
+    fresh.revertedAt = now;
+    fresh.revertActivityId = activityId;
+    saveMergeHistoryRecord(fresh);
+    if (fresh.type === 'RESTORE') {
+      for (const rid of fresh.revertedIds || []) {
+        const orig = getHistoryRecordById(rid);
+        if (orig && !chain.some((c) => c.id === rid)) {
+          orig.status = 'active';
+          orig.revertedAt = undefined;
+          orig.revertActivityId = undefined;
+          saveMergeHistoryRecord(orig);
+        }
+      }
+    }
+  }
+  emit({ type: 'completed', payload: { restored: chain.length } });
 }
 
 // ----------------------------------------------------------------------------
@@ -402,10 +707,7 @@ export function setPinned(id: string, pinned: boolean): RestorePoint | undefined
   return getRestorePoint(id);
 }
 
-/** Removes the saved copy only. Live stacks and their data are never touched. */
-export function deleteBackup(id: string, reason: 'manual' | 'expired' = 'manual'): boolean {
-  const r = getHistoryRecordById(id);
-  if (!r) return false;
+function removeBackupFiles(r: MergeHistoryRecord) {
   const root = resolveBackupDir();
   if (r.backupArchiveDir && norm(r.backupArchiveDir).startsWith(norm(root) + '/')) {
     try {
@@ -414,10 +716,27 @@ export function deleteBackup(id: string, reason: 'manual' | 'expired' = 'manual'
       // ignore
     }
   }
+}
+
+/** Expired backups: the saved copy goes, the change stays in the Archive as history. */
+function expireBackup(r: MergeHistoryRecord) {
+  removeBackupFiles(r);
   r.backupDeletedAt = new Date().toISOString();
   saveMergeHistoryRecord(r);
-  record('info', 'backup', `${reason === 'expired' ? 'Removed an expired backup' : 'Deleted the backup'} of “${titleOf(r).title}”`, { id, dir: r.backupArchiveDir });
-  return true;
+  record('info', 'backup', `Removed an expired backup of “${titleOf(r).title}”`, { id: r.id });
+}
+
+/** Deletes changes and their backups (one or many). Live stacks and their data are never touched. */
+export function deleteChanges(ids: string[]): number {
+  const list = getMergeHistory().filter((r) => ids.includes(r.id));
+  for (const r of list) removeBackupFiles(r);
+  removeHistoryRecords(list.map((r) => r.id));
+  if (list.length) {
+    record('info', 'backup', `Deleted ${list.length} change${list.length === 1 ? '' : 's'} from Restore`, {
+      removed: list.map((r) => ({ id: r.id, title: titleOf(r).title })),
+    });
+  }
+  return list.length;
 }
 
 /** Removes archived entries (whose backups are already gone) from the list. */
@@ -434,7 +753,7 @@ export function enforceBackupRetention(): void {
   if (!keepDays) return;
   const cutoff = new Date(Date.now() - keepDays * 86400000).toISOString();
   for (const r of getMergeHistory()) {
-    if (!r.pinned && r.timestamp < cutoff && backupExists(r)) deleteBackup(r.id, 'expired');
+    if (!r.pinned && r.timestamp < cutoff && backupExists(r)) expireBackup(r);
   }
 }
 

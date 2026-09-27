@@ -14,17 +14,15 @@ import {
 } from './dockerService';
 import {
   createPreMergeSnapshot,
-  getHistoryRecordById,
   markMergeAsReverted,
   resolveBackupDir,
   saveMergeHistoryRecord,
 } from './historyService';
-import { readHostFile, writeHostFile, checkHostFileExists, forceRemoveContainer, createHostDirectory } from './hostFsService';
+import { readHostFile, writeHostFile, forceRemoveContainer } from './hostFsService';
 import { record, setActivityTitle, currentActivityId } from './activityLog';
 import type { MergeHistoryRecord } from './historyService';
 import {
   archiveStackData,
-  restoreStackData,
   runComposeInDir,
   runComposeCapture,
   composeErrorTail,
@@ -362,6 +360,7 @@ export async function executeStreamingPipeline(
   let targetComposeWritten = false;
   const editedSources: SourceStackGroup[] = [];
   let moveRecord: MergeHistoryRecord | undefined;
+  const standaloneApps: { name: string; spec: Record<string, unknown> }[] = [];
   const resultFiles: { path: string; content: string }[] = [];
 
   try {
@@ -388,6 +387,25 @@ export async function executeStreamingPipeline(
     await run(2, async () => {
       for (const c of movingContainers) {
         const originalName = c.name.replace(/^\//, '');
+        // A standalone (docker run) app has no compose file to go back to: keep its full definition
+        if (!c.compose?.project && !isDemo) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const inspect = await queryDockerEngine<any>(`/containers/${c.id}/json`);
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const endpoints: Record<string, any> = {};
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          for (const [net, ep] of Object.entries<any>(inspect.NetworkSettings?.Networks || {})) {
+            endpoints[net] = {
+              Aliases: (ep.Aliases || []).filter((a: string) => !String(inspect.Id).startsWith(a)),
+              IPAMConfig: ep.IPAMConfig || undefined,
+              Links: ep.Links || undefined,
+            };
+          }
+          const cfg = { ...(inspect.Config || {}) };
+          if (cfg.Hostname && String(inspect.Id).startsWith(cfg.Hostname)) delete cfg.Hostname;
+          standaloneApps.push({ name: originalName, spec: { ...cfg, HostConfig: inspect.HostConfig, NetworkingConfig: { EndpointsConfig: endpoints } } });
+          log(`Saved ${c.cleanName}’s settings, so a restore can recreate it exactly.`, 2);
+        }
         log(`Stopping ${c.cleanName}...`, 2);
         if (!isDemo) await stopContainerAndWait(c.id);
         const asideName = `${originalName}__moving_${mergeId.slice(-5)}`;
@@ -419,6 +437,7 @@ export async function executeStreamingPipeline(
       moveRecord = record;
       record.type = 'MERGE';
       record.activityId = currentActivityId();
+      record.standaloneApps = standaloneApps;
       record.summary = `Moved ${movingContainers.map((c) => c.cleanName).join(', ')} into "${req.targetStackName}"`;
       record.movedServices = Array.from(sourceGroups.values()).map((g) => ({
         project: g.project,
@@ -696,199 +715,6 @@ export async function runHostDockerCompose(
   }
 
   return false;
-}
-
-/**
- * Undo (revert) pipeline for History entries.
- *
- *  - Stack delete: re-create the folder and volumes from the data backup, restore compose/.env,
- *    start the stack if it had apps, and re-register it so the dashboard shows it again.
- *  - Move (merge): stop the target stack, restore its previous compose file, restore the old stacks'
- *    compose files (which had the moved apps removed), and start everything again. Moves never
- *    delete data, so live data is left alone; the data backup stays on disk as a safety net.
- *  - Compose install: stop the target stack and restore its previous compose file.
- */
-export async function executeStreamingRevert(
-  mergeId: string,
-  emit: (event: PipelineStreamEvent) => void,
-  /** startApps: false puts files and data back without starting anything (deleted stacks only) */
-  opts: { startApps?: boolean } = {}
-): Promise<void> {
-  const startApps = opts.startApps !== false;
-  const record = getHistoryRecordById(mergeId);
-  const { isDemo } = await getContainersList();
-
-  const logsAccumulator: string[] = [];
-  const log = (msg: string, stepIndex?: number) => {
-    logsAccumulator.push(msg);
-    emit({ type: 'log', mergeId, stepIndex, log: msg, timestamp: new Date().toISOString() });
-  };
-  const updateStep = (stepIndex: number, stepId: string, stepName: string, status: PipelineStepStatus, durationMs?: number) => {
-    emit({ type: 'step_update', mergeId, stepIndex, stepId, stepName, status, durationMs, timestamp: new Date().toISOString() });
-  };
-
-  const STEPS = [
-    { index: 1, id: 'stop_changed', name: 'Stopping moved apps' },
-    { index: 2, id: 'restore_data', name: 'Restoring data' },
-    { index: 3, id: 'restore_compose', name: 'Restoring compose files' },
-    { index: 4, id: 'restart', name: startApps ? 'Starting apps' : 'Adding it back to the dashboard' },
-    { index: 5, id: 'revert_complete', name: 'Finishing up' },
-  ];
-  for (const st of STEPS) updateStep(st.index, st.id, st.name, 'pending');
-  const run = async (i: number, fn: () => Promise<void>) => {
-    const st = STEPS[i - 1];
-    const t = Date.now();
-    updateStep(st.index, st.id, st.name, 'running');
-    try {
-      await fn();
-    } catch (err) {
-      updateStep(st.index, st.id, st.name, 'failed', Date.now() - t);
-      throw err;
-    }
-    updateStep(st.index, st.id, st.name, 'success', Date.now() - t);
-  };
-
-  try {
-    if (!record) throw new Error('This change is no longer in Restore.');
-    if (record.status === 'reverted') throw new Error('This change was already restored.');
-    if (record.backupDeletedAt) throw new Error('The backup for this change was removed, so it can’t be restored.');
-
-    // Records written before the `type` field existed are recognised by their id prefix
-    const isDeleteRevert = record.type === 'STACK_DELETE' || mergeId.startsWith('delete_');
-    const targetDir = record.targetDirectory;
-    const targetComposePath = path.posix.join(targetDir, 'docker-compose.yml');
-
-    let restoredTarget = record.preMergeComposeContent;
-    if (!restoredTarget && record.targetComposeBackupPath && fs.existsSync(record.targetComposeBackupPath)) {
-      restoredTarget = fs.readFileSync(record.targetComposeBackupPath, 'utf8');
-    }
-    const hadNoServices =
-      (record.deletedStack?.serviceCount ?? 0) === 0 &&
-      !(record.sourceConfigs || []).some((sc) => sc.containers && sc.containers.length > 0);
-
-    // 1. Stop what the change started
-    await run(1, async () => {
-      if (isDeleteRevert) {
-        log('Nothing to stop: the stack was deleted.', 1);
-        return;
-      }
-      if (isDemo) return;
-      if (restoredTarget && restoredTarget.trim()) {
-        // The stack existed before: remove only the apps the move added; its own apps keep running
-        const moved = new Set((record.movedServices || []).flatMap((m) => m.services));
-        const filters = encodeURIComponent(JSON.stringify({ label: [`com.docker.compose.project.working_dir=${targetDir}`] }));
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const list = await queryDockerEngine<any[]>(`/containers/json?all=1&filters=${filters}`).catch(() => [] as any[]);
-        let n = 0;
-        for (const c of list || []) {
-          if (moved.has(c.Labels?.['com.docker.compose.service'])) {
-            await forceRemoveContainer(c.Id);
-            n++;
-          }
-        }
-        log(n ? `Stopped ${n} moved app${n === 1 ? '' : 's'} in ${record.targetStackName}.` : `No moved apps were running in ${record.targetStackName}.`, 1);
-      } else {
-        // The move created this stack: everything in it was moved there
-        await runComposeInDir(targetDir, 'down --remove-orphans');
-        log(`Stopped ${record.targetStackName}.`, 1);
-      }
-    });
-
-    // 2. Data
-    await run(2, async () => {
-      if (!isDeleteRevert) {
-        log('Moves never delete data, so live data is left as it is.', 2);
-        return;
-      }
-      if (record.dataArchives && record.dataArchives.length > 0 && !isDemo) {
-        await restoreStackData(record.dataArchives, { log: (m) => log(m, 2) });
-      } else if (record.dataBackupSkipped) {
-        log('The data backup was skipped when this stack was deleted, so only its compose file can be restored.', 2);
-      } else {
-        log('No data backup exists for this entry (it predates data backups). Restoring the compose file only.', 2);
-      }
-      if (!isDemo) await createHostDirectory(targetDir);
-    });
-
-    // 3. Compose files (+ .env for deletes)
-    await run(3, async () => {
-      if ((!restoredTarget || !restoredTarget.trim()) && (hadNoServices || !isDeleteRevert)) {
-        // Deleted empty stack, or a move that created a brand-new stack
-        restoredTarget = 'services: {}\n';
-      }
-      if (restoredTarget && !isDemo) {
-        await writeHostFile(targetComposePath, restoredTarget);
-        log(`Restored ${targetComposePath}.`, 3);
-      }
-
-      if (isDeleteRevert) {
-        let envContent = record.preMergeEnvContent;
-        if (!envContent && record.targetEnvBackupPath && fs.existsSync(record.targetEnvBackupPath)) {
-          envContent = fs.readFileSync(record.targetEnvBackupPath, 'utf8');
-        }
-        if (envContent && envContent.trim() && !isDemo) {
-          await writeHostFile(path.posix.join(targetDir, '.env'), envContent);
-          log('Restored .env.', 3);
-        }
-      }
-
-      // Old stacks that had apps moved out of them
-      for (const sc of record.sourceConfigs || []) {
-        if (!sc.workingDir || sc.workingDir === targetDir || !sc.composeContent) continue;
-        const p = sc.composePath || path.posix.join(sc.workingDir, 'docker-compose.yml');
-        if (!isDemo) await writeHostFile(p, sc.composeContent);
-        log(`Restored ${p}.`, 3);
-      }
-    });
-
-    // 4. Start things again
-    await run(4, async () => {
-      let targetServiceCount = 0;
-      try {
-        const parsed = yaml.parse(restoredTarget || '');
-        targetServiceCount = parsed?.services ? Object.keys(parsed.services).length : 0;
-      } catch {
-        targetServiceCount = 1;
-      }
-      if (startApps && targetServiceCount > 0 && !isDemo) {
-        await runComposeInDir(targetDir, 'up -d');
-        log(`Started ${record.targetStackName}.`, 4);
-      } else if (!startApps) {
-        log('Left stopped, as asked. Start it from the dashboard when you’re ready.', 4);
-      }
-
-      for (const sc of record.sourceConfigs || []) {
-        if (!startApps || !sc.workingDir || sc.workingDir === targetDir) continue;
-        if (!isDemo) await runComposeInDir(sc.workingDir, 'up -d');
-        log(`Started ${sc.project}.`, 4);
-      }
-
-      if (isDeleteRevert) {
-        const { registerCreatedStack } = await import('./stackService');
-        const project = record.deletedStack?.project || record.targetStackName || path.posix.basename(targetDir);
-        registerCreatedStack({
-          project,
-          workingDir: targetDir,
-          configFiles: record.deletedStack?.configFiles || targetComposePath,
-          serviceCount: record.deletedStack?.serviceCount ?? 0,
-          source: 'provisioned',
-        });
-        log(`${project} is back on the dashboard.`, 4);
-      }
-    });
-
-    // 5. Ledger
-    await run(5, async () => {
-      markMergeAsReverted(mergeId, logsAccumulator, { activityId: currentActivityId() });
-      log('Restored.', 5);
-    });
-
-    emit({ type: 'completed', mergeId, timestamp: new Date().toISOString(), payload: { reverted: true } });
-  } catch (revertErr) {
-    const errorMsg = (revertErr as Error).message || 'Restore failed';
-    log(`Problem: ${errorMsg}`);
-    emit({ type: 'failed', mergeId, log: errorMsg, timestamp: new Date().toISOString() });
-  }
 }
 
 // Elevate Script Generator

@@ -128,13 +128,20 @@ function defaultTimeoutMs(path: string, method: string): number {
 }
 
 // Low-level HTTP request over Unix Domain Socket (every call is recorded in the activity log)
-export function queryDockerEngine<T>(path: string, method: string = 'GET', body?: unknown, timeoutMs?: number): Promise<T> {
+export function queryDockerEngine<T>(
+  path: string,
+  method: string = 'GET',
+  body?: unknown,
+  timeoutMs?: number,
+  /** keepLabels: the container being created is a real app (e.g. a standalone app put back by Restore), not a helper */
+  opts: { keepLabels?: boolean } = {}
+): Promise<T> {
   const startTime = Date.now();
   const timeout = timeoutMs ?? defaultTimeoutMs(path, method);
 
   // Every container Manifexus creates itself is a short-lived helper (file access, backups,
   // compose runs, terminals). Tag them so they never show up or get counted as apps.
-  if (method === 'POST' && path.startsWith('/containers/create') && body && typeof body === 'object') {
+  if (!opts.keepLabels && method === 'POST' && path.startsWith('/containers/create') && body && typeof body === 'object') {
     const b = body as { Labels?: Record<string, string> };
     body = { ...b, Labels: { ...(b.Labels || {}), [HELPER_LABEL]: 'true' } };
   }

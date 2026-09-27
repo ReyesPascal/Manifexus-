@@ -222,7 +222,7 @@ const ROUTES: [string, RegExp, Describer][] = [
   ['POST', /^\/api\/stacks\/delete$/, (_r, b) => ({ type: 'delete', title: `Delete stack ${b?.projectName || ''}`.trim() })],
   ['POST', /^\/api\/restore\/([^/]+)\/run$/, () => ({ type: 'undo', title: 'Restore' })],
   ['POST', /^\/api\/restore\/([^/]+)\/copy$/, () => ({ type: 'undo', title: 'Restore a backup to another folder' })],
-  ['POST', /^\/api\/restore\/([^/]+)\/delete-backup$/, () => ({ type: 'undo', title: 'Delete a backup' })],
+  ['POST', /^\/api\/restore\/delete$/, (_r, b) => ({ type: 'undo', title: `Delete ${Array.isArray(b?.ids) && b.ids.length > 1 ? `${b.ids.length} changes` : 'a change'} from Restore` })],
   ['POST', /^\/api\/restore\/([^/]+)\/pin$/, (_r, b) => ({ type: 'settings', title: b?.pinned === false ? 'Unpin a backup' : 'Pin a backup' })],
   ['POST', /^\/api\/restore\/archive\/clear$/, () => ({ type: 'undo', title: 'Clear archived changes' })],
   ['POST', /^\/api\/restore\/settings$/, () => ({ type: 'settings', title: 'Change how long backups are kept' })],
