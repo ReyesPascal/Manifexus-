@@ -1,10 +1,8 @@
 import React, { useState } from 'react';
 import {
   Shield,
-  Server,
-  Activity,
   Cpu,
-  HardDrive,
+  Layers,
   Clock,
   Terminal,
   ExternalLink,
@@ -25,6 +23,8 @@ interface ManifexusHeroHeaderProps {
   versionLabel?: string;
   updateAvailable?: boolean;
   onOpenUpdates?: () => void;
+  /** Number of stacks, same as the Stacks card */
+  stackCount?: number;
 }
 
 export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
@@ -36,14 +36,13 @@ export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
   versionLabel,
   updateAvailable,
   onOpenUpdates,
+  stackCount,
 }) => {
   const [showQuickLogs, setShowQuickLogs] = useState(false);
 
-  const isRunning = container?.state === 'running' || systemStatus?.dockerConnected;
   const isElevated = privileges?.mode === 'elevated';
-  const containerId = container?.id ? container.id.substring(0, 12) : 'local-core';
-  const uptime = container?.status || 'Up & Healthy';
   const port = container?.ports?.[0]?.publicPort || 3334;
+  const socketOn = !!systemStatus?.dockerConnected;
 
   return (
     <div className="w-full mb-6">
@@ -100,13 +99,8 @@ export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
               {/* Telemetry Pills */}
               <div className="flex flex-wrap items-center gap-2 sm:gap-3 mt-3 text-[11px] font-mono text-slate-400">
                 <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-slate-900/90 border border-slate-800 text-slate-300">
-                  <Activity className="w-3.5 h-3.5 text-emerald-400" />
-                  {uptime}
-                </span>
-
-                <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-slate-900/90 border border-slate-800 text-slate-300">
-                  <Server className="w-3.5 h-3.5 text-cyan-400" />
-                  ID: <code className="text-cyan-300 font-bold">{containerId}</code>
+                  <Layers className="w-3.5 h-3.5 text-purple-400" />
+                  Stacks: <code className="text-purple-300 font-bold">{stackCount ?? '…'}</code>
                 </span>
 
                 <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-slate-900/90 border border-slate-800 text-slate-300">
@@ -114,9 +108,14 @@ export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
                   Port: <code className="text-slate-200">:{port}</code>
                 </span>
 
-                <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-slate-900/90 border border-slate-800 text-slate-300">
-                  <HardDrive className="w-3.5 h-3.5 text-purple-400" />
-                  Backups: <code className="text-purple-300 font-bold">/app/backups</code>
+                <span
+                  className={`flex items-center gap-1.5 px-2 py-0.5 rounded-md border ${
+                    socketOn ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-300' : 'bg-rose-950/40 border-rose-500/40 text-rose-300'
+                  }`}
+                  title={socketOn ? 'Connected to the Docker socket' : 'Not connected to the Docker socket'}
+                >
+                  <span className={`w-2 h-2 rounded-full ${socketOn ? 'bg-emerald-400' : 'bg-rose-400'}`} />
+                  Docker socket: <code className="font-bold">{socketOn ? 'On' : 'Off'}</code>
                 </span>
 
               </div>

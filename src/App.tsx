@@ -532,6 +532,7 @@ export default function App() {
           versionLabel={softwareUpdate?.current.label}
           updateAvailable={softwareUpdate?.status === 'available'}
           onOpenUpdates={() => setIsUpdatesOpen(true)}
+          stackCount={stats.stacks}
         />
 
         {/* Standby / Demo Mode Notification Banner (Visible when socket is not attached) */}
