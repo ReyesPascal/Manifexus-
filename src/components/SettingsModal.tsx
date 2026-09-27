@@ -1,19 +1,36 @@
-import React, { useEffect, useState } from 'react';
-import { Button, FieldRow, Group, Row, SectionFooter, SectionHeader, Segmented, Sheet, ios } from './ui/ios';
+import React, { useEffect, useRef, useState } from 'react';
+import { BackButton, FieldRow, Group, Row, SectionFooter, SectionHeader, Segmented, Sheet, ios } from './ui/ios';
 import { ManifexusConfig, AutomationPrivileges } from '../types';
 
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
   config: ManifexusConfig | null;
+  /** Saves the changed settings; throws when the save didn't go through */
   onSaveConfig: (updated: Partial<ManifexusConfig>) => Promise<void>;
   /** The folder Manifexus would use if no location is saved (shown as the placeholder) */
   detectedStacksDir?: string;
   privileges?: AutomationPrivileges | null;
   /** Opens the Host Automation & Privileges window */
   onOpenAutomationModal?: () => void;
+  /** Opened from another screen (e.g. Diagnostics): shows "‹ label" to go back to it */
+  backLabel?: string;
+  onBack?: () => void;
 }
 
+type Field = 'host' | 'dir' | 'refresh';
+
+/** Small green check shown in a row for a moment after it saves */
+const SavedCheck: React.FC = () => (
+  <svg width="15" height="12" viewBox="0 0 14 11" aria-label="Saved" className="flex-shrink-0 motion-safe:animate-[ios-fade-in_150ms_ease-out]">
+    <path d="M1.5 5.8 5.2 9.5 12.5 1.5" fill="none" stroke={ios.green} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+);
+
+/**
+ * Settings save as you change them, like the iPhone's Settings app: choices save on tap, text
+ * fields when you press Enter or leave the field. No Save or Cancel; Done just closes.
+ */
 export const SettingsModal: React.FC<SettingsModalProps> = ({
   isOpen,
   onClose,
@@ -22,80 +39,107 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   detectedStacksDir,
   privileges,
   onOpenAutomationModal,
+  backLabel,
+  onBack,
 }) => {
-  // Hooks must run on every render, so they come before the early return
   const [hostAddress, setHostAddress] = useState(config?.hostAddress || 'localhost');
   const [refreshInterval, setRefreshInterval] = useState(config?.refreshIntervalSeconds || 10);
   const [stacksDir, setStacksDir] = useState(config?.stacksDir || '');
-  const [isSaving, setIsSaving] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
+  const [dirError, setDirError] = useState<string | null>(null);
+  const [status, setStatus] = useState<{ kind: 'saving' | 'saved' | 'failed'; field: Field } | null>(null);
+  const clearTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   useEffect(() => {
     if (isOpen) {
       setHostAddress(config?.hostAddress || 'localhost');
       setRefreshInterval(config?.refreshIntervalSeconds || 10);
       setStacksDir(config?.stacksDir || '');
-      setSaveError(null);
+      setDirError(null);
+      setStatus(null);
     }
   }, [isOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  useEffect(() => () => clearTimeout(clearTimer.current), []);
+
   const isElevated = privileges?.mode === 'elevated';
 
-  const handleSubmit = async () => {
-    const dir = stacksDir.trim().replace(/\/+$/, '');
-    if (dir && !dir.startsWith('/')) {
-      setSaveError('The stack location must be a full path starting with /, like /home/you/stacks.');
-      return;
-    }
-    setIsSaving(true);
+  const save = async (field: Field, patch: Partial<ManifexusConfig>) => {
+    clearTimeout(clearTimer.current);
+    setStatus({ kind: 'saving', field });
     try {
-      await onSaveConfig({
-        hostAddress: hostAddress.trim() || 'localhost',
-        refreshIntervalSeconds: Number(refreshInterval) || 10,
-        stacksDir: dir,
-      });
-      onClose();
-    } finally {
-      setIsSaving(false);
+      await onSaveConfig(patch);
+      setStatus({ kind: 'saved', field });
+      clearTimer.current = setTimeout(() => setStatus(null), 2200);
+    } catch {
+      setStatus({ kind: 'failed', field });
     }
   };
 
+  /** Text fields save when they're done being edited, and only if something changed */
+  const commitHost = () => {
+    const v = hostAddress.trim() || 'localhost';
+    if (v !== hostAddress) setHostAddress(v);
+    if (v !== (config?.hostAddress || 'localhost')) void save('host', { hostAddress: v });
+  };
+  const commitDir = () => {
+    const dir = stacksDir.trim().replace(/\/+$/, '');
+    if (dir && !dir.startsWith('/')) {
+      setDirError('The stack location must be a full path starting with /, like /home/you/stacks.');
+      return;
+    }
+    setDirError(null);
+    if (dir !== stacksDir) setStacksDir(dir);
+    if (dir !== (config?.stacksDir || '')) void save('dir', { stacksDir: dir });
+  };
+
+  // Closing (Done, Escape, backdrop) saves anything still being typed
+  const close = () => {
+    commitHost();
+    commitDir();
+    onClose();
+  };
+
   const refreshOptions = Array.from(new Set([5, 10, 30, 60, Number(refreshInterval) || 10])).sort((a, b) => a - b);
+  const savedIn = (f: Field) => (status?.kind === 'saved' && status.field === f ? <SavedCheck /> : null);
 
   return (
     <Sheet
       open={isOpen}
-      onClose={onClose}
+      onClose={close}
       title="Settings"
-      leftAction={
-        <button type="button" onClick={onClose} className="text-[17px] rounded hover:opacity-80 focus-visible:outline-2 focus-visible:outline-[#0A84FF]" style={{ color: ios.blue }}>
-          Cancel
-        </button>
-      }
-      rightAction={<span />}
+      leftAction={backLabel && onBack ? <BackButton label={backLabel} onClick={() => { commitHost(); commitDir(); onBack(); }} /> : undefined}
       footer={
-        <div className="flex justify-end">
-          <Button onClick={() => handleSubmit()} disabled={isSaving} className="w-full sm:w-auto sm:min-w-[160px]">
-            {isSaving ? 'Saving…' : 'Save'}
-          </Button>
+        <div className="flex items-center justify-between text-[13px] min-h-[20px]" style={{ color: ios.secondary }}>
+          <span>Changes save as you make them.</span>
+          {status && (
+            <span
+              key={`${status.kind}-${status.field}`}
+              className="inline-flex items-center gap-1.5 font-medium motion-safe:animate-[ios-fade-in_150ms_ease-out]"
+              style={{ color: status.kind === 'failed' ? ios.red : status.kind === 'saved' ? ios.green : ios.secondary }}
+            >
+              {status.kind === 'saved' && <SavedCheck />}
+              {status.kind === 'saving' ? 'Saving…' : status.kind === 'saved' ? 'Saved' : 'Couldn’t save. Try again.'}
+            </span>
+          )}
         </div>
       }
     >
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          handleSubmit();
-        }}
-        className="space-y-7"
-      >
+      <div className="space-y-7">
         <section>
           <SectionHeader>Server Address</SectionHeader>
           <Group>
-            <FieldRow id="settings-host" label="Address" value={hostAddress} onChange={setHostAddress} placeholder="192.168.1.150 or homelab.local" mono />
+            <FieldRow
+              id="settings-host"
+              label="Address"
+              value={hostAddress}
+              onChange={setHostAddress}
+              onCommit={commitHost}
+              trailing={savedIn('host')}
+              placeholder="192.168.1.150 or homelab.local"
+              mono
+            />
           </Group>
-          <SectionFooter>
-            Used for the links on app cards, like http://{hostAddress || 'localhost'}:8080.
-          </SectionFooter>
+          <SectionFooter>Used for the links on app cards, like http://{hostAddress || 'localhost'}:8080.</SectionFooter>
         </section>
 
         <section>
@@ -107,15 +151,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               value={stacksDir}
               onChange={(v) => {
                 setStacksDir(v);
-                setSaveError(null);
+                setDirError(null);
               }}
+              onCommit={commitDir}
+              trailing={savedIn('dir')}
               placeholder={detectedStacksDir ? `Automatic (${detectedStacksDir})` : 'Automatic'}
               mono
-              invalid={Boolean(saveError)}
+              invalid={Boolean(dirError)}
             />
           </Group>
-          <SectionFooter tone={saveError ? 'danger' : 'default'}>
-            {saveError || 'The folder on your server where new stacks are created. Leave it empty to use the folder your stacks are already in.'}
+          <SectionFooter tone={dirError ? 'danger' : 'default'}>
+            {dirError || 'The folder on your server where new stacks are created. Leave it empty to use the folder your stacks are already in.'}
           </SectionFooter>
         </section>
 
@@ -124,7 +170,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <Segmented
             label="Refresh every"
             value={String(refreshInterval)}
-            onChange={(v) => setRefreshInterval(Number(v))}
+            onChange={(v) => {
+              const n = Number(v);
+              setRefreshInterval(n);
+              void save('refresh', { refreshIntervalSeconds: n });
+            }}
             options={refreshOptions.map((n) => ({ value: String(n), label: `${n} s` }))}
           />
           <SectionFooter>How often the dashboard checks Docker for new apps and status changes.</SectionFooter>
@@ -157,8 +207,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         <p className="text-[12px] text-center" style={{ color: ios.tertiary }}>
           Settings are saved in /data/config.json on your server.
         </p>
-        <button type="submit" hidden aria-hidden="true" />
-      </form>
+      </div>
     </Sheet>
   );
 };

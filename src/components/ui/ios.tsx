@@ -315,7 +315,11 @@ export const FieldRow: React.FC<{
   mono?: boolean;
   invalid?: boolean;
   id: string;
-}> = ({ label, value, onChange, placeholder, autoFocus, mono, invalid, id }) => (
+  /** Called when the field is done being edited: Enter, or leaving the field */
+  onCommit?: () => void;
+  /** Shown after the field, e.g. a "saved" checkmark */
+  trailing?: React.ReactNode;
+}> = ({ label, value, onChange, placeholder, autoFocus, mono, invalid, id, onCommit, trailing }) => (
   <label htmlFor={id} className="ios-row relative flex items-center gap-3 px-4 min-h-[44px] cursor-text">
     <span className="text-[15px] w-[76px] flex-shrink-0" style={{ color: ios.label }}>
       {label}
@@ -329,11 +333,19 @@ export const FieldRow: React.FC<{
       autoComplete="off"
       spellCheck={false}
       aria-invalid={invalid || undefined}
+      onBlur={onCommit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' && onCommit) {
+          e.preventDefault();
+          onCommit();
+        }
+      }}
       className={`flex-1 min-w-0 bg-transparent py-[11px] text-right focus:outline-none placeholder:text-[rgba(235,235,245,0.3)] ${
         mono ? 'text-[13px] font-mono' : 'text-[15px]'
       }`}
       style={{ color: invalid ? ios.orange : ios.label }}
     />
+    {trailing}
   </label>
 );
 
@@ -385,7 +397,11 @@ export const Sheet: React.FC<{
   bodyRef?: React.Ref<HTMLDivElement>;
   /** Stacking order; raise it for sheets that open on top of other screens */
   zIndex?: number;
-}> = ({ open, title, subtitle, onClose, closeLabel = 'Done', rightAction, leftAction, footer, toolbar, children, bodyRef, zIndex = 50 }) => {
+  /** Shown just before Done, e.g. a settings gear when the left side holds a Back button */
+  rightExtra?: React.ReactNode;
+  /** Kept open but out of sight while another screen is pushed on top of it (keeps its place and scroll) */
+  hidden?: boolean;
+}> = ({ open, title, subtitle, onClose, closeLabel = 'Done', rightAction, leftAction, footer, toolbar, children, bodyRef, zIndex = 50, rightExtra, hidden }) => {
   // Focus the sheet itself when it opens (not its first button, which would look selected),
   // and hand focus back to whatever opened it when it closes
   const panelRef = useRef<HTMLDivElement>(null);
@@ -418,7 +434,8 @@ export const Sheet: React.FC<{
   return (
     <div
       className={sheetBackdropClass}
-      style={{ fontFamily: ios.font, zIndex }}
+      style={{ fontFamily: ios.font, zIndex, display: hidden ? 'none' : undefined }}
+      aria-hidden={hidden || undefined}
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -435,7 +452,8 @@ export const Sheet: React.FC<{
         <div className="relative px-4 pt-3.5 pb-3" style={{ borderBottom: `0.5px solid ${ios.separator}` }}>
           <div className="h-[28px] flex items-center justify-between">
             <span className="flex items-center min-w-[70px]">{leftAction}</span>
-            <span className="flex items-center justify-end min-w-[70px]">
+            <span className="flex items-center justify-end gap-4 min-w-[70px]">
+              {rightExtra}
               {rightAction ?? (
                 <button
                   type="button"
@@ -474,6 +492,22 @@ export const Sheet: React.FC<{
     </div>
   );
 };
+
+/** Settings gear for a Sheet's title bar (top left, or beside Done when the left holds a Back button). */
+export const GearButton: React.FC<{ onClick: () => void; label: string }> = ({ onClick, label }) => (
+  <button
+    type="button"
+    onClick={onClick}
+    aria-label={label}
+    title={label}
+    className="p-1 -m-1 rounded hover:opacity-80 focus-visible:outline-2 focus-visible:outline-[#0A84FF]"
+    style={{ color: ios.blue }}
+  >
+    <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1.08-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z" />
+    </svg>
+  </button>
+);
 
 /** "‹ Back" button for the left side of a Sheet's title bar. */
 export const BackButton: React.FC<{ label: string; onClick: () => void }> = ({ label, onClick }) => (

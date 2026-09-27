@@ -41,7 +41,7 @@ Manifexus is a lightweight, self-hosted central command hub that automatically t
 * **Restores can be undone:** every restore saves how the stacks looked just before it, and shows up in Restore like any other change.
 * **Standalone apps** (started with `docker run`) that were moved into a stack are recreated exactly as they were — same settings, volumes, ports and restart policy — when the move is restored.
 * **Recover without restoring everything:** put a deleted stack's files back without starting it, copy a backup into another folder, browse a backup and download single files, or download the whole backup as a `.tar.gz`.
-* **Backups are kept for 30 days** by default (7 days to forever in Restore → Backups). Pin a backup to keep it forever. Expired backups move their change to the Archive. Delete several changes at once with **Select**, or clean up restored changes and deleted empty stacks in one tap from Restore → Backups.
+* **Backups are kept for 30 days** by default (7 days to forever in Restore Settings, the gear in Restore). Pin a backup to keep it forever. Expired backups move their change to the Archive. Restore Settings also has **Delete Changes…** to choose several at once, and one-tap clean up of restored changes and deleted empty stacks.
 
 ### 6. Diagnostics and app details
 * **Health in plain words:** Diagnostics (in the header) checks Docker, automation, stack folders, backup space, recent problems and updates, with anything that needs you listed first. Every app has the same view from its card's **Details** button.
@@ -49,6 +49,10 @@ Manifexus is a lightweight, self-hosted central command hub that automatically t
 * **Right now:** memory, CPU, processes and network for the app or Manifexus itself.
 * **App Output:** what the app itself has printed. Search, choose how much to show, copy or download. Errors are red and warnings orange. (For Manifexus itself, Diagnostics links to Activity instead.)
 * **Copy Report** copies a full troubleshooting report to paste into any AI assistant; **Download** saves it as a Markdown file.
+* **Fix it in place:** a check that points somewhere (Restore, Settings, Updates, Activity) opens that screen on top of Diagnostics, with a Back button to return.
+
+### 7. Settings
+* **Changes save as you make them,** like the iPhone's Settings app: choices save on tap, text fields when you press Enter or leave the field. A checkmark confirms each save.
 
 ---
 

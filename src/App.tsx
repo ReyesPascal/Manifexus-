@@ -109,7 +109,9 @@ export default function App() {
 
   // Activity: the record of everything Manifexus did. Any screen can open it on a specific
   // activity with window.dispatchEvent(new CustomEvent('manifexus:open-activity', { detail: { id } })).
-  const [activity, setActivity] = useState<{ open: boolean; id?: string }>({ open: false });
+  const [activity, setActivity] = useState<{ open: boolean; id?: string; filter?: string }>({ open: false });
+  // A screen opened from Diagnostics / App Details sits on top of it, with a way back
+  const [overDetails, setOverDetails] = useState<null | 'activity' | 'restore' | 'updates' | 'settings'>(null);
   // The badge compares server timestamps only (the newest failure vs. the newest one already seen),
   // so a browser clock that's off can't hide it or make it stick
   const [unseenFailure, setUnseenFailure] = useState(false);
@@ -290,21 +292,16 @@ export default function App() {
   };
 
   // Save dashboard configuration (host IP, refresh interval)
+  // Throws when the save didn't go through, so Settings can say so
   const handleSaveConfig = async (updated: Partial<ManifexusConfig>) => {
-    try {
-      const res = await fetch('/api/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updated),
-      });
-      if (res.ok) {
-        const saved = await res.json();
-        setConfig(saved);
-        await fetchData(false);
-      }
-    } catch (err) {
-      console.error('Failed to save config:', err);
-    }
+    const res = await fetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updated),
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Couldn’t save settings.');
+    setConfig(await res.json());
+    void fetchData(false);
   };
 
   // Add / Edit Group
@@ -486,6 +483,24 @@ export default function App() {
   }, [filteredContainers, emptyStacks, searchQuery]);
 
   const hostAddress = config?.hostAddress || 'localhost';
+
+  // Screens opened on top of Diagnostics: Back returns to it, Done closes both
+  const detailsLabel = inspectContainer && manifexusHeroContainer && inspectContainer.id === manifexusHeroContainer.id ? 'Diagnostics' : 'App Details';
+  const backProps = (which: 'activity' | 'restore' | 'updates' | 'settings', close: () => void) =>
+    overDetails === which
+      ? {
+          backLabel: detailsLabel,
+          onBack: () => {
+            close();
+            setOverDetails(null);
+          },
+          onClose: () => {
+            close();
+            setOverDetails(null);
+            setInspectContainer(null);
+          },
+        }
+      : { onClose: close };
 
   return (
     <div className="min-h-screen bg-[#07090e] text-slate-100 flex flex-col font-sans selection:bg-cyan-500/30 selection:text-cyan-200">
@@ -902,6 +917,7 @@ export default function App() {
 
       {/* App details, and Diagnostics for Manifexus itself */}
       <AppDetailsSheet
+        covered={Boolean(overDetails)}
         container={inspectContainer}
         system={Boolean(inspectContainer && manifexusHeroContainer && inspectContainer.id === manifexusHeroContainer.id)}
         groups={config?.groups || []}
@@ -909,9 +925,24 @@ export default function App() {
         onClose={() => setInspectContainer(null)}
         onSaveOverride={handleSaveOverride}
         onAction={handleContainerAction}
-        onOpenUpdates={() => { setIsUpdatesOpen(true); refreshSoftwareUpdate(); }}
-        onOpenRestore={() => setIsRestoreOpen(true)}
-        onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenUpdates={() => {
+          setOverDetails('updates');
+          setIsUpdatesOpen(true);
+          refreshSoftwareUpdate();
+        }}
+        onOpenRestore={() => {
+          setOverDetails('restore');
+          setIsRestoreOpen(true);
+        }}
+        onOpenSettings={() => {
+          setOverDetails('settings');
+          setIsSettingsOpen(true);
+        }}
+        onOpenActivity={(filter) => {
+          setOverDetails('activity');
+          setActivity({ open: true, filter });
+          markFailuresSeen(lastFailureAt.current);
+        }}
       />
 
       {/* Custom Group Manager Modal */}
@@ -926,7 +957,7 @@ export default function App() {
       {/* Settings Modal */}
       <SettingsModal
         isOpen={isSettingsOpen}
-        onClose={() => setIsSettingsOpen(false)}
+        {...backProps('settings', () => setIsSettingsOpen(false))}
         config={config}
         onSaveConfig={handleSaveConfig}
         detectedStacksDir={config?.stacksDir ? undefined : defaultStacksDir}
@@ -967,7 +998,7 @@ export default function App() {
       />
 
       {/* Restore: every change's backup, restorable */}
-      <RestoreSheet open={isRestoreOpen} onClose={() => setIsRestoreOpen(false)} onChanged={() => fetchData(true)} />
+      <RestoreSheet open={isRestoreOpen} {...backProps('restore', () => setIsRestoreOpen(false))} onChanged={() => fetchData(true)} />
 
       {/* Directive 3: Create New Empty Stack Modal */}
       <CreateStackModal
@@ -992,7 +1023,7 @@ export default function App() {
 
       <SoftwareUpdateSheet
         open={isUpdatesOpen}
-        onClose={() => setIsUpdatesOpen(false)}
+        {...backProps('updates', () => setIsUpdatesOpen(false))}
         state={softwareUpdate}
         onStateChange={setSoftwareUpdate}
       />
@@ -1000,11 +1031,12 @@ export default function App() {
       <ActivitySheet
         open={activity.open}
         initialActivityId={activity.id}
-        onClose={() => {
+        initialFilter={activity.filter}
+        {...backProps('activity', () => {
           setActivity({ open: false });
           // Anything that failed while it was open was on screen
           refreshActivityBadge(true);
-        }}
+        })}
       />
 
       <PortsSheet

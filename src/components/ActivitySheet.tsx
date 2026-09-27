@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Alert,
   BackButton,
+  GearButton,
   Button,
   Checkmark,
   Group,
@@ -1048,7 +1049,12 @@ export const ActivitySheet: React.FC<{
   onClose: () => void;
   /** Open straight to this activity */
   initialActivityId?: string;
-}> = ({ open, onClose, initialActivityId }) => {
+  /** Open with this filter, e.g. 'problems' */
+  initialFilter?: string;
+  /** Opened from another screen (e.g. Diagnostics): shows "‹ label" to go back to it */
+  backLabel?: string;
+  onBack?: () => void;
+}> = ({ open, onClose, initialActivityId, initialFilter, backLabel, onBack }) => {
   const [tab, setTab] = useState<'activity' | 'events'>('activity');
   const [view, setView] = useState<{ kind: 'list' } | { kind: 'detail'; id: string } | { kind: 'settings' }>({ kind: 'list' });
   const [filter, setFilter] = useState('all');
@@ -1075,9 +1081,10 @@ export const ActivitySheet: React.FC<{
     if (open) {
       setView(initialActivityId ? { kind: 'detail', id: initialActivityId } : { kind: 'list' });
       setTab('activity');
+      setFilter(initialFilter && TYPE_FILTERS.some((t) => t.key === initialFilter) ? initialFilter : 'all');
       setEventsMounted(false);
     }
-  }, [open, initialActivityId]);
+  }, [open, initialActivityId, initialFilter]);
 
   useEffect(() => {
     const t = setTimeout(() => setDebounced(search), 250);
@@ -1174,6 +1181,7 @@ export const ActivitySheet: React.FC<{
 
   const isList = view.kind === 'list';
   const onEvents = tab === 'events';
+  const gear = <GearButton label="Activity settings" onClick={() => setView({ kind: 'settings' })} />;
   const title = view.kind === 'settings' ? 'Activity Settings' : view.kind === 'detail' ? 'Activity' : onEvents ? 'All Events' : 'Activity';
   const ev = eventFilters;
 
@@ -1253,18 +1261,13 @@ export const ActivitySheet: React.FC<{
           <BackButton label={onEvents && view.kind === 'detail' ? 'All Events' : 'Activity'} onClick={back} />
         ) : onEvents ? (
           <BackButton label="Activity" onClick={() => setTab('activity')} />
+        ) : backLabel && onBack ? (
+          <BackButton label={backLabel} onClick={onBack} />
         ) : (
-          <button
-            type="button"
-            onClick={() => setView({ kind: 'settings' })}
-            aria-label="Activity settings"
-            className="p-1 -ml-1 rounded hover:opacity-80 focus-visible:outline-2 focus-visible:outline-[#0A84FF]"
-            style={{ color: ios.blue }}
-          >
-            <Glyph d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1.08-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z" size={20} stroke={1.8} />
-          </button>
+          gear
         )
       }
+      rightExtra={view.kind === 'list' && !onEvents && backLabel && onBack ? gear : undefined}
       toolbar={toolbar}
       footer={footer}
     >

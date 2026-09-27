@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Alert,
   BackButton,
+  GearButton,
   Button,
   Checkmark,
   FieldRow,
@@ -713,7 +714,14 @@ const KEEP_OPTIONS = [
   { value: 0, label: 'Forever' },
 ];
 
-export const RestoreSheet: React.FC<{ open: boolean; onClose: () => void; onChanged?: () => void }> = ({ open, onClose, onChanged }) => {
+export const RestoreSheet: React.FC<{
+  open: boolean;
+  onClose: () => void;
+  onChanged?: () => void;
+  /** Opened from another screen (e.g. Diagnostics): shows "‹ label" to go back to it */
+  backLabel?: string;
+  onBack?: () => void;
+}> = ({ open, onClose, onChanged, backLabel: returnLabel, onBack }) => {
   const [points, setPoints] = useState<RestorePoint[] | null>(null);
   const [storage, setStorage] = useState<{ bytes: number; keepDays: number; count: number }>({ bytes: 0, keepDays: 30, count: 0 });
   const [error, setError] = useState<string>();
@@ -802,8 +810,7 @@ export const RestoreSheet: React.FC<{ open: boolean; onClose: () => void; onChan
   };
   const deleteMany = async (ids: string[]) => {
     await fetch('/api/restore/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids }) });
-    setSelected([]);
-    setSelecting(false);
+    stopSelecting();
     await load();
   };
 
@@ -816,7 +823,7 @@ export const RestoreSheet: React.FC<{ open: boolean; onClose: () => void; onChan
   const titles: Record<View['kind'], string> = {
     list: 'Restore',
     archive: 'Archive',
-    storage: 'Backups',
+    storage: 'Restore Settings',
     detail: 'Details',
     review: 'Review',
     progress: run.state.status === 'done' ? 'Done' : 'Restoring',
@@ -826,7 +833,7 @@ export const RestoreSheet: React.FC<{ open: boolean; onClose: () => void; onChan
   const backLabel = (() => {
     const prev = stack[stack.length - 2];
     if (!prev) return '';
-    return prev.kind === 'list' ? 'Restore' : prev.kind === 'archive' ? 'Archive' : prev.kind === 'detail' ? 'Details' : 'Back';
+    return prev.kind === 'list' ? 'Restore' : prev.kind === 'archive' ? 'Archive' : prev.kind === 'detail' ? 'Details' : prev.kind === 'storage' ? 'Settings' : 'Back';
   })();
 
   const textButton = (label: string, onClick: () => void, bold = false) => (
@@ -839,19 +846,28 @@ export const RestoreSheet: React.FC<{ open: boolean; onClose: () => void; onChan
       {label}
     </button>
   );
+  // Choosing changes to delete starts from Restore Settings, so finishing goes back there
+  const stopSelecting = () => {
+    setSelecting(false);
+    setSelected([]);
+    setStack([{ kind: 'list' }, { kind: 'storage' }]);
+  };
+  const gear = <GearButton label="Restore settings" onClick={() => push({ kind: 'storage' })} />;
+  // Top left: Cancel while choosing changes to delete; Back inside; at the top level, the way back
+  // to whatever opened Restore (e.g. Diagnostics), or else the settings gear (as in Activity)
+  const atTop = stack.length === 1 && view.kind === 'list';
   const leftAction =
     view.kind === 'progress'
       ? undefined
-      : stack.length > 1
-        ? <BackButton label={backLabel} onClick={pop} />
-        : view.kind === 'list' && (points?.length || 0) > 0
-          ? selecting
-            ? textButton('Cancel', () => {
-                setSelecting(false);
-                setSelected([]);
-              })
-            : textButton('Select', () => setSelecting(true))
-          : undefined;
+      : selecting && view.kind === 'list'
+        ? textButton('Cancel', stopSelecting)
+        : stack.length > 1
+          ? <BackButton label={backLabel} onClick={pop} />
+          : returnLabel && onBack
+            ? <BackButton label={returnLabel} onClick={onBack} />
+            : gear;
+  // With a Back button on the left, the gear moves next to Done
+  const rightExtra = atTop && !selecting && returnLabel && onBack ? gear : undefined;
 
   // ---------------------------------------------------------------- footer
   let footer: React.ReactNode;
@@ -862,7 +878,7 @@ export const RestoreSheet: React.FC<{ open: boolean; onClose: () => void; onChan
       <div className="flex items-center justify-between gap-3">
         <LinkButton onClick={() => setSelected(allOn ? [] : all)}>{allOn ? 'Deselect All' : 'Select All'}</LinkButton>
         <span className="text-[13px] tabular-nums" style={{ color: ios.secondary }}>
-          {selected.length ? `${selected.length} selected` : 'Tap changes to select them'}
+          {selected.length ? `${selected.length} chosen` : 'Tap changes to choose them'}
         </span>
         <Button tone="red" disabled={!selected.length} onClick={() => askDelete(selected)} className="sm:min-w-[120px]">
           Delete
@@ -919,15 +935,11 @@ export const RestoreSheet: React.FC<{ open: boolean; onClose: () => void; onChan
       <p className="text-[15px] text-center py-16" style={{ color: ios.secondary }}>Loading…</p>
     ) : (
       <div className="space-y-7">
-        {!selecting && <Group className="ios-inset-icon">
-          <Row
-            onClick={() => push({ kind: 'storage' })}
-            leading={<ActionTile d={G.disk} color="#8E8E93" />}
-            title={`Backups use ${fmtBytes(storage.bytes)}`}
-            subtitle={storage.keepDays ? `Kept for ${plural(storage.keepDays, 'day')} · pinned ones are kept forever` : 'Kept forever'}
-            chevron
-          />
-        </Group>}
+        {selecting && (
+          <p className="text-[14px] leading-[20px] px-1 -mb-3" style={{ color: ios.secondary }}>
+            Choose the changes to delete. Your stacks and their data aren’t touched.
+          </p>
+        )}
 
         {visible.length === 0 ? (
           <div className="text-center py-10 px-6">
@@ -1013,6 +1025,9 @@ export const RestoreSheet: React.FC<{ open: boolean; onClose: () => void; onChan
             <Row title="Backups" trailing={<span className="tabular-nums">{storage.count}</span>} />
             <Row title="Pinned" trailing={<span className="tabular-nums">{live.filter((p) => p.pinned).length}</span>} />
           </Group>
+          <SectionFooter>
+            {storage.keepDays ? `Backups are kept for ${plural(storage.keepDays, 'day')}; pinned ones are kept forever.` : 'Backups are kept forever.'}
+          </SectionFooter>
         </section>
         {(() => {
           const restored = (points || []).filter((p) => p.state === 'restored' || p.state === 'failed');
@@ -1023,11 +1038,25 @@ export const RestoreSheet: React.FC<{ open: boolean; onClose: () => void; onChan
             { key: 'empty', label: 'Deleted Empty Stacks', sub: 'Stacks that had no apps', list: empties },
             { key: 'unpinned', label: 'Everything Not Pinned', sub: 'Keeps only pinned backups', list: unpinned },
           ].filter((r) => r.list.length > 0);
-          if (!rows.length) return null;
+          if (!rows.length && live.length === 0) return null;
           return (
             <section>
               <SectionHeader>Clean Up</SectionHeader>
               <Group>
+                {live.length > 0 && (
+                  <Row
+                    onClick={() => {
+                      setStack([{ kind: 'list' }]);
+                      setFilter('all');
+                      setSelected([]);
+                      setSelecting(true);
+                      requestAnimationFrame(() => bodyRef.current?.scrollTo({ top: 0 }));
+                    }}
+                    title={<span style={{ color: ios.red }}>Delete Changes…</span>}
+                    subtitle="Choose which ones to delete"
+                    chevron
+                  />
+                )}
                 {rows.map((r) => (
                   <Row
                     key={r.key}
@@ -1161,8 +1190,11 @@ export const RestoreSheet: React.FC<{ open: boolean; onClose: () => void; onChan
         if (view.kind === 'progress' && run.state.status !== 'running') onChanged?.();
         onClose();
       }}
-      title={titles[view.kind]}
+      title={view.kind === 'list' && selecting ? 'Delete Changes' : titles[view.kind]}
       leftAction={leftAction}
+      rightExtra={rightExtra}
+      // While choosing, Cancel is the only way out (no Done beside it)
+      rightAction={view.kind === 'list' && selecting ? <span /> : undefined}
       toolbar={toolbar}
       footer={footer}
       bodyRef={bodyRef}

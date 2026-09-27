@@ -266,8 +266,9 @@ export async function systemDiagnostics() {
   checks.push({
     id: 'backups',
     level: !space ? 'info' : lowSpace ? 'warn' : 'ok',
-    title: lowSpace ? 'Backup space is low' : 'Backups',
-    detail: `${formatBytes(restore.storage.bytes)} used by ${restore.storage.count} backup${restore.storage.count === 1 ? '' : 's'}${space ? ` · ${formatBytes(space.free)} free` : ''} · kept ${restore.storage.keepDays ? `${restore.storage.keepDays} days` : 'forever'}.`,
+    // Named after the screen it opens
+    title: lowSpace ? 'Restore: backup space is low' : 'Restore',
+    detail: `Backups use ${formatBytes(restore.storage.bytes)} (${restore.storage.count}) · ${space ? `${formatBytes(space.free)} free · ` : ''}kept ${restore.storage.keepDays ? `${restore.storage.keepDays} days` : 'forever'}.`,
     link: 'restore',
   });
 

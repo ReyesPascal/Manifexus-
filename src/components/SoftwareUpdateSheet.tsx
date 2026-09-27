@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Button, Group, LinkButton, Row, SectionFooter, SectionHeader, Sheet, Switch, ios } from './ui/ios';
+import { BackButton, Button, Group, LinkButton, Row, SectionFooter, SectionHeader, Sheet, Switch, ios } from './ui/ios';
 
 // Mirrors server/updateService.ts
 export interface BuildInfo {
@@ -92,6 +92,9 @@ interface SoftwareUpdateSheetProps {
   onClose: () => void;
   state: SoftwareUpdateState | null;
   onStateChange: (s: SoftwareUpdateState) => void;
+  /** Opened from another screen (e.g. Diagnostics): shows "‹ label" to go back to it */
+  backLabel?: string;
+  onBack?: () => void;
 }
 
 const Spinner: React.FC<{ size?: number }> = ({ size = 16 }) => (
@@ -122,7 +125,7 @@ const StepIcon: React.FC<{ state: 'pending' | 'active' | 'done' | 'failed' }> = 
  * Software Update (Apple-style): current build, automatic checks, what's new, and a fully tracked
  * install that follows Manifexus through its restart and reloads the page on the new version.
  */
-export const SoftwareUpdateSheet: React.FC<SoftwareUpdateSheetProps> = ({ open, onClose, state, onStateChange }) => {
+export const SoftwareUpdateSheet: React.FC<SoftwareUpdateSheetProps> = ({ open, onClose, state, onStateChange, backLabel, onBack }) => {
   const [phase, setPhase] = useState<Phase>('idle');
   const [progress, setProgress] = useState<UpdateProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -496,6 +499,7 @@ export const SoftwareUpdateSheet: React.FC<SoftwareUpdateSheetProps> = ({ open, 
         if (!busy) onClose();
       }}
       title="Software Update"
+      leftAction={backLabel && onBack && !busy ? <BackButton label={backLabel} onClick={onBack} /> : undefined}
       rightAction={
         busy ? <span className="text-[15px]" style={{ color: ios.tertiary }}>Updating</span> : undefined
       }

@@ -230,10 +230,14 @@ export const AppDetailsSheet: React.FC<{
   onClose: () => void;
   onSaveOverride: (containerId: string, override: AppOverride) => Promise<void>;
   onAction?: (containerId: string, action: 'start' | 'stop' | 'restart') => Promise<void> | void;
+  /** These open on top of this sheet, which waits underneath with a way back to it */
   onOpenUpdates?: () => void;
   onOpenRestore?: () => void;
   onOpenSettings?: () => void;
-}> = ({ container, system, groups, hostAddress, onClose, onSaveOverride, onAction, onOpenUpdates, onOpenRestore, onOpenSettings }) => {
+  onOpenActivity?: (filter?: string) => void;
+  /** Another screen is open on top of this one */
+  covered?: boolean;
+}> = ({ container, system, groups, hostAddress, onClose, onSaveOverride, onAction, onOpenUpdates, onOpenRestore, onOpenSettings, onOpenActivity, covered }) => {
   const open = Boolean(container);
   const [stack, setStack] = useState<View[]>(['overview']);
   const view = stack[stack.length - 1];
@@ -305,6 +309,14 @@ export const AppDetailsSheet: React.FC<{
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [container?.id, system]);
 
+  // Coming back from a screen opened on top (Restore, Settings…): run the checks again, since
+  // whatever was fixed there should show here
+  const wasCovered = useRef(false);
+  useEffect(() => {
+    if (wasCovered.current && !covered) load();
+    wasCovered.current = Boolean(covered);
+  }, [covered, load]);
+
   const loadLogs = useCallback(async () => {
     if (!container) return;
     setLogs(null);
@@ -326,13 +338,14 @@ export const AppDetailsSheet: React.FC<{
   const resources = system ? sys?.resources : diag?.resources;
   const launchUrl = container.customUrl || (container.primaryPort ? `http://${hostAddress}:${container.primaryPort}` : undefined);
 
-  const followLink = (link?: Link) => {
+  const followLink = (link?: Link, checkId?: string) => {
     if (!link) return;
     if (link === 'logs') return push('logs');
     if (link === 'storage') return push('storage');
-    if (link === 'activity') return window.dispatchEvent(new CustomEvent('manifexus:open-activity', { detail: {} }));
-    onClose();
-    setTimeout(() => (link === 'updates' ? onOpenUpdates?.() : link === 'restore' ? onOpenRestore?.() : onOpenSettings?.()), 50);
+    if (link === 'activity') return onOpenActivity?.(checkId === 'problems' ? 'problems' : undefined);
+    if (link === 'updates') return onOpenUpdates?.();
+    if (link === 'restore') return onOpenRestore?.();
+    return onOpenSettings?.();
   };
 
   const act = async (a: 'start' | 'stop' | 'restart') => {
@@ -468,7 +481,7 @@ export const AppDetailsSheet: React.FC<{
               [...checks].sort((a, b) => RANK[a.level] - RANK[b.level]).map((c) => (
                 <Row
                   key={c.id}
-                  onClick={c.link ? () => followLink(c.link) : undefined}
+                  onClick={c.link ? () => followLink(c.link, c.id) : undefined}
                   leading={<CheckIcon level={c.level} />}
                   title={c.title}
                   subtitle={<span className="line-clamp-3">{c.detail}</span>}
@@ -788,6 +801,7 @@ export const AppDetailsSheet: React.FC<{
   return (
     <Sheet
       open={open}
+      hidden={covered}
       onClose={onClose}
       title={title}
       leftAction={stack.length > 1 ? <BackButton label={backLabel} onClick={pop} /> : undefined}
