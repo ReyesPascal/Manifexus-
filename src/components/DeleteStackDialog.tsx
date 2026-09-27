@@ -209,8 +209,8 @@ export const DeleteStackDialog: React.FC<DeleteStackDialogProps> = ({ target, on
                   : footprint
                     ? `Saves the folder (${formatBytes(footprint.directoryBytes)})${
                         volumeCount ? ` and ${volumeCount === 1 ? '1 volume' : `${volumeCount} volumes`} (${formatBytes(volumeBytes)})` : ''
-                      }. Restore it anytime from History.`
-                    : 'Saves the folder and volumes first. Restore it anytime from History.'}
+                      }. Bring it back anytime from Restore.`
+                    : 'Saves the folder and volumes first. Bring it back anytime from Restore.'}
                 {notEnoughSpace && (
                   <span className="block mt-1" style={{ color: ios.orange }}>
                     There may not be enough space. If the backup fails, nothing is deleted.

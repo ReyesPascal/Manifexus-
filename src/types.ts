@@ -217,37 +217,3 @@ export interface LogQueryResult {
   activeLogFile: string;
   storageDir: string;
 }
-
-/** Local summary of a pipeline run, used only when the server has no Activity record for it. */
-export interface DiagnosticMicroStep {
-  stepIndex: number;
-  stepId: string;
-  stepName: string;
-  status: 'pending' | 'running' | 'success' | 'failed' | 'skipped';
-  timestamp: string;
-  durationMs?: number;
-  logs: string[];
-}
-
-export interface DiagnosticBundle {
-  installId: string;
-  timestamp: string;
-  deploymentType: string;
-  targetStackName: string;
-  targetPath: string;
-  targetComposePath?: string;
-  sourceUrl: string;
-  initialAstSnapshot: unknown;
-  fetchedRemoteAst: unknown;
-  finalMergedAst: unknown;
-  fileWriteBytes?: number;
-  dockerExecutionCommand?: string;
-  cwd: string;
-  stdout?: string;
-  stderr?: string;
-  exitCode?: number;
-  success: boolean;
-  errorStackTrace: string | null;
-  microSteps: DiagnosticMicroStep[];
-  systemEnvironment: Record<string, string>;
-}

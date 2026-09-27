@@ -45,6 +45,20 @@ export interface MergeHistoryRecord {
   installMode?: 'existing-stack' | 'new-stack';
   sourceUrl?: string;
   remappedPorts?: { service: string; originalHostPort: number; allocatedHostPort: number }[];
+  /** Files exactly as the change left them, to tell later whether anything changed since */
+  resultFiles?: { path: string; content: string }[];
+  /** The Activity record of the change (full log) */
+  activityId?: string;
+  /** Keep this backup forever (never removed by the keep-for setting) */
+  pinned?: boolean;
+  /** When it was restored */
+  revertedAt?: string;
+  /** The Activity record of the restore */
+  revertActivityId?: string;
+  /** The change failed and was put back automatically */
+  failed?: boolean;
+  /** The backup was removed (by the keep-for setting or by hand); the entry is history only */
+  backupDeletedAt?: string;
 }
 
 // Backup paths: Prefer /app/backups as required by Directive 6, fallback to ./data/backups or ./backups
@@ -259,11 +273,14 @@ export function finalizeMergeRecord(id: string): boolean {
 /**
  * Mark merge status as reverted
  */
-export function markMergeAsReverted(id: string, logs: string[]): boolean {
+export function markMergeAsReverted(id: string, logs: string[], opts: { failed?: boolean; activityId?: string } = {}): boolean {
   const record = getHistoryRecordById(id);
   if (!record) return false;
   record.status = 'reverted';
   record.logs = logs;
+  record.revertedAt = new Date().toISOString();
+  if (opts.failed) record.failed = true;
+  if (opts.activityId) record.revertActivityId = opts.activityId;
   saveMergeHistoryRecord(record);
   return true;
 }
@@ -359,3 +376,12 @@ export async function createComposeInstallSnapshot(params: {
   return { backupArchiveDir, record };
 }
 
+/** Removes entries from the ledger (their backups must already be gone). */
+export function removeHistoryRecords(ids: string[]): void {
+  const keep = getMergeHistory().filter((h) => !ids.includes(h.id));
+  try {
+    fs.writeFileSync(getLedgerPath(), JSON.stringify(keep, null, 2), 'utf8');
+  } catch (err) {
+    console.error('[HistoryService] Error saving history:', err);
+  }
+}

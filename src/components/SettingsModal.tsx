@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { X, Settings, Server, Globe, Save, FolderOpen, Zap, ChevronRight } from 'lucide-react';
+import { Button, FieldRow, Group, Row, SectionFooter, SectionHeader, Segmented, Sheet, ios } from './ui/ios';
 import { ManifexusConfig, AutomationPrivileges } from '../types';
 
 interface SettingsModalProps {
@@ -39,12 +39,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   }, [isOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (!isOpen) return null;
-
   const isElevated = privileges?.mode === 'elevated';
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = async () => {
     const dir = stacksDir.trim().replace(/\/+$/, '');
     if (dir && !dir.startsWith('/')) {
       setSaveError('The stack location must be a full path starting with /, like /home/you/stacks.');
@@ -63,150 +60,105 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
+  const refreshOptions = Array.from(new Set([5, 10, 30, 60, Number(refreshInterval) || 10])).sort((a, b) => a - b);
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
-      <div
-        className="w-full max-w-md bg-[#0b0f19] border border-slate-800 rounded-2xl shadow-2xl overflow-hidden font-mono text-slate-200"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-900/50">
-          <div className="flex items-center gap-2">
-            <Settings className="w-5 h-5 text-cyan-400" />
-            <h2 className="text-base font-bold text-white">Hub Configuration</h2>
-          </div>
-          <button
-            onClick={onClose}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
-          >
-            <X className="w-5 h-5" />
-          </button>
+    <Sheet
+      open={isOpen}
+      onClose={onClose}
+      title="Settings"
+      leftAction={
+        <button type="button" onClick={onClose} className="text-[17px] rounded hover:opacity-80 focus-visible:outline-2 focus-visible:outline-[#0A84FF]" style={{ color: ios.blue }}>
+          Cancel
+        </button>
+      }
+      rightAction={<span />}
+      footer={
+        <div className="flex justify-end">
+          <Button onClick={() => handleSubmit()} disabled={isSaving} className="w-full sm:w-auto sm:min-w-[160px]">
+            {isSaving ? 'Saving…' : 'Save'}
+          </Button>
         </div>
+      }
+    >
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          handleSubmit();
+        }}
+        className="space-y-7"
+      >
+        <section>
+          <SectionHeader>Server Address</SectionHeader>
+          <Group>
+            <FieldRow id="settings-host" label="Address" value={hostAddress} onChange={setHostAddress} placeholder="192.168.1.150 or homelab.local" mono />
+          </Group>
+          <SectionFooter>
+            Used for the links on app cards, like http://{hostAddress || 'localhost'}:8080.
+          </SectionFooter>
+        </section>
 
-        {/* Form */}
-        <form onSubmit={handleSubmit} className="p-6 space-y-4 text-xs max-h-[calc(100vh-8rem)] overflow-y-auto">
-          {/* Host IP / Domain */}
-          <div className="space-y-1.5">
-            <label className="flex items-center gap-1.5 text-slate-300 font-bold">
-              <Globe className="w-4 h-4 text-cyan-400" />
-              <span>Host IP / Base Domain</span>
-            </label>
-            <input
-              type="text"
-              value={hostAddress}
-              onChange={(e) => setHostAddress(e.target.value)}
-              placeholder="localhost or 192.168.1.150 or homelab.local"
-              className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-cyan-500 font-mono"
-            />
-            <p className="text-[11px] text-slate-400">
-              When clicking port links on app cards, this address is used (e.g. <code className="text-cyan-300">http://{hostAddress || 'localhost'}:PORT</code>).
-            </p>
-          </div>
-
-          {/* Default stack location */}
-          <div className="space-y-1.5">
-            <label htmlFor="settings-stacks-dir" className="flex items-center gap-1.5 text-slate-300 font-bold">
-              <FolderOpen className="w-4 h-4 text-cyan-400" />
-              <span>Default Stack Location</span>
-            </label>
-            <input
+        <section>
+          <SectionHeader>New Stacks</SectionHeader>
+          <Group>
+            <FieldRow
               id="settings-stacks-dir"
-              type="text"
+              label="Location"
               value={stacksDir}
-              onChange={(e) => {
-                setStacksDir(e.target.value);
+              onChange={(v) => {
+                setStacksDir(v);
                 setSaveError(null);
               }}
-              placeholder={detectedStacksDir ? `Automatic: ${detectedStacksDir}` : 'Automatic'}
-              spellCheck={false}
-              className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-cyan-500 font-mono"
+              placeholder={detectedStacksDir ? `Automatic (${detectedStacksDir})` : 'Automatic'}
+              mono
+              invalid={Boolean(saveError)}
             />
-            <p className="text-[11px] text-slate-400">
-              New stacks are created in this folder on the server. Leave it empty to use the folder your existing stacks are in.
-            </p>
-            {saveError && <p className="text-[11px] text-rose-300">{saveError}</p>}
-          </div>
+          </Group>
+          <SectionFooter tone={saveError ? 'danger' : 'default'}>
+            {saveError || 'The folder on your server where new stacks are created. Leave it empty to use the folder your stacks are already in.'}
+          </SectionFooter>
+        </section>
 
-          {/* Auto Refresh Interval */}
-          <div className="space-y-1.5">
-            <label className="flex items-center gap-1.5 text-slate-300 font-bold">
-              <Server className="w-4 h-4 text-cyan-400" />
-              <span>Telemetry Auto-Refresh (Seconds)</span>
-            </label>
-            <input
-              type="number"
-              min="3"
-              max="120"
-              value={refreshInterval}
-              onChange={(e) => setRefreshInterval(Number(e.target.value))}
-              className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-cyan-500 font-mono"
-            />
-            <p className="text-[11px] text-slate-400">
-              Frequency for querying the Docker daemon socket for new containers and status changes.
-            </p>
-          </div>
+        <section>
+          <SectionHeader>Refresh Every</SectionHeader>
+          <Segmented
+            label="Refresh every"
+            value={String(refreshInterval)}
+            onChange={(v) => setRefreshInterval(Number(v))}
+            options={refreshOptions.map((n) => ({ value: String(n), label: `${n} s` }))}
+          />
+          <SectionFooter>How often the dashboard checks Docker for new apps and status changes.</SectionFooter>
+        </section>
 
-          {/* Automation privileges */}
-          {onOpenAutomationModal && (
-            <div className="space-y-1.5">
-              <div className="flex items-center gap-1.5 text-slate-300 font-bold">
-                <Zap className="w-4 h-4 text-cyan-400" />
-                <span>Automation Privileges</span>
-              </div>
-              <button
-                type="button"
+        {onOpenAutomationModal && (
+          <section>
+            <SectionHeader>Automation</SectionHeader>
+            <Group>
+              <Row
                 onClick={onOpenAutomationModal}
-                className={`w-full px-3 py-2 rounded-lg border flex items-center justify-between gap-3 text-left transition-colors ${
-                  isElevated
-                    ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-300 hover:border-emerald-400'
-                    : 'bg-cyan-950/30 border-cyan-500/40 text-cyan-300 hover:border-cyan-400'
-                }`}
-              >
-                <div>
-                  <div className="font-bold flex items-center gap-1.5">
-                    {isElevated ? 'ELEVATED AUTOMATION' : 'SANDBOXED MODE'}
-                    <span className="text-[10px] opacity-70 font-normal">
-                      ({privileges?.isHostFsMounted ? 'Host FS Mounted' : 'Docker Socket'})
-                    </span>
-                  </div>
-                  <div className="text-[10px] text-slate-400">
-                    {isElevated ? 'Full 1-click AST deployment active' : 'Click to elevate permissions'}
-                  </div>
-                </div>
-                <ChevronRight className="w-4 h-4 opacity-70 flex-shrink-0" />
-              </button>
-              <p className="text-[11px] text-slate-400">
-                Controls whether Manifexus can edit files on the host to deploy changes in one click.
-              </p>
-            </div>
-          )}
+                title="Automation Privileges"
+                trailing={
+                  <span className="inline-flex items-center gap-1.5" style={{ color: isElevated ? ios.green : ios.secondary }}>
+                    <span className="w-[7px] h-[7px] rounded-full" style={{ background: 'currentColor' }} />
+                    {isElevated ? 'Full' : 'Limited'}
+                  </span>
+                }
+                chevron
+              />
+            </Group>
+            <SectionFooter>
+              {isElevated
+                ? 'Manifexus can edit stack files on your server, so moves and restores run in one click.'
+                : 'Manifexus can see containers but can’t edit files on your server. Tap to give it full access.'}
+            </SectionFooter>
+          </section>
+        )}
 
-          <div className="p-3 rounded-xl bg-slate-950/70 border border-slate-800 text-[11px] text-slate-400 space-y-1">
-            <div className="text-slate-300 font-semibold">Persistence Note</div>
-            <div>
-              Configurations are saved to <code className="text-cyan-300">/data/config.json</code> in your mapped host volume.
-            </div>
-          </div>
-
-          <div className="pt-2 flex justify-end gap-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={isSaving}
-              className="px-4 py-2 rounded-xl bg-cyan-500 text-slate-950 font-bold hover:bg-cyan-400 transition-colors flex items-center gap-1.5 shadow-[0_0_12px_rgba(6,182,212,0.3)] disabled:opacity-50"
-            >
-              <Save className="w-4 h-4" />
-              <span>{isSaving ? 'Saving...' : 'Save Settings'}</span>
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
+        <p className="text-[12px] text-center" style={{ color: ios.tertiary }}>
+          Settings are saved in /data/config.json on your server.
+        </p>
+        <button type="submit" hidden aria-hidden="true" />
+      </form>
+    </Sheet>
   );
 };

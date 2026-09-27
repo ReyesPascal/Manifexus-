@@ -115,7 +115,7 @@ const TYPE_FILTERS: { key: string; label: string; types?: string[]; statuses?: S
   { key: 'problems', label: 'Problems', statuses: ['failed', 'rolled_back', 'interrupted'] },
   { key: 'move', label: 'Moves', types: ['move', 'plan'] },
   { key: 'delete', label: 'Deletes', types: ['delete'] },
-  { key: 'undo', label: 'Undo', types: ['undo'] },
+  { key: 'undo', label: 'Restores', types: ['undo'] },
   { key: 'update', label: 'Updates', types: ['update'] },
   { key: 'stack', label: 'Stacks', types: ['stack'] },
   { key: 'app', label: 'Apps', types: ['app'] },
@@ -1204,7 +1204,6 @@ export const ActivitySheet: React.FC<{
       open={open}
       onClose={onClose}
       title={title}
-      width={860}
       zIndex={60}
       bodyRef={bodyRef}
       leftAction={

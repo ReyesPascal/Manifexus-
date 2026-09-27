@@ -341,6 +341,20 @@ export const FieldRow: React.FC<{
 const openSheets: symbol[] = [];
 
 /**
+ * The one size every Manifexus screen uses: fixed width and height on desktop, full screen on a phone.
+ * Screens don't choose their own size, so everything opened from the dashboard feels like one app.
+ * Custom-built sheets use these classes on their outer layers instead of their own sizes.
+ */
+export const SHEET_WIDTH = 760;
+export const sheetBackdropClass = 'fixed inset-0 flex items-stretch sm:items-center justify-center sm:p-6 bg-black/55';
+// Height uses the visible window (dvh), so the bottom of the sheet and its buttons are always on screen,
+// even with browser toolbars; the body scrolls, the footer stays put.
+export const sheetPanelClass =
+  'w-full sm:max-w-[760px] h-[100dvh] sm:h-[min(800px,calc(100dvh-48px))] flex flex-col sm:rounded-[14px] overflow-hidden motion-safe:animate-[ios-sheet-in_220ms_ease-out]';
+/** Footer bar for custom sheets: pinned under the scrolling body, clear of a phone's home indicator */
+export const sheetFooterClass = 'flex-shrink-0 px-4 sm:px-5 pt-3 pb-[max(12px,env(safe-area-inset-bottom))]';
+
+/**
  * Standard sheet: dimmed backdrop, nav bar with a left action and centered title, scrolling body.
  * Escape and clicking the backdrop close it. Use this for every new full screen.
  */
@@ -354,14 +368,13 @@ export const Sheet: React.FC<{
   /** Replaces the empty left slot, e.g. with a BackButton */
   leftAction?: React.ReactNode;
   footer?: React.ReactNode;
-  width?: number;
   /** Extra content under the title bar that doesn't scroll (filters, segmented controls) */
   toolbar?: React.ReactNode;
   children: React.ReactNode;
   bodyRef?: React.Ref<HTMLDivElement>;
   /** Stacking order; raise it for sheets that open on top of other screens */
   zIndex?: number;
-}> = ({ open, title, subtitle, onClose, closeLabel = 'Done', rightAction, leftAction, footer, width = 600, toolbar, children, bodyRef, zIndex = 50 }) => {
+}> = ({ open, title, subtitle, onClose, closeLabel = 'Done', rightAction, leftAction, footer, toolbar, children, bodyRef, zIndex = 50 }) => {
   // Escape closes only the sheet on top, not every open sheet underneath it
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
@@ -382,7 +395,7 @@ export const Sheet: React.FC<{
   if (!open) return null;
   return (
     <div
-      className="fixed inset-0 flex items-end sm:items-center justify-center sm:p-6 bg-black/55"
+      className={sheetBackdropClass}
       style={{ fontFamily: ios.font, zIndex }}
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
@@ -392,8 +405,8 @@ export const Sheet: React.FC<{
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className="w-full h-[94vh] sm:h-[min(760px,88vh)] flex flex-col rounded-t-[14px] sm:rounded-[14px] overflow-hidden motion-safe:animate-[ios-sheet-in_220ms_ease-out]"
-        style={{ maxWidth: width, background: ios.sheet, boxShadow: '0 30px 80px rgba(0,0,0,0.55)', WebkitFontSmoothing: 'antialiased' }}
+        className={sheetPanelClass}
+        style={{ background: ios.sheet, boxShadow: '0 30px 80px rgba(0,0,0,0.55)', WebkitFontSmoothing: 'antialiased' }}
       >
         <div className="relative px-4 pt-3.5 pb-3" style={{ borderBottom: `0.5px solid ${ios.separator}` }}>
           <div className="h-[28px] flex items-center justify-between">
@@ -425,9 +438,9 @@ export const Sheet: React.FC<{
             {toolbar}
           </div>
         )}
-        <div ref={bodyRef} className="flex-1 overflow-y-auto px-4 sm:px-5 pt-5 pb-8">{children}</div>
+        <div ref={bodyRef} className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-5 pt-5 pb-8">{children}</div>
         {footer && (
-          <div className="px-4 sm:px-5 py-3" style={{ borderTop: `0.5px solid ${ios.separator}` }}>
+          <div className={sheetFooterClass} style={{ borderTop: `0.5px solid ${ios.separator}` }}>
             {footer}
           </div>
         )}

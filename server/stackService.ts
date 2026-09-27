@@ -1,3 +1,4 @@
+import { currentActivityId } from './activityLog';
 import fs from 'fs';
 import { dump } from 'js-yaml';
 import { parseDocument, YAMLMap } from 'yaml';
@@ -1159,6 +1160,7 @@ export async function deleteHostStack(params: {
   record.summary = `Deleted stack "${sanitizedName}"`;
   record.status = 'active';
   record.type = 'STACK_DELETE';
+  record.activityId = currentActivityId();
   record.deletedStack = {
     project: sanitizedName,
     workingDir: resolvedTargetDir,
@@ -1250,7 +1252,7 @@ export async function deleteHostStack(params: {
     success: true,
     message: skipDataBackup
       ? `Stack '${sanitizedName}' was deleted. Its compose file was saved, but its data was not backed up.`
-      : `Stack '${sanitizedName}' was deleted. Its compose file and ${formatBytes(dataBackupBytes)} of data were backed up — undo anytime from History.`,
+      : `Stack '${sanitizedName}' was deleted. Its compose file and ${formatBytes(dataBackupBytes)} of data were backed up. Bring it back anytime from Restore.`,
     backupArchiveDir: snapshotRes.backupArchiveDir,
     historyRecordId: deleteRunId,
     dataBackupBytes,

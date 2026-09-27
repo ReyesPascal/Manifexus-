@@ -37,12 +37,10 @@ import { DeleteStackDialog, DeleteStackTarget } from './components/DeleteStackDi
 import { HostAutomationModal } from './components/HostAutomationModal';
 import { ManifexusHeroHeader } from './components/ManifexusHeroHeader';
 import { ViewBar } from './components/ViewBar';
-import { MergeHistoryModal } from './components/MergeHistoryModal';
-import { ExecutionPipelineConsole } from './components/ExecutionPipelineConsole';
+import { RestoreSheet } from './components/RestoreSheet';
 import { CreateStackModal } from './components/CreateStackModal';
 import { WebTerminalModal } from './components/WebTerminalModal';
 import { AutomationPrivileges } from './types';
-import { History } from 'lucide-react';
 
 export default function App() {
   const [containers, setContainers] = useState<DeepContainerMetadata[]>([]);
@@ -65,12 +63,11 @@ export default function App() {
   const [isGroupManagerOpen, setIsGroupManagerOpen] = useState(false);
   const [isSimulateOpen, setIsSimulateOpen] = useState(false);
   const [isMergeModalOpen, setIsMergeModalOpen] = useState(false);
-  const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
+  const [isRestoreOpen, setIsRestoreOpen] = useState(false);
   const [isCreateStackModalOpen, setIsCreateStackModalOpen] = useState(false);
   const [emptyStacks, setEmptyStacks] = useState<EmptyComposeStack[]>([]);
   // Folder the server puts new stacks in (the parent most existing stacks share)
   const [defaultStacksDir, setDefaultStacksDir] = useState<string | undefined>(undefined);
-  const [revertRecordToStream, setRevertRecordToStream] = useState<any | null>(null);
   // Move apps flow: opened either for a destination stack ("Add apps") or for one app ("Move")
   const [moveInitialDestination, setMoveInitialDestination] = useState<string | undefined>(undefined);
   const [moveInitialAppId, setMoveInitialAppId] = useState<string | undefined>(undefined);
@@ -513,7 +510,7 @@ export default function App() {
             markFailuresSeen(lastFailureAt.current);
           }}
           activityAlert={unseenFailure}
-          onOpenHistory={() => setIsHistoryModalOpen(true)}
+          onOpenRestore={() => setIsRestoreOpen(true)}
           onOpenSettings={() => setIsSettingsOpen(true)}
           onRefresh={() => {
             fetchData(true);
@@ -964,32 +961,8 @@ export default function App() {
         onRefreshPrivileges={fetchPrivileges}
       />
 
-      {/* Directive 6: Merge State Ledger & Backups Modal */}
-      <MergeHistoryModal
-        isOpen={isHistoryModalOpen}
-        onClose={() => setIsHistoryModalOpen(false)}
-        onTriggerRevert={(record) => {
-          setIsHistoryModalOpen(false);
-          setRevertRecordToStream(record);
-        }}
-      />
-
-      {/* Directive 4 & 6: Revert Execution Pipeline Console */}
-      {revertRecordToStream && (
-        <ExecutionPipelineConsole
-          isOpen={Boolean(revertRecordToStream)}
-          onClose={() => setRevertRecordToStream(null)}
-          title={`Rollback: Reverting "${revertRecordToStream.targetStackName}" to Pre-Merge State`}
-          mode="revert"
-          mergeId={revertRecordToStream.id}
-          streamUrl={`/api/history/${revertRecordToStream.id}/revert-stream`}
-          streamPayload={{}}
-          onSuccessDone={() => {
-            fetchData(true);
-            setRevertRecordToStream(null);
-          }}
-        />
-      )}
+      {/* Restore: every change's backup, restorable */}
+      <RestoreSheet open={isRestoreOpen} onClose={() => setIsRestoreOpen(false)} onChanged={() => fetchData(true)} />
 
       {/* Directive 3: Create New Empty Stack Modal */}
       <CreateStackModal

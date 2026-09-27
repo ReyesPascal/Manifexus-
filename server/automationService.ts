@@ -20,7 +20,8 @@ import {
   saveMergeHistoryRecord,
 } from './historyService';
 import { readHostFile, writeHostFile, checkHostFileExists, forceRemoveContainer, createHostDirectory } from './hostFsService';
-import { record, setActivityTitle } from './activityLog';
+import { record, setActivityTitle, currentActivityId } from './activityLog';
+import type { MergeHistoryRecord } from './historyService';
 import {
   archiveStackData,
   restoreStackData,
@@ -360,6 +361,8 @@ export async function executeStreamingPipeline(
   let preMergeTargetCompose: string | undefined;
   let targetComposeWritten = false;
   const editedSources: SourceStackGroup[] = [];
+  let moveRecord: MergeHistoryRecord | undefined;
+  const resultFiles: { path: string; content: string }[] = [];
 
   try {
     // 1. Preflight
@@ -413,7 +416,9 @@ export async function executeStreamingPipeline(
         preMergeTargetCompose,
       });
       const record = snapshot.record;
+      moveRecord = record;
       record.type = 'MERGE';
+      record.activityId = currentActivityId();
       record.summary = `Moved ${movingContainers.map((c) => c.cleanName).join(', ')} into "${req.targetStackName}"`;
       record.movedServices = Array.from(sourceGroups.values()).map((g) => ({
         project: g.project,
@@ -428,7 +433,7 @@ export async function executeStreamingPipeline(
           sc.composePath = g.composePath;
         }
       }
-      log('Compose files saved to History.', 3);
+      log('Compose files saved for Restore.', 3);
 
       if (backupData && !isDemo) {
         const involved = new Map<string, string>();
@@ -463,6 +468,7 @@ export async function executeStreamingPipeline(
       }
       for (const g of sourceGroups.values()) {
         const updated = removeServicesFromCompose(g.originalCompose!, g.services);
+        resultFiles.push({ path: g.composePath, content: updated });
         if (!isDemo) {
           const ok = await writeHostFile(g.composePath, updated);
           if (!ok) throw new Error(`Could not update ${g.composePath}.`);
@@ -522,8 +528,16 @@ export async function executeStreamingPipeline(
           await forceRemoveContainer(m.asideName);
         }
       }
-      log(`Done. Undo is available from History.`, 6);
+      log('Done. You can restore to before this move from Restore.', 6);
     });
+
+    // The change is final: record how it left each file so a later restore can tell what changed since
+    if (moveRecord) {
+      resultFiles.push({ path: path.posix.join(targetDir, 'docker-compose.yml'), content: req.yamlContent });
+      moveRecord.resultFiles = resultFiles;
+      moveRecord.status = 'active';
+      saveMergeHistoryRecord(moveRecord);
+    }
 
     emit({
       type: 'completed',
@@ -547,16 +561,16 @@ export async function executeStreamingPipeline(
         newComposeText: req.yamlContent,
       });
       log('Everything is back the way it was.');
-      markMergeAsReverted(mergeId, [errorMsg, 'Auto-reverted']);
+      markMergeAsReverted(mergeId, [errorMsg, 'Auto-reverted'], { failed: true });
       emit({ type: 'auto_reverted', mergeId, log: errorMsg, timestamp: new Date().toISOString() });
     } catch (rollbackErr) {
       const why = (rollbackErr as Error).message;
       log(`Could not fully roll back: ${why}`);
-      // Not "rolled back": some of it is still changed. The History entry stays, so it can be undone from there.
+      // Not "rolled back": some of it is still changed. Its Restore entry stays, so it can be restored from there.
       emit({
         type: 'failed',
         mergeId,
-        log: `${errorMsg}. Putting things back also failed (${why}); undo it from History.`,
+        log: `${errorMsg}. Putting things back also failed (${why}); restore it from Restore.`,
         timestamp: new Date().toISOString(),
       });
     }
@@ -696,8 +710,11 @@ export async function runHostDockerCompose(
  */
 export async function executeStreamingRevert(
   mergeId: string,
-  emit: (event: PipelineStreamEvent) => void
+  emit: (event: PipelineStreamEvent) => void,
+  /** startApps: false puts files and data back without starting anything (deleted stacks only) */
+  opts: { startApps?: boolean } = {}
 ): Promise<void> {
+  const startApps = opts.startApps !== false;
   const record = getHistoryRecordById(mergeId);
   const { isDemo } = await getContainersList();
 
@@ -711,10 +728,10 @@ export async function executeStreamingRevert(
   };
 
   const STEPS = [
-    { index: 1, id: 'stop_changed', name: 'Stopping the changed stack' },
+    { index: 1, id: 'stop_changed', name: 'Stopping moved apps' },
     { index: 2, id: 'restore_data', name: 'Restoring data' },
     { index: 3, id: 'restore_compose', name: 'Restoring compose files' },
-    { index: 4, id: 'restart', name: 'Starting the original stacks' },
+    { index: 4, id: 'restart', name: startApps ? 'Starting apps' : 'Adding it back to the dashboard' },
     { index: 5, id: 'revert_complete', name: 'Finishing up' },
   ];
   for (const st of STEPS) updateStep(st.index, st.id, st.name, 'pending');
@@ -732,8 +749,9 @@ export async function executeStreamingRevert(
   };
 
   try {
-    if (!record) throw new Error('History entry not found.');
-    if (record.status === 'reverted') throw new Error('This change was already undone.');
+    if (!record) throw new Error('This change is no longer in Restore.');
+    if (record.status === 'reverted') throw new Error('This change was already restored.');
+    if (record.backupDeletedAt) throw new Error('The backup for this change was removed, so it can’t be restored.');
 
     // Records written before the `type` field existed are recognised by their id prefix
     const isDeleteRevert = record.type === 'STACK_DELETE' || mergeId.startsWith('delete_');
@@ -754,8 +772,26 @@ export async function executeStreamingRevert(
         log('Nothing to stop: the stack was deleted.', 1);
         return;
       }
-      if (!isDemo) await runComposeInDir(targetDir, 'down --remove-orphans');
-      log(`Stopped ${record.targetStackName}.`, 1);
+      if (isDemo) return;
+      if (restoredTarget && restoredTarget.trim()) {
+        // The stack existed before: remove only the apps the move added; its own apps keep running
+        const moved = new Set((record.movedServices || []).flatMap((m) => m.services));
+        const filters = encodeURIComponent(JSON.stringify({ label: [`com.docker.compose.project.working_dir=${targetDir}`] }));
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const list = await queryDockerEngine<any[]>(`/containers/json?all=1&filters=${filters}`).catch(() => [] as any[]);
+        let n = 0;
+        for (const c of list || []) {
+          if (moved.has(c.Labels?.['com.docker.compose.service'])) {
+            await forceRemoveContainer(c.Id);
+            n++;
+          }
+        }
+        log(n ? `Stopped ${n} moved app${n === 1 ? '' : 's'} in ${record.targetStackName}.` : `No moved apps were running in ${record.targetStackName}.`, 1);
+      } else {
+        // The move created this stack: everything in it was moved there
+        await runComposeInDir(targetDir, 'down --remove-orphans');
+        log(`Stopped ${record.targetStackName}.`, 1);
+      }
     });
 
     // 2. Data
@@ -814,13 +850,15 @@ export async function executeStreamingRevert(
       } catch {
         targetServiceCount = 1;
       }
-      if (targetServiceCount > 0 && !isDemo) {
+      if (startApps && targetServiceCount > 0 && !isDemo) {
         await runComposeInDir(targetDir, 'up -d');
         log(`Started ${record.targetStackName}.`, 4);
+      } else if (!startApps) {
+        log('Left stopped, as asked. Start it from the dashboard when you’re ready.', 4);
       }
 
       for (const sc of record.sourceConfigs || []) {
-        if (!sc.workingDir || sc.workingDir === targetDir) continue;
+        if (!startApps || !sc.workingDir || sc.workingDir === targetDir) continue;
         if (!isDemo) await runComposeInDir(sc.workingDir, 'up -d');
         log(`Started ${sc.project}.`, 4);
       }
@@ -841,14 +879,14 @@ export async function executeStreamingRevert(
 
     // 5. Ledger
     await run(5, async () => {
-      markMergeAsReverted(mergeId, logsAccumulator);
-      log('Marked as undone in History.', 5);
+      markMergeAsReverted(mergeId, logsAccumulator, { activityId: currentActivityId() });
+      log('Restored.', 5);
     });
 
     emit({ type: 'completed', mergeId, timestamp: new Date().toISOString(), payload: { reverted: true } });
   } catch (revertErr) {
-    const errorMsg = (revertErr as Error).message || 'Undo failed';
-    log(`Undo failed: ${errorMsg}`);
+    const errorMsg = (revertErr as Error).message || 'Restore failed';
+    log(`Problem: ${errorMsg}`);
     emit({ type: 'failed', mergeId, log: errorMsg, timestamp: new Date().toISOString() });
   }
 }
@@ -907,79 +945,3 @@ export async function executeAutomatedStackMerge(
   };
 }
 
-/**
- * One-Click Stack Repair:
- * Resolves container name collisions (e.g. kavita vs kavita), strips misplaced services,
- * cleans up dangling or conflicting containers, and brings the target stack up healthy.
- */
-export async function repairTargetStack(
-  targetDirectory: string,
-  options?: { removeConflictingContainer?: string; stripService?: string }
-): Promise<{ success: boolean; message: string; logs: string[] }> {
-  const logs: string[] = [];
-  const privs = await checkPrivilegeStatus();
-
-  logs.push(`Starting one-click stack repair for ${targetDirectory}`);
-
-  // 1. Remove conflicting container from daemon if specified
-  if (options?.removeConflictingContainer) {
-    logs.push(`Force-removing conflicting container: ${options.removeConflictingContainer}`);
-    await forceRemoveContainer(options.removeConflictingContainer);
-  }
-
-  // 2. Read target compose file
-  const composePath = path.join(targetDirectory, 'docker-compose.yml');
-  const composeContent = await readHostFile(composePath);
-
-  if (composeContent && options?.stripService) {
-    logs.push(`Auditing and stripping misplaced service '${options.stripService}' from ${composePath}`);
-    try {
-      const doc = yaml.parseDocument(composeContent);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const services = doc.get('services') as any;
-      if (services && typeof services.has === 'function' && services.has(options.stripService)) {
-        services.delete(options.stripService);
-        const updatedYaml = doc.toString();
-        await writeHostFile(composePath, updatedYaml);
-        logs.push(`Removed '${options.stripService}' from compose configuration.`);
-      }
-    } catch (err) {
-      logs.push(`AST notice: ${(err as Error).message}`);
-    }
-  }
-
-  // 3. Run docker compose up -d --remove-orphans in targetDirectory
-  if (privs.isSocketWritable) {
-    try {
-      const helperImage = await getBestAvailableImage();
-      logs.push(`Relaunching clean stack via ${helperImage}...`);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const runner = await queryDockerEngine<any>('/containers/create', 'POST', {
-        Image: helperImage,
-        Entrypoint: [],
-        Cmd: ['sh', '-c', `cd "${targetDirectory}" && (docker compose up -d --remove-orphans || docker-compose up -d || true)`],
-        HostConfig: {
-          Binds: [
-            `${DOCKER_SOCKET_PATH}:/var/run/docker.sock`,
-            `${targetDirectory}:${targetDirectory}`,
-          ],
-        },
-      });
-
-      if (runner && runner.Id) {
-        await queryDockerEngine(`/containers/${runner.Id}/start`, 'POST');
-        await queryDockerEngine(`/containers/${runner.Id}/wait`, 'POST');
-        await queryDockerEngine(`/containers/${runner.Id}?force=true`, 'DELETE');
-        logs.push(`Executed docker compose up -d --remove-orphans successfully.`);
-      }
-    } catch (err) {
-      logs.push(`Launch notice: ${(err as Error).message}`);
-    }
-  }
-
-  return {
-    success: true,
-    message: `Stack at ${targetDirectory} successfully repaired and brought back online!`,
-    logs,
-  };
-}

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Activity, RotateCcw, Stethoscope, Settings, RefreshCw } from 'lucide-react';
+import { Activity, History, Stethoscope, Settings, RefreshCw } from 'lucide-react';
 import { DeepContainerMetadata, SystemStatus } from '../types';
 import { ManifexusAppIcon, UpdateGlyph } from './SoftwareUpdateSheet';
 import { ios } from './ui/ios';
@@ -18,7 +18,8 @@ interface ManifexusHeroHeaderProps {
   onOpenActivity: () => void;
   /** Something failed since Activity was last opened */
   activityAlert?: boolean;
-  onOpenHistory?: () => void;
+  /** Opens Restore */
+  onOpenRestore?: () => void;
   onOpenSettings: () => void;
   onRefresh: () => void;
   isRefreshing?: boolean;
@@ -117,7 +118,7 @@ export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
   stackCount,
   onOpenActivity,
   activityAlert,
-  onOpenHistory,
+  onOpenRestore,
   onOpenSettings,
   onRefresh,
   isRefreshing,
@@ -205,12 +206,12 @@ export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
               tone={activityAlert ? 'red' : 'default'}
               onClick={onOpenActivity}
             />
-            {onOpenHistory && (
+            {onOpenRestore && (
               <ToolButton
-                icon={<RotateCcw className={iconCls} />}
-                label="Undo"
-                tip="Undo a recent move or delete, from its saved backup."
-                onClick={onOpenHistory}
+                icon={<History className={iconCls} />}
+                label="Restore"
+                tip="Go back to before a move or delete. Every change keeps a backup."
+                onClick={onOpenRestore}
               />
             )}
             <Divider />

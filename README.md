@@ -29,11 +29,17 @@ Manifexus is a lightweight, self-hosted central command hub that automatically t
 * **Data Persistence:** User configurations, custom groups, custom friendly names, icon overrides, and port customizations are stored in `/data/config.json` (mapped to `./data` on the host), surviving container restarts and image updates.
 
 ### 4. Activity: a complete record for troubleshooting
-* **Everything you do is an activity:** moves, deletes, undo, updates, new stacks, app start/stop/restart and settings changes are each recorded from start to finish, with every step, Docker API call, host command (with its full output and exit code), file written (with its contents) and the request that started it.
+* **Everything you do is an activity:** moves, deletes, restores, updates, new stacks, app start/stop/restart and settings changes are each recorded from start to finish, with every step, Docker API call, host command (with its full output and exit code), file written (with its contents) and the request that started it.
 * **See exactly why something failed:** a failed activity shows Docker's own error text and the command that produced it, plus what your containers were doing around that time (crashes, out-of-memory kills, restarts, health changes).
 * **Copy for Claude:** one tap copies a Markdown troubleshooting report; *Everything (.json)* downloads the full record including the environment (Manifexus build, Docker version, mounts, permissions).
 * **All Events:** search, filter by severity, category and time, follow live, and export as JSON Lines or CSV.
 * **Stored on disk** in `/data/logs` (daily JSON Lines files). Retention (7 days to 1 year), a storage limit and background detail are set in Activity → Settings. Passwords, tokens and keys are replaced with `••••••` before anything is saved.
+
+### 5. Restore: go back to before any change
+* **Every change keeps a backup:** moving apps and deleting a stack save the compose files (and, unless you turn it off, the stack folders and volumes) first.
+* **Restore to before a change** from the Restore screen. Manifexus first checks whether anything was edited since and shows exactly what will happen. If newer changes touched the same stacks, they're restored first, newest to oldest, in one run, so nothing conflicts.
+* **Recover without restoring everything:** put a deleted stack's files back without starting it, copy a backup into another folder, browse a backup and download single files, or download the whole backup as a `.tar.gz`.
+* **Backups are kept for 30 days** by default (7 days to forever in Restore → Backups). Pin a backup to keep it forever. When a backup is removed, its change moves to the Archive as history.
 
 ---
 

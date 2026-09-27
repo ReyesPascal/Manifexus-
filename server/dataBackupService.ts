@@ -465,7 +465,8 @@ export async function restoreStackData(
     }
 
     if (e.kind === 'directory') {
-      const exists = await hostDirectoryExists(e.source);
+      // An empty folder counts as missing: there's nothing in it to protect
+      const exists = !(await hostDirectoryIsFree(e.source));
       if (exists && !opts.overwrite) {
         log(`Folder ${e.source} still exists; leaving live data in place.`);
         continue;
@@ -579,4 +580,34 @@ export function formatBytes(bytes: number): string {
     i++;
   }
   return `${v.toFixed(v < 10 ? 1 : 0)} ${units[i]}`;
+}
+
+/**
+ * Copies one backed-up folder or volume into a different host folder, without touching the
+ * original location. Used by Restore → "Restore to Another Folder".
+ */
+export async function extractArchiveTo(entry: DataArchiveEntry, destHostDir: string): Promise<void> {
+  if (!fs.existsSync(entry.archiveFile)) throw new Error(`The backup file for ${entry.source} is missing.`);
+  const code = await runHelper(`mkdir -p /dst && tar -C /dst -xzpf ${shellQuote(entry.archiveFile)}`, [`${destHostDir}:/dst`], DEFAULT_HELPER_TIMEOUT_MS, [], {
+    purpose: `Restore ${entry.kind === 'volume' ? 'volume' : 'folder'} ${entry.source} into ${destHostDir}`,
+  });
+  if (code !== 0) throw new Error(`Copying ${entry.source} into ${destHostDir} failed (exit ${code}).`);
+}
+
+/** True when the host folder doesn't exist or is empty (safe to restore into). */
+export async function hostDirectoryIsFree(hostDir: string): Promise<boolean> {
+  const parent = path.posix.dirname(hostDir);
+  const name = path.posix.basename(hostDir);
+  try {
+    const code = await runHelper(
+      `[ ! -e /parent/${shellQuote(name)} ] || [ -z "$(ls -A /parent/${shellQuote(name)} 2>/dev/null)" ]`,
+      [`${parent}:/parent:ro`],
+      60 * 1000,
+      [],
+      { purpose: `Check ${hostDir} is free`, probe: true }
+    );
+    return code === 0;
+  } catch {
+    return false;
+  }
 }

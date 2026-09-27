@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { sheetBackdropClass, sheetPanelClass } from './ui/ios';
 import {
   X,
   FileCode,
@@ -80,9 +81,9 @@ export const InspectModal: React.FC<InspectModalProps> = ({
   const isRunning = container.state === 'running';
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+    <div className={`${sheetBackdropClass} z-50`}>
       <div
-        className="relative w-full max-w-3xl max-h-[90vh] flex flex-col bg-[#0b0f19] border border-slate-700/80 rounded-2xl shadow-2xl overflow-hidden font-mono text-slate-200"
+        className={`${sheetPanelClass} relative bg-[#0b0f19] sm:border sm:border-slate-700/80 shadow-2xl font-mono text-slate-200`}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Modal Header */}
@@ -192,7 +193,7 @@ export const InspectModal: React.FC<InspectModalProps> = ({
         </div>
 
         {/* Tab Content Container */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-4">
+        <div className="flex-1 min-h-0 overflow-y-auto p-6 space-y-4">
           {/* TAB 1: COMPOSE & SPECS */}
           {activeTab === 'compose' && (
             <div className="space-y-4">

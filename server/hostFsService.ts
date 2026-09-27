@@ -80,17 +80,20 @@ async function readHostFileImpl(hostFilePath: string): Promise<string | null> {
 
   // 2. Docker Engine helper execution (mounts target host folder read-only)
   try {
-    const parentDir = path.dirname(hostFilePath);
-    const fileName = path.basename(hostFilePath);
+    // Mount the folder *above* the file's folder: binding a folder that doesn't exist makes Docker
+    // create it on the host, which would leave empty folders behind (and make a deleted stack look present)
+    const parentDir = path.posix.dirname(hostFilePath);
+    const grandParent = path.posix.dirname(parentDir);
+    const rel = path.posix.join(path.posix.basename(parentDir), path.posix.basename(hostFilePath)).replace(/'/g, `'\\''`);
     const helperImage = await getBestAvailableImage();
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const runner = await queryDockerEngine<any>('/containers/create', 'POST', {
       Image: helperImage,
       Entrypoint: [],
-      Cmd: ['sh', '-c', `if [ -f "/target_dir/${fileName}" ]; then cat "/target_dir/${fileName}"; else exit 44; fi`],
+      Cmd: ['sh', '-c', `if [ -f '/target_root/${rel}' ]; then cat '/target_root/${rel}'; else exit 44; fi`],
       HostConfig: {
-        Binds: [`${parentDir}:/target_dir:ro`],
+        Binds: [`${grandParent}:/target_root:ro`],
       },
     });
 
@@ -233,17 +236,19 @@ async function checkHostFileExistsImpl(hostFilePath: string): Promise<boolean> {
   }
 
   try {
-    const parentDir = path.dirname(hostFilePath);
-    const fileName = path.basename(hostFilePath);
+    // Mount the folder above, so checking never creates the file's folder on the host
+    const parentDir = path.posix.dirname(hostFilePath);
+    const grandParent = path.posix.dirname(parentDir);
+    const rel = path.posix.join(path.posix.basename(parentDir), path.posix.basename(hostFilePath)).replace(/'/g, `'\\''`);
     const helperImage = await getBestAvailableImage();
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const runner = await queryDockerEngine<any>('/containers/create', 'POST', {
       Image: helperImage,
       Entrypoint: [],
-      Cmd: ['sh', '-c', `[ -f "/target_dir/${fileName}" ]`],
+      Cmd: ['sh', '-c', `[ -f '/target_root/${rel}' ]`],
       HostConfig: {
-        Binds: [`${parentDir}:/target_dir:ro`],
+        Binds: [`${grandParent}:/target_root:ro`],
       },
     });
 

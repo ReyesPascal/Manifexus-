@@ -496,7 +496,6 @@ export const SoftwareUpdateSheet: React.FC<SoftwareUpdateSheetProps> = ({ open, 
         if (!busy) onClose();
       }}
       title="Software Update"
-      width={560}
       rightAction={
         busy ? <span className="text-[15px]" style={{ color: ios.tertiary }}>Updating</span> : undefined
       }

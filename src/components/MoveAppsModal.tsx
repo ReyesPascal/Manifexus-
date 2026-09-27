@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AutomationPrivileges, DeepContainerMetadata, EmptyComposeStack, StackMergePlan } from '../types';
-import { ExecutionPipelineConsole } from './ExecutionPipelineConsole';
+import { ProgressView, useRun } from './ProgressTracker';
 import {
   Alert,
   AppTile,
@@ -17,6 +17,9 @@ import {
   StackGlyph,
   Switch,
   ios,
+  sheetBackdropClass,
+  sheetPanelClass,
+  sheetFooterClass,
 } from './ui/ios';
 
 /**
@@ -44,7 +47,7 @@ interface MoveAppsModalProps {
   onMoved?: () => void;
 }
 
-type Page = 'destination' | 'apps' | 'review' | 'data' | 'compose';
+type Page = 'destination' | 'apps' | 'review' | 'data' | 'compose' | 'progress';
 
 type Destination = { kind: 'existing'; project: string } | { kind: 'new' };
 
@@ -142,11 +145,7 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
   const [freeBytes, setFreeBytes] = useState<number | null>(null);
 
   const [copied, setCopied] = useState(false);
-  const [consoleOpen, setConsoleOpen] = useState(false);
-  const [consoleMode, setConsoleMode] = useState<'merge' | 'revert'>('merge');
-  const [consoleUrl, setConsoleUrl] = useState('/api/stacks/execute-merge-stream');
-  const [consolePayload, setConsolePayload] = useState<Record<string, unknown>>({});
-  const [consoleMergeId, setConsoleMergeId] = useState<string | undefined>(undefined);
+  const move = useRun();
 
   const bodyRef = useRef<HTMLDivElement>(null);
 
@@ -230,7 +229,7 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
       setFootprints(null);
       setBackupData(true);
       setConfirmNoBackup(false);
-      setConsoleOpen(false);
+      move.reset();
       setNewName('');
       setNewDirEdited(false);
       setNewDir('');
@@ -364,17 +363,14 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
 
   const startMove = () => {
     if (!plan) return;
-    setConsoleMode('merge');
-    setConsoleMergeId(undefined);
-    setConsoleUrl('/api/stacks/execute-merge-stream');
-    setConsolePayload({
+    setPage('progress');
+    void move.start('/api/stacks/execute-merge-stream', {
       sourceContainerIds: selected,
       targetStackName: plan.targetStackName,
       targetDirectory: plan.targetDirectory,
       yamlContent: plan.generatedComposeYaml,
       backupData,
     });
-    setConsoleOpen(true);
   };
 
   const setBackup = (on: boolean) => {
@@ -429,12 +425,13 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
     review: 'Review',
     data: 'Data Locations',
     compose: 'Compose File',
+    progress: move.state.status === 'done' ? 'Done' : move.state.status === 'running' ? 'Moving Apps' : 'Move Apps',
   };
   const title = titles[page as Page];
 
   // Esc goes back, or closes on the first page (alerts handle their own Esc)
   useEffect(() => {
-    if (!isOpen || consoleOpen || confirmNoBackup) return;
+    if (!isOpen || page === 'progress' || confirmNoBackup) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
       if (back) back.go();
@@ -442,7 +439,7 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [isOpen, consoleOpen, confirmNoBackup, back, onClose]);
+  }, [isOpen, page, confirmNoBackup, back, onClose]);
 
   if (!isOpen) return null;
 
@@ -858,15 +855,43 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
     </section>
   );
 
+  const movingNames = selectedApps.map((a) => a.compose?.service || a.cleanName);
+  const movingLabel = movingNames.length <= 2 ? movingNames.join(' and ') : `${movingNames.length} apps`;
+  const progressPage = (
+    <ProgressView
+      run={move.state}
+      runningTitle={`Moving ${movingLabel} to ${plan?.targetStackName || destName}`}
+      doneMessage={`${movingLabel} ${movingNames.length === 1 ? 'is' : 'are'} now in ${plan?.targetStackName || destName}. You can restore to before this move anytime from Restore.`}
+      onDone={() => {
+        onMoved?.();
+        onClose();
+      }}
+      onClose={() => {
+        onMoved?.();
+        onClose();
+      }}
+    />
+  );
+
   const content =
-    page === 'destination' ? destinationPage : page === 'apps' ? appsPage : page === 'review' ? reviewPage : page === 'data' ? dataPage : composePage;
+    page === 'progress'
+      ? progressPage
+      : page === 'destination'
+        ? destinationPage
+        : page === 'apps'
+          ? appsPage
+          : page === 'review'
+            ? reviewPage
+            : page === 'data'
+              ? dataPage
+              : composePage;
 
   // ---------------------------------------------------------------------------
   // Sheet
   // ---------------------------------------------------------------------------
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-6 bg-black/55"
+      className={`${sheetBackdropClass} z-50`}
       onMouseDown={(e) => {
         if (e.target === e.currentTarget && !confirmNoBackup) onClose();
       }}
@@ -876,7 +901,7 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
         role="dialog"
         aria-modal="true"
         aria-labelledby="move-apps-title"
-        className="w-full sm:max-w-[600px] h-[94vh] sm:h-[min(760px,88vh)] flex flex-col rounded-t-[14px] sm:rounded-[14px] overflow-hidden motion-safe:animate-[ios-sheet-in_220ms_ease-out]"
+        className={sheetPanelClass}
         style={{ background: ios.sheet, boxShadow: '0 30px 80px rgba(0,0,0,0.55)', WebkitFontSmoothing: 'antialiased' }}
       >
         {/* Navigation bar */}
@@ -897,11 +922,14 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
             ) : (
               <button
                 type="button"
-                onClick={onClose}
+                onClick={() => {
+                  if (page === 'progress') onMoved?.();
+                  onClose();
+                }}
                 className="text-[17px] rounded focus-visible:outline-2 focus-visible:outline-[#0A84FF] hover:opacity-80"
                 style={{ color: ios.blue }}
               >
-                Cancel
+                {page === 'progress' ? 'Close' : 'Cancel'}
               </button>
             )}
             <span className="w-[60px]" />
@@ -913,7 +941,7 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
         </div>
 
         {/* Body */}
-        <div ref={bodyRef} className="flex-1 overflow-y-auto px-4 sm:px-5 pt-5 pb-8">
+        <div ref={bodyRef} className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-5 pt-5 pb-8">
           <div key={page} className={page === 'data' || page === 'compose' ? 'motion-safe:animate-[ios-push-in_200ms_ease-out]' : ''}>
             {content}
           </div>
@@ -921,7 +949,7 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
 
         {/* Action bar */}
         {primary && (
-          <div className="px-4 sm:px-5 py-3 flex justify-end" style={{ borderTop: `0.5px solid ${ios.separator}` }}>
+          <div className={`${sheetFooterClass} flex justify-end`} style={{ borderTop: `0.5px solid ${ios.separator}` }}>
             <Button onClick={primary.go} disabled={primary.disabled} className="w-full sm:w-auto sm:min-w-[160px]">
               {primary.label}
             </Button>
@@ -932,7 +960,7 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
       <Alert
         open={confirmNoBackup}
         title="Move without a backup?"
-        message="If something goes wrong, the apps’ data can’t be restored. Compose files are still saved so you can undo the move."
+        message="If something goes wrong, the apps’ data can’t be restored. Compose files are still saved, so you can restore to before the move."
         confirmLabel="Turn Off"
         destructive
         onCancel={() => setConfirmNoBackup(false)}
@@ -942,29 +970,6 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
         }}
       />
 
-      <ExecutionPipelineConsole
-        isOpen={consoleOpen}
-        onClose={() => setConsoleOpen(false)}
-        title={consoleMode === 'merge' ? `Moving apps into ${plan?.targetStackName || destName}` : 'Undoing the move'}
-        mode={consoleMode}
-        mergeId={consoleMergeId}
-        streamUrl={consoleUrl}
-        streamPayload={consolePayload}
-        onKeepChanges={() => {
-          setConsoleOpen(false);
-          onMoved?.();
-          setTimeout(() => onMoved?.(), 2500);
-          onClose();
-        }}
-        onTriggerRevert={(mergeId) => {
-          setConsoleMode('revert');
-          setConsoleMergeId(mergeId);
-          setConsoleUrl(`/api/history/${mergeId}/revert-stream`);
-          setConsolePayload({});
-          setConsoleOpen(true);
-        }}
-        onSuccessDone={() => onMoved?.()}
-      />
     </div>
   );
 };

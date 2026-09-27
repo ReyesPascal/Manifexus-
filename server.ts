@@ -38,16 +38,9 @@ import {
   executeAutomatedStackMerge,
   generateElevateScript,
   executeStreamingPipeline,
-  executeStreamingRevert,
   resolveHostPathToContainer,
-  repairTargetStack,
 } from './server/automationService';
 import { readHostFile, createHostDirectory, writeHostFile, refreshSelfMounts } from './server/hostFsService';
-import {
-  getMergeHistory,
-  finalizeMergeRecord,
-  getHistoryRecordById,
-} from './server/historyService';
 import { globalLogService } from './server/globalLogService';
 import {
   record,
@@ -79,6 +72,23 @@ import {
   recordStartup,
 } from './server/observability';
 import { setupTerminalWebSocket } from './server/terminalService';
+import {
+  listRestorePoints,
+  getRestorePoint,
+  planRestore,
+  executeRestore,
+  setPinned,
+  deleteBackup,
+  clearArchive,
+  getRestoreSettings,
+  updateRestoreSettings,
+  enforceBackupRetention,
+  listBackupFiles,
+  streamBackupFile,
+  streamBackupArchive,
+  restoreToFolder,
+  freshStartOnce,
+} from './server/restoreService';
 import {
   getSoftwareUpdateState,
   checkForUpdate,
@@ -697,23 +707,6 @@ async function startServer() {
     }
   });
 
-  // Repair / De-Conflict Stack Endpoint
-  app.post('/api/stacks/repair-conflicts', async (req, res) => {
-    try {
-      const { targetDirectory, removeConflictingContainer, stripService } = req.body;
-      if (!targetDirectory) {
-        return res.status(400).json({ error: 'Target directory is required' });
-      }
-      const result = await repairTargetStack(targetDirectory, {
-        removeConflictingContainer,
-        stripService,
-      });
-      res.json(result);
-    } catch (err) {
-      res.status(500).json({ error: (err as Error).message });
-    }
-  });
-
   // Directive 3: GitHub Actions-Style Live Streaming Pipeline Endpoint (SSE)
   app.post('/api/stacks/execute-merge-stream', async (req, res) => {
     res.setHeader('Content-Type', 'text/event-stream');
@@ -757,60 +750,92 @@ async function startServer() {
     }
   });
 
-  // Directive 6: Merge History and State Ledger Endpoints
-  app.get('/api/history', (req, res) => {
-    try {
-      const history = getMergeHistory();
-      res.json({ history });
-    } catch (err) {
-      res.status(500).json({ error: (err as Error).message });
-    }
+  // Restore: every change keeps a backup and can be restored (with newer changes to the same stacks)
+  app.get('/api/restore', (req, res) => {
+    res.json(listRestorePoints());
   });
 
-  app.get('/api/history/:id', (req, res) => {
-    try {
-      const record = getHistoryRecordById(req.params.id);
-      if (!record) {
-        return res.status(404).json({ error: 'Merge record not found' });
-      }
-      res.json(record);
-    } catch (err) {
-      res.status(500).json({ error: (err as Error).message });
-    }
+  app.get('/api/restore/settings', (req, res) => res.json(getRestoreSettings()));
+  app.post('/api/restore/settings', (req, res) => {
+    const s = updateRestoreSettings(req.body || {});
+    enforceBackupRetention();
+    res.json(s);
   });
 
-  // Directive 4: Keep Changes
-  app.post('/api/history/:id/keep', (req, res) => {
-    try {
-      const success = finalizeMergeRecord(req.params.id);
-      res.json({ success });
-    } catch (err) {
-      res.status(500).json({ error: (err as Error).message });
-    }
+  app.post('/api/restore/archive/clear', (req, res) => {
+    res.json({ removed: clearArchive(Array.isArray(req.body?.ids) ? req.body.ids : undefined) });
   });
 
-  // Directive 4 & 6: Automated Rollback Pipeline Streamer (SSE)
-  app.post('/api/history/:id/revert-stream', async (req, res) => {
+  app.get('/api/restore/:id', (req, res) => {
+    const p = getRestorePoint(req.params.id);
+    if (!p) return res.status(404).json({ error: 'This change is no longer in Restore.' });
+    res.json(p);
+  });
+
+  app.get('/api/restore/:id/plan', async (req, res) => {
+    const plan = await planRestore(req.params.id);
+    if (!plan) return res.status(404).json({ error: 'This change is no longer in Restore.' });
+    res.json(plan);
+  });
+
+  // Runs the restore (Server-Sent Events, same format as moves)
+  app.post('/api/restore/:id/run', async (req, res) => {
+    const p = getRestorePoint(req.params.id);
+    if (p) setActivityTitle(`Restore to before: ${p.title}`);
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
     // @ts-ignore
     if (res.flushHeaders) res.flushHeaders();
-
     const recorder = pipelineRecorder(currentActivityId());
-    const sendEvent = (data: any) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const send = (data: any) => {
       recorder.onEvent(data);
       res.write(`data: ${JSON.stringify(data)}\n\n`);
     };
-
     try {
-      await executeStreamingRevert(req.params.id, sendEvent);
+      await executeRestore(req.params.id, send, { filesOnly: req.body?.filesOnly === true });
     } catch (err) {
-      sendEvent({ type: 'failed', log: (err as Error).message });
+      send({ type: 'failed', log: (err as Error).message });
     } finally {
       recorder.finish();
       res.end();
     }
+  });
+
+  app.post('/api/restore/:id/pin', (req, res) => {
+    const p = setPinned(req.params.id, req.body?.pinned !== false);
+    if (!p) return res.status(404).json({ error: 'This change is no longer in Restore.' });
+    res.json(p);
+  });
+
+  app.post('/api/restore/:id/delete-backup', (req, res) => {
+    if (!deleteBackup(req.params.id)) return res.status(404).json({ error: 'This change is no longer in Restore.' });
+    res.json(getRestorePoint(req.params.id));
+  });
+
+  app.get('/api/restore/:id/files', async (req, res) => {
+    const out = await listBackupFiles(req.params.id);
+    if (!out) return res.status(404).json({ error: 'The backup for this change is no longer available.' });
+    res.json(out);
+  });
+
+  app.get('/api/restore/:id/file', (req, res) => {
+    const ok = streamBackupFile(req.params.id, Number(req.query.archive ?? -1), String(req.query.path || ''), res);
+    if (!ok) res.status(404).json({ error: 'That file isn’t in the backup.' });
+  });
+
+  app.get('/api/restore/:id/download', (req, res) => {
+    if (!streamBackupArchive(req.params.id, res)) res.status(404).json({ error: 'The backup for this change is no longer available.' });
+  });
+
+  app.post('/api/restore/:id/copy', async (req, res) => {
+    const lines: string[] = [];
+    const targets = await restoreToFolder(req.params.id, String(req.body?.destination || ''), (m) => lines.push(m)).catch((err: Error) => {
+      res.status(400).json({ error: err.message });
+      return null;
+    });
+    if (targets) res.json({ targets, log: lines });
   });
 
   // Get host automation privileges (detects if sandboxed or elevated)
@@ -993,6 +1018,11 @@ async function startServer() {
   watchDockerEvents();
   enforceRetention();
   setInterval(() => enforceRetention(), 60 * 60 * 1000);
+
+  // Restore: one-time clean-up of old History entries, then the keep-for setting (hourly)
+  freshStartOnce();
+  enforceBackupRetention();
+  setInterval(() => enforceBackupRetention(), 60 * 60 * 1000);
 
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`[Manifexus Core Engine] Server and Web Terminal running on http://0.0.0.0:${PORT}`);

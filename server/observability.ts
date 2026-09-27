@@ -23,7 +23,6 @@ import { queryDockerEngine, HELPER_LABEL } from './dockerService';
 import { getSelf } from './updateService';
 import { checkPrivilegeStatus } from './automationService';
 import { getConfig } from './storageService';
-import { getHistoryRecordById } from './historyService';
 
 const DOCKER_SOCKET_PATH = process.env.DOCKER_SOCKET_PATH || '/var/run/docker.sock';
 const bootedAt = new Date().toISOString();
@@ -221,15 +220,12 @@ const ROUTES: [string, RegExp, Describer][] = [
   ['POST', /^\/api\/stacks\/execute-merge$/, (_r, b) => ({ type: 'move', title: `Move apps into ${b?.targetStackName || 'a stack'}` })],
   ['POST', /^\/api\/stacks\/create$/, (_r, b) => ({ type: 'stack', title: `Create stack ${b?.stackName || ''}`.trim() })],
   ['POST', /^\/api\/stacks\/delete$/, (_r, b) => ({ type: 'delete', title: `Delete stack ${b?.projectName || ''}`.trim() })],
-  ['POST', /^\/api\/stacks\/repair-conflicts$/, (_r, b) => ({ type: 'stack', title: `Repair stack ${b?.targetStackName || b?.projectName || ''}`.trim() })],
-  ['POST', /^\/api\/history\/([^/]+)\/revert-stream$/, (r) => {
-    const rec = getHistoryRecordById(r.path.split('/')[3]);
-    return { type: 'undo', title: rec ? `Undo: ${rec.summary || rec.targetStackName}` : 'Undo a change' };
-  }],
-  ['POST', /^\/api\/history\/([^/]+)\/keep$/, (r) => {
-    const rec = getHistoryRecordById(r.path.split('/')[3]);
-    return { type: 'undo', title: rec ? `Keep: ${rec.summary || rec.targetStackName}` : 'Keep a change' };
-  }],
+  ['POST', /^\/api\/restore\/([^/]+)\/run$/, () => ({ type: 'undo', title: 'Restore' })],
+  ['POST', /^\/api\/restore\/([^/]+)\/copy$/, () => ({ type: 'undo', title: 'Restore a backup to another folder' })],
+  ['POST', /^\/api\/restore\/([^/]+)\/delete-backup$/, () => ({ type: 'undo', title: 'Delete a backup' })],
+  ['POST', /^\/api\/restore\/([^/]+)\/pin$/, (_r, b) => ({ type: 'settings', title: b?.pinned === false ? 'Unpin a backup' : 'Pin a backup' })],
+  ['POST', /^\/api\/restore\/archive\/clear$/, () => ({ type: 'undo', title: 'Clear archived changes' })],
+  ['POST', /^\/api\/restore\/settings$/, () => ({ type: 'settings', title: 'Change how long backups are kept' })],
   ['POST', /^\/api\/system\/update\/check$/, () => ({ type: 'update', title: 'Check for updates' })],
   ['POST', /^\/api\/system\/update\/install$/, () => ({ type: 'update', title: 'Install Manifexus update' })],
   ['POST', /^\/api\/system\/update\/settings$/, () => ({ type: 'settings', title: 'Change update settings' })],
