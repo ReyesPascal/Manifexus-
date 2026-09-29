@@ -18,7 +18,11 @@
         "Activity → Commands. A learning log of every command behind your recent changes, and How It Was Done on every activity."
       ],
       "improved": [
-        "While Ask Manifexus works, you see what it's doing right now (starting up, reading logs, thinking, writing) and how long it's taken, instead of just dots.",
+        "While Ask Manifexus works, you see each step as it happens: what it looked up, which model is reading and how much, a progress bar with the time left, and how long every step took. When it's done, it folds into one line you can open again.",
+        "Much faster fixes. Manifexus looks up the obvious things (the file or app in question) before the AI starts, and small file changes are written as a one-line edit instead of the whole file, so a fix like a wrong setting takes one AI round instead of several.",
+        "Choose Automatically (new in AI Settings, on by default). Each request gets the right model and amount of thinking: quick questions stay quick, tricky problems go to the fixer and think it through, and if the quick helper gets stuck the fixer takes over. The fixer only runs when there's enough free memory at that moment.",
+        "Answers appear all at once when they're ready, instead of trickling in word by word, and they're nicely formatted: numbered steps, code blocks with a Copy button, tables and highlighted names and paths.",
+        "Speed estimates are measured on your own server after the first few answers, and the processor is counted by its real cores, so \"answers in\" times are closer to the truth.",
         "Updates now show version numbers and notes like these, instead of build codes.",
         "Activity has a new Fixes filter."
       ],

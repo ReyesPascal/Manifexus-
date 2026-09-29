@@ -15,7 +15,8 @@ export interface Gpu {
 }
 
 export interface SystemSpecs {
-  cpu: { model: string; cores: number; avx2: boolean; avx512: boolean; arch: string };
+  /** cores = threads the OS sees; physicalCores = real cores (what decides AI speed on a CPU) */
+  cpu: { model: string; cores: number; physicalCores: number; avx2: boolean; avx512: boolean; arch: string };
   memory: { totalBytes: number; availableBytes: number; manifexusLimitBytes?: number };
   gpus: Gpu[];
   /** Whether Docker can hand an NVIDIA card to containers (the NVIDIA container toolkit is installed) */
@@ -60,9 +61,17 @@ function cpuInfo() {
     os.cpus()[0]?.model ||
     'Unknown CPU';
   const flags = /^(flags|Features)\s*:\s*(.+)$/m.exec(txt)?.[2] || '';
+  const cores = os.cpus().length || 1;
+  // Real cores: unique (physical id, core id) pairs. Hyper-threads share a core and barely help the AI.
+  const pairs = new Set<string>();
+  for (const block of txt.split(/\n\s*\n/)) {
+    const core = /^core id\s*:\s*(\d+)/m.exec(block)?.[1];
+    if (core !== undefined) pairs.add(`${/^physical id\s*:\s*(\d+)/m.exec(block)?.[1] || 0}:${core}`);
+  }
   return {
     model: model.replace(/\s+/g, ' '),
-    cores: os.cpus().length || 1,
+    cores,
+    physicalCores: Math.min(cores, pairs.size || cores),
     avx2: /\bavx2\b/.test(flags),
     avx512: /\bavx512f\b/.test(flags),
     arch: os.arch(),

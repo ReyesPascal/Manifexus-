@@ -16,7 +16,8 @@ import { listRestorePoints } from './restoreService';
 import { getRegisteredCreatedStacks } from './stackService';
 import { resolveBackupDir, saveMergeHistoryRecord, MergeHistoryRecord } from './historyService';
 import { getSystemSpecs } from './systemSpecs';
-import { getAiSettings, modelFor, ollama, ollamaStream, catalogModel, Freedom } from './aiService';
+import { getAiSettings, modelFor, ollama, ollamaStream, catalogModel, Freedom, NUM_CTX, speedOf, recordSpeed, EngineStats, fitsNow } from './aiService';
+import { planRoute, thinkFor, thinkLabel, taskLabel, effortLabel, Think } from './aiRouter';
 import type { DeepContainerMetadata } from '../src/types';
 import { explain, Explain } from './commandLog';
 
@@ -175,10 +176,10 @@ const READ_TOOLS: ToolDef[] = [
 ];
 
 function changeTool(freedom: Freedom): ToolDef {
-  const types = ['restart', 'start', 'stop', 'write_file', 'compose_up', 'remove_container', ...(freedom === 'expert' ? ['run_command'] : [])];
+  const types = ['restart', 'start', 'stop', 'edit_file', 'write_file', 'compose_up', 'remove_container', ...(freedom === 'expert' ? ['run_command'] : [])];
   return tool(
     'propose_changes',
-    'Propose changes for the person to review. Nothing happens until they approve. Use write_file with the COMPLETE new file content. ' +
+    'Propose changes for the person to review. Nothing happens until they approve. edit_file replaces the exact text `find` in a file with `replace` (best for small changes). write_file writes the COMPLETE content of a new or rewritten file. ' +
       'compose_up starts or recreates services of a stack from its compose file. remove_container removes a container but keeps its volumes and folders.' +
       (freedom === 'expert' ? ' run_command runs one shell command on the server; use only when nothing else can do it.' : ''),
     {
@@ -193,7 +194,9 @@ function changeTool(freedom: Freedom): ToolDef {
             app: str('App name (restart, start, stop, remove_container)'),
             stack: str('Stack name (compose_up)'),
             services: { type: 'array', items: { type: 'string' }, description: 'Services to start (compose_up); omit for all' },
-            path: str('File path (write_file)'),
+            path: str('File path (edit_file, write_file)'),
+            find: str('Exact current text to replace, copied from the file, with enough around it to be unique (edit_file)'),
+            replace: str('What it becomes (edit_file)'),
             content: str('Complete new file content (write_file)'),
             command: str('Shell command (run_command)'),
             reason: str('Why this step, in plain words'),
@@ -309,11 +312,14 @@ async function runTool(name: string, args: Record<string, unknown>): Promise<{ l
 // ----------------------------------------------------------------------------
 
 export interface PlanAction {
-  type: 'restart' | 'start' | 'stop' | 'write_file' | 'compose_up' | 'remove_container' | 'run_command';
+  type: 'restart' | 'start' | 'stop' | 'edit_file' | 'write_file' | 'compose_up' | 'remove_container' | 'run_command';
   app?: string;
   stack?: string;
   services?: string[];
   path?: string;
+  /** edit_file: the exact text to change and what it becomes (turned into write_file with the whole new file) */
+  find?: string;
+  replace?: string;
   content?: string;
   command?: string;
   reason: string;
@@ -352,6 +358,15 @@ async function buildPlan(args: { title?: string; explanation?: string; actions?:
   if (!actions.length) return { problem: 'The plan has no actions.' };
   const steps: PlanStep[] = [];
   for (const act of actions) {
+    // A small edit becomes the whole new file, so it's reviewed, backed up and run like any file change
+    if (act.type === 'edit_file') {
+      const edited = await applyEdit(act);
+      if (typeof edited !== 'string') return edited;
+      act.type = 'write_file';
+      act.content = edited;
+      delete act.find;
+      delete act.replace;
+    }
     const t = act.type;
     if (t === 'restart' || t === 'start' || t === 'stop' || t === 'remove_container') {
       const c = await findApp(act.app || '');
@@ -367,6 +382,13 @@ async function buildPlan(args: { title?: string; explanation?: string; actions?:
       const p = String(act.path || '');
       if (!p.startsWith('/')) return { problem: `write_file needs a full path; got "${p}".` };
       if (typeof act.content !== 'string') return { problem: 'write_file needs the complete new content.' };
+      if (/\.json$/i.test(p)) {
+        try {
+          JSON.parse(act.content);
+        } catch (e) {
+          return { problem: `The new ${path.posix.basename(p)} isn’t valid JSON: ${(e as Error).message}. Fix it and propose again.` };
+        }
+      }
       if (/\.ya?ml$/.test(p)) {
         try {
           yaml.parse(act.content);
@@ -424,6 +446,30 @@ async function buildPlan(args: { title?: string; explanation?: string; actions?:
 
 export const getPlan = (id: string) => plans.get(id);
 
+/** Apply an edit_file action to the current file: the new content, or why it can't be applied */
+async function applyEdit(act: PlanAction): Promise<string | { problem: string }> {
+  const p = String(act.path || '');
+  if (!p.startsWith('/')) return { problem: `edit_file needs a full path; got "${p}".` };
+  const find = typeof act.find === 'string' ? act.find : '';
+  const replace = typeof act.replace === 'string' ? act.replace : '';
+  if (!find) return { problem: 'edit_file needs the exact text to find.' };
+  if (find.includes('••••••') || replace.includes('••••••')) return { problem: 'Hidden values (••••••) can’t be used in edit_file. Choose text next to them instead, or use write_file.' };
+  const before = await readHostFile(p).catch(() => null);
+  if (before === null) return { problem: `${p} doesn’t exist or can’t be read. Use write_file to create it.` };
+  const count = (hay: string, needle: string) => hay.split(needle).length - 1;
+  let n = count(before, find);
+  if (n === 1) return before.replace(find, () => replace);
+  if (n > 1) return { problem: `The text to find appears ${n} times in ${p}. Include more of the lines around it so it’s unique.` };
+  // Models often get spacing slightly wrong: match ignoring differences in spaces and line breaks
+  const loose = new RegExp(find.trim().split(/\s+/).map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('\\s+'), 'g');
+  const matches = before.match(loose) || [];
+  n = matches.length;
+  // The match has no surrounding whitespace, so neither should the replacement if the find text had some
+  if (n === 1) return before.replace(loose, () => (find.trim() !== find ? replace.trim() : replace));
+  if (n > 1) return { problem: `The text to find appears ${n} times in ${p}. Include more of the lines around it so it’s unique.` };
+  return { problem: `The text to find isn’t in ${p}. Read the file again and copy the text exactly.` };
+}
+
 // ----------------------------------------------------------------------------
 // Chat
 // ----------------------------------------------------------------------------
@@ -434,27 +480,43 @@ export interface ChatMessage {
 }
 
 type Emit = (e: Record<string, unknown>) => void;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Msg = any;
 
-function systemPrompt(freedom: Freedom, snapshot: string, focus?: string): string {
+/**
+ * The instructions never change between requests, so the engine can keep what it already read of
+ * them (and of the tool list) in memory: on a CPU that saves the slowest part of every answer.
+ * Everything that changes (the apps right now, what the person is looking at) goes in their message.
+ */
+function systemPrompt(freedom: Freedom): string {
   return [
     'You are the assistant built into Manifexus, a dashboard for the Docker apps on this person’s home server.',
-    'You can look at everything with your tools: apps, stacks, compose files, logs, Activity, Restore, Diagnostics and the server itself. Look before you answer; never guess names, paths or causes.',
-    'Talk like a friendly expert to someone who may never have used a terminal: short, plain sentences, no jargon (if you must use a term, explain it). Use bullet points only for steps.',
+    'Your tools can look at apps, stacks, files, logs, Activity, Restore, Diagnostics and the server. Look before you answer; never guess names, paths or causes. Some things may already be looked up for you: use them, don’t look them up again.',
+    'Work fast: call tools without announcing them, and ask for several at once when you can.',
     freedom === 'look'
       ? 'You can only look and advise: explain what is wrong and what could be done, but you cannot change anything.'
-      : 'When something should change, call propose_changes with every step. Nothing happens until the person approves; they see a before/after of every file. Manifexus backs everything up first and saves it in Restore, so it can be undone.',
-    'Prefer the smallest safe fix. Keep data safe: never delete volumes or data folders. When editing a file, keep everything else in it exactly as it was.',
+      : 'When something should change, call propose_changes with every step and a plain explanation. Nothing happens until the person approves; they see a before/after of every file, and Manifexus backs everything up first so it can be undone.',
+    'For a small change to a file, use edit_file with the exact current text and its replacement; it is much quicker than write_file, which is only for new files or complete rewrites. Prefer the smallest safe fix. Never delete volumes or data folders.',
     'If you are not sure what is wrong, say so, and say what you would check next.',
-    `What Manifexus shows right now:\n${snapshot}`,
-    focus ? `The person is asking about this: ${focus}` : '',
-  ]
-    .filter(Boolean)
-    .join('\n\n');
+    [
+      'How to write your answer (the person may never have used a terminal):',
+      '- Start with one short sentence that gives the answer or the cause, with the key point in **bold**.',
+      '- Then only what helps: a short paragraph, or numbered steps.',
+      '- Put names, paths, settings and values in `code`, and file contents or commands in fenced code blocks.',
+      '- Plain words; explain any term you must use. No greetings, no filler, no repeating the question. Under 150 words unless they ask for detail.',
+    ].join('\n'),
+  ].join('\n\n');
 }
 
-async function snapshotText(): Promise<string> {
-  const list = await apps().catch(() => []);
-  const lines = list.slice(0, 60).map((c) => `- ${c.cleanName} (${c.compose?.project || 'standalone'}): ${c.state}`);
+function userTurn(question: string, snapshot: string, focus?: string): string {
+  return [question, '---', 'Context from Manifexus (not typed by the person):', `Apps right now:\n${snapshot}`, focus ? `The person is looking at this:\n${focus}` : ''].filter(Boolean).join('\n\n');
+}
+
+const toolsFor = (freedom: Freedom) => (freedom === 'look' ? READ_TOOLS : [...READ_TOOLS, changeTool(freedom)]);
+
+async function snapshotText(list?: DeepContainerMetadata[]): Promise<string> {
+  const all = list || (await apps().catch(() => []));
+  const lines = all.slice(0, 60).map((c) => `- ${c.cleanName} (${c.compose?.project || 'standalone'}): ${c.state}`);
   return lines.join('\n') || '(no apps found)';
 }
 
@@ -499,122 +561,367 @@ async function modelLoaded(model: string): Promise<boolean> {
   }
 }
 
-/** Answer a question, looking things up with tools; may end with a plan to review */
-export async function chat(messages: ChatMessage[], opts: { focus?: string; role?: 'quick' | 'fixer' }, emit: Emit, signal?: AbortSignal): Promise<void> {
-  const settings = getAiSettings();
-  const model = await modelFor(opts.role || 'fixer');
-  if (!model) {
-    emit({ type: 'error', message: 'No AI model is installed yet. Set one up first.' });
-    return;
-  }
-  const info = catalogModel(model);
-  const freedom = settings.freedom;
-  const tools = freedom === 'look' ? READ_TOOLS : [...READ_TOOLS, changeTool(freedom)];
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const convo: any[] = [
-    { role: 'system', content: systemPrompt(freedom, await snapshotText(), opts.focus) },
-    ...messages.slice(-12).map((m) => ({ role: m.role, content: String(m.content).slice(0, 8000) })),
-  ];
-  emit({ type: 'model', model, name: info?.name || model });
-  // What it's doing, for the progress line under the question
-  const phase = (label: string, detail?: string) => emit({ type: 'phase', label, detail });
-  const loading = !(await modelLoaded(model));
-  record('info', 'system', `Asked the AI: ${String(messages[messages.length - 1]?.content || '').slice(0, 160)}`, { model });
+const nameOf = (id: string) => catalogModel(id)?.name || id;
+const words = (tokens: number) => Math.max(1, Math.round(tokens * 0.75));
+const wordsText = (tokens: number) => (words(tokens) === 1 ? '1 word' : `${words(tokens).toLocaleString('en-US')} words`);
+const nice = (n: number) => n.toLocaleString('en-US');
+const secsText = (s: number) => (s >= 60 ? `${Math.floor(s / 60)} min ${Math.round(s % 60)} s` : `${Math.max(1, Math.round(s))} s`);
 
-  for (let round = 0; round < 10; round++) {
-    let text = '';
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let calls: any[] = [];
-    emit({ type: 'thinking' });
-    if (round === 0 && loading) phase(`Starting ${info?.name || 'the AI'}…`, 'Loading it into memory. The first answer takes longer.');
-    else phase(round === 0 ? 'Reading your question…' : 'Thinking about what it found…');
-    let thought = 0;
-    let wrote = false;
-    let arrived = false;
-    for await (const chunk of ollamaStream<{ message?: { content?: string; thinking?: string; tool_calls?: unknown[] }; done?: boolean; error?: string }>(
+/** The progress the person sees: a timeline of steps, the live line under it, notes and the answer */
+function makeUi(emit: Emit) {
+  let n = 0;
+  let lastNote = '';
+  return {
+    step(label: string, kind: 'plan' | 'lookup' | 'model' | 'check' | 'note', detail?: string) {
+      const id = `s${++n}`;
+      const t = Date.now();
+      emit({ type: 'step', id, label, kind, status: 'running', detail });
+      return {
+        done: (l?: string, d?: string) => emit({ type: 'step', id, label: l || label, kind, status: 'done', detail: d ?? detail, ms: Date.now() - t }),
+        fail: (l?: string, d?: string) => emit({ type: 'step', id, label: l || label, kind, status: 'failed', detail: d ?? detail, ms: Date.now() - t }),
+      };
+    },
+    note: (text: string) => {
+      if (text === lastNote) return;
+      lastNote = text;
+      emit({ type: 'step', id: `s${++n}`, label: text, kind: 'note', status: 'done' });
+    },
+    phase: (p: { label: string; detail?: string; progress?: number; eta?: number }) => emit({ type: 'phase', ...p }),
+    answer: (text: string) => emit({ type: 'answer', text }),
+  };
+}
+type Ui = ReturnType<typeof makeUi>;
+
+/**
+ * The last text the engine read (and wrote), so the next estimate knows how much is new to it: the
+ * engine keeps what it read in memory and only reads from where the new conversation differs.
+ */
+let lastCall: { model: string; text: string; at: number } | undefined;
+const promptText = (tools: ToolDef[] | undefined, convo: Msg[]) => `${tools ? JSON.stringify(tools) : ''}${JSON.stringify(convo).slice(0, -1)}`;
+function sharedStart(a: string, b: string): number {
+  const n = Math.min(a.length, b.length);
+  let i = 0;
+  while (i < n && a.charCodeAt(i) === b.charCodeAt(i)) i++;
+  return i;
+}
+
+interface RoundResult {
+  text: string;
+  thought: string;
+  calls: Msg[];
+  stats: EngineStats;
+  cutShort: boolean;
+}
+
+/**
+ * One AI round, with a live account of it: loading the model, reading (with a progress bar from its
+ * measured speed on this server), thinking, writing. The answer is collected and shown all at once
+ * when it's complete instead of trickling in word by word.
+ */
+async function runModel(o: { model: string; convo: Msg[]; tools?: ToolDef[]; think: Think; maxTokens: number; purpose: string }, ui: Ui, signal?: AbortSignal): Promise<RoundResult> {
+  const specs = await getSystemSpecs();
+  const sp = speedOf(o.model, specs);
+  const name = nameOf(o.model);
+  const text0 = promptText(o.tools, o.convo);
+  const promptChars = text0.length;
+  const loaded = await modelLoaded(o.model);
+  const remembered = loaded && lastCall && lastCall.model === o.model && Date.now() - lastCall.at < 4.5 * 60e3 && !sp.noPrefixCache ? sharedStart(lastCall.text, text0) : 0;
+  const continuing = remembered > 1000;
+  const newChars = continuing ? promptChars - remembered : promptChars;
+  const readTokens = Math.max(1, newChars / (sp.charsPerToken || 3.6));
+  const loadSecs = loaded ? 0 : sp.loadSecs || 8;
+  const readSecs = readTokens / sp.prefill;
+  const step = ui.step(`${name} · ${thinkLabel(o.think)}`, 'model', o.purpose);
+
+  const t0 = Date.now();
+  let first = 0;
+  let last = 0;
+  let text = '';
+  let thought = '';
+  let calls: Msg[] = [];
+  let stats: EngineStats = {};
+  let cutShort = false;
+  const tick = () => {
+    const now = Date.now();
+    const el = (now - t0) / 1000;
+    const readBy = loadSecs + readSecs;
+    if (thought && !text && now - last < 3000) {
+      const w = words(thought.length / (sp.charsPerToken || 3.6));
+      return ui.phase({ label: 'Thinking it through', detail: `${w === 1 ? '1 word' : `${nice(w)} words`} of thinking so far · about ${Math.max(1, Math.round(sp.gen * 0.75))} words a second on your server` });
+    }
+    if (text && now - last < 3000) {
+      const w = words(text.length / (sp.charsPerToken || 3.6));
+      return ui.phase({ label: 'Writing', detail: `${w === 1 ? '1 word' : `${nice(w)} words`} so far · you’ll see it all at once when it’s done`, progress: Math.min(0.95, w / 160) });
+    }
+    if (text || thought) {
+      const writingChange = /\b(propos|fix|chang|updat|edit|correct|set)/i.test(text + thought);
+      return ui.phase({
+        label: writingChange ? 'Writing up the change for you to review' : 'Deciding what to do next',
+        detail: `${writingChange ? 'It writes the whole change out before it can be checked and shown' : 'Next: a lookup, a change or the answer'} · ${secsText((now - last) / 1000)}`,
+      });
+    }
+    if (el < loadSecs) {
+      const size = catalogModel(o.model)?.downloadBytes;
+      return ui.phase({ label: `Loading ${name} into memory`, detail: `${size ? `${(size / 1e9).toFixed(1)} GB from disk. ` : ''}Only the first answer in a while waits for this.`, progress: el / readBy, eta: readBy - el });
+    }
+    if (el < readBy * 1.15) {
+      return ui.phase({
+        label: `Reading ${wordsText(readTokens)}`,
+        detail: `${continuing ? 'Only what’s new: it remembers the rest. ' : ''}About ${nice(Math.round(sp.prefill * 0.75))} words a second on your server${sp.samples ? '' : ' (estimated)'}`,
+        progress: Math.min(0.96, el / readBy),
+        eta: Math.max(1, readBy - el),
+      });
+    }
+    // Past the reading estimate and nothing shown yet: the engine is either still reading or writing
+    // a lookup or a change, which it only hands over when complete
+    return ui.phase({ label: 'Deciding what to do next', detail: `Read about ${wordsText(readTokens)} · ${secsText(el - readBy)} writing its next step (a lookup, a change or the answer)` });
+  };
+  tick();
+  const timer = setInterval(tick, 1000);
+  try {
+    for await (const chunk of ollamaStream<{ message?: { content?: string; thinking?: string; tool_calls?: Msg[] }; done?: boolean; done_reason?: string; error?: string } & EngineStats>(
       '/api/chat',
-      { model, messages: convo, tools, stream: true, think: info?.think ?? false, options: { num_ctx: 16384, temperature: 0.2 } },
+      { model: o.model, messages: o.convo, tools: o.tools, stream: true, think: o.think, options: { num_ctx: NUM_CTX, temperature: 0.2, num_predict: o.maxTokens } },
       signal
     )) {
       if (chunk.error) throw new Error(chunk.error);
-      if (chunk.message?.thinking) {
-        const before = Math.floor(thought / 40);
-        thought += chunk.message.thinking.length;
-        if (thought < 40 || Math.floor(thought / 40) !== before) phase('Thinking…', `${Math.max(1, Math.round(thought / 5))} words so far`);
-      } else if (!arrived && round === 0 && loading) phase('Reading your question…');
-      arrived = true;
-      const piece = chunk.message?.content || '';
-      if (piece) {
-        if (!wrote) phase('Writing the answer…');
-        wrote = true;
-        text += piece;
-        emit({ type: 'text', delta: piece });
-      }
+      const now = Date.now();
+      const stageBefore = thought && !text ? 1 : text ? 2 : 0;
+      if (!first) first = now;
+      last = now;
+      if (chunk.message?.thinking) thought += chunk.message.thinking;
+      if (chunk.message?.content) text += chunk.message.content;
       if (chunk.message?.tool_calls?.length) calls = calls.concat(chunk.message.tool_calls);
+      if (chunk.done) {
+        stats = chunk;
+        cutShort = chunk.done_reason === 'length';
+      }
+      if ((thought && !text ? 1 : text ? 2 : 0) !== stageBefore) tick();
     }
-    convo.push({ role: 'assistant', content: text, ...(calls.length ? { tool_calls: calls } : {}) });
+  } catch (e) {
+    step.fail(`${name} stopped`, (e as Error).message);
+    throw e;
+  } finally {
+    clearInterval(timer);
+  }
+  recordSpeed(o.model, stats, { promptChars, expectedNewChars: newChars, fresh: !continuing });
+  lastCall = { model: o.model, text: promptText(o.tools, [...o.convo, { role: 'assistant', content: text, ...(calls.length ? { tool_calls: calls } : {}) }]), at: Date.now() };
+  const read = stats.prompt_eval_count || readTokens;
+  const parts = [`read ${wordsText(read)}`];
+  if (thought) parts.push(`thought ${nice(words(thought.length / (sp.charsPerToken || 3.6)))}`);
+  parts.push(`wrote ${nice(words(Math.max(0, (stats.eval_count || 0) - (thought ? thought.length / (sp.charsPerToken || 3.6) : 0))))}`);
+  step.done(`${name} ${parts.join(', ')}`, `${o.purpose} · ${thinkLabel(o.think)}`);
+  return { text, thought, calls, stats, cutShort };
+}
+
+/** Load the everyday model and have it read the instructions while the person types */
+let lastWarm = 0;
+export async function warm(): Promise<void> {
+  if (Date.now() - lastWarm < 4 * 60e3) return;
+  const settings = getAiSettings();
+  const model = settings.auto ? await modelFor('quick') : await modelFor('fixer');
+  if (!model) return;
+  lastWarm = Date.now();
+  const tools = toolsFor(settings.freedom);
+  const convo = [{ role: 'system', content: systemPrompt(settings.freedom) }];
+  const wasLoaded = await modelLoaded(model);
+  try {
+    const r = await ollama<EngineStats>(
+      '/api/chat',
+      { model, messages: convo, tools, stream: false, think: thinkFor(model, 'quick', { hasEvidence: false, retry: false }, false), options: { num_ctx: NUM_CTX, temperature: 0.2, num_predict: 1 } },
+      'POST',
+      10 * 60e3
+    );
+    const text = promptText(tools, convo);
+    recordSpeed(model, r, { promptChars: text.length, expectedNewChars: text.length, fresh: !wasLoaded });
+    lastCall = { model, text, at: Date.now() };
+  } catch {
+    lastWarm = 0;
+  }
+}
+
+const argsOf = (call: Msg): Record<string, unknown> => {
+  const a = call?.function?.arguments ?? {};
+  if (typeof a !== 'string') return a;
+  try {
+    return JSON.parse(a);
+  } catch {
+    return {};
+  }
+};
+
+/**
+ * Answer a question, looking things up with tools; may end with a plan to review. In Automatic mode
+ * the request is sorted first (question, fix, change), the obvious things are looked up at once,
+ * and each round gets the model and amount of thinking it needs; a stronger model takes over if
+ * the first gets stuck.
+ */
+export async function chat(messages: ChatMessage[], opts: { focus?: string; role?: 'quick' | 'fixer' }, emit: Emit, signal?: AbortSignal): Promise<void> {
+  const started = Date.now();
+  const settings = getAiSettings();
+  const freedom = settings.freedom;
+  const specs = await getSystemSpecs();
+  const ui = makeUi(emit);
+  const question = String(messages[messages.length - 1]?.content || '').slice(0, 8000);
+  const history = messages.slice(0, -1).slice(-10).map((m) => ({ role: m.role, content: String(m.content).slice(0, 6000) }));
+
+  const sorting = ui.step('Working out what you need', 'plan');
+  ui.phase({ label: 'Working out what you need' });
+  const list = await apps().catch(() => [] as DeepContainerMetadata[]);
+  const route = await planRoute({ question, focus: opts.focus, history, apps: list.map((c) => ({ cleanName: c.cleanName, service: c.compose?.service })) }, settings, specs, opts.role);
+  if (!route) {
+    sorting.fail('No AI model is installed');
+    emit({ type: 'error', message: 'No AI model is installed yet. Set one up first.' });
+    return;
+  }
+  sorting.done(`${taskLabel(route.task)} · ${effortLabel(route.effort).toLowerCase()} effort`, route.why);
+  let model = route.model;
+  const used = new Set([model]);
+  emit({ type: 'route', task: taskLabel(route.task), effort: effortLabel(route.effort), model, name: nameOf(model), why: route.why });
+  emit({ type: 'model', model, name: nameOf(model) });
+  record('info', 'system', `Asked the AI: ${question.slice(0, 160)}`, { model, task: route.task, effort: route.effort });
+
+  // The obvious lookups, all at once, before the AI starts
+  if (route.lookups.length) ui.phase({ label: `Looking up ${route.lookups.length === 1 ? 'one thing' : `${route.lookups.length} things`} first`, detail: 'So the AI doesn’t have to ask for them one at a time' });
+  const looked = (
+    await Promise.all(
+      route.lookups.map(async (l) => {
+        const st = ui.step(doingLabel(l.name, l.args).replace(/…$/, ''), 'lookup');
+        try {
+          const r = await runTool(l.name, l.args);
+          st.done(r.label);
+          return { l, result: clip(r.result, 5000) };
+        } catch (e) {
+          st.fail(`${doingLabel(l.name, l.args).replace(/…$/, '')} didn’t work`, (e as Error).message);
+          return undefined;
+        }
+      })
+    )
+  ).filter(Boolean) as { l: { name: string; args: Record<string, unknown> }; result: string }[];
+
+  const tools = toolsFor(freedom);
+  const base: Msg[] = [{ role: 'system', content: systemPrompt(freedom) }, ...history, { role: 'user', content: userTurn(question, await snapshotText(list), opts.focus) }];
+  // What was looked up, in the form the model expects (as if it had asked), for this model and any that takes over
+  const evidence: Msg[] = looked.length
+    ? [{ role: 'assistant', content: '', tool_calls: looked.map((x) => ({ function: { name: x.l.name, arguments: x.l.args } })) }, ...looked.map((x) => ({ role: 'tool', tool_name: x.l.name, content: x.result }))]
+    : [];
+  let convo: Msg[] = [...base, ...evidence];
+
+  let hasEvidence = looked.length > 0;
+  let retry = false;
+  let rejections = 0;
+  let lastProblem: string | undefined;
+  let handedOver = false;
+  let recovered = false;
+
+  const finish = (answer: string) => {
+    ui.answer(answer);
+    const secs = (Date.now() - started) / 1000;
+    emit({ type: 'done', seconds: Math.round(secs), summary: `${secsText(secs)} · ${Array.from(used).map(nameOf).join(' + ')}` });
+  };
+
+  /** Hand the problem to the stronger model, with what's been found but without the dead ends */
+  const handOver = async (reason: string): Promise<boolean> => {
+    if (handedOver || !route.backup || route.backup === model) return false;
+    const fit = await fitsNow(route.backup);
+    if (!fit.ok) {
+      ui.step(`${nameOf(route.backup)} can’t step in right now`, 'plan').done(undefined, fit.why);
+      return false;
+    }
+    handedOver = true;
+    const from = model;
+    model = route.backup;
+    used.add(model);
+    ui.step(`Handing over to ${nameOf(model)}`, 'plan').done(undefined, `${reason} ${nameOf(from)} passes on what it found.`);
+    emit({ type: 'model', model, name: nameOf(model) });
+    convo = [...base, ...evidence, ...(lastProblem ? [{ role: 'user', content: `(From Manifexus: an earlier proposal was rejected because: ${lastProblem})` }] : [])];
+    return true;
+  };
+
+  for (let round = 0; round < 8; round++) {
+    const think: Think = settings.auto ? thinkFor(model, route.effort, { hasEvidence, retry }, specs.gpuUsable) : (catalogModel(model)?.think ?? false);
+    const purpose = round === 0 ? (hasEvidence ? 'Reading your question and what was looked up' : 'Reading your question') : retry ? 'Correcting the proposed change' : 'Going over what it found';
+    let r: RoundResult;
+    try {
+      r = await runModel({ model, convo, tools, think, maxTokens: think ? 4000 : route.effort === 'quick' ? 700 : 2500, purpose }, ui, signal);
+    } catch (e) {
+      // Not enough memory for this model right now: carry on with the smaller one
+      const msg = (e as Error).message || '';
+      const smaller = await modelFor('quick');
+      if (!signal?.aborted && !recovered && /memory/i.test(msg) && smaller && smaller !== model) {
+        recovered = true;
+        ui.step(`Switching to ${nameOf(smaller)}`, 'plan').done(undefined, `${nameOf(model)} couldn’t get enough memory.`);
+        model = smaller;
+        used.add(model);
+        emit({ type: 'model', model, name: nameOf(model) });
+        convo = [...base, ...evidence];
+        round--;
+        continue;
+      }
+      throw e;
+    }
+    const calls = r.calls;
+    convo.push({ role: 'assistant', content: r.text, ...(calls.length ? { tool_calls: calls } : {}) });
+
     if (!calls.length) {
-      emit({ type: 'done' });
-      return;
+      // Unsure after looking around: one more try with the stronger model
+      if (route.effort !== 'quick' && round < 6 && /\b(not sure|can['’]t tell|unclear|need more (info|information|details))\b/i.test(r.text) && (await handOver('The first model wasn’t sure.'))) continue;
+      let answer = r.text.trim() || 'I didn’t come up with an answer. Try asking in a different way.';
+      if (r.cutShort) answer += '\n\n_That was cut short. Ask me to continue._';
+      return finish(answer);
     }
-    let planned = false;
+
+    retry = false;
+    let planned: Plan | undefined;
     for (const call of calls) {
       const name = call?.function?.name as string;
-      let args = call?.function?.arguments ?? {};
-      if (typeof args === 'string') {
-        try {
-          args = JSON.parse(args);
-        } catch {
-          args = {};
-        }
-      }
+      const args = argsOf(call);
       if (name === 'propose_changes') {
-        phase('Preparing the changes for you to review…');
+        ui.phase({ label: 'Checking the proposed change', detail: 'Is the file still valid, does the text to change exist, will anything break' });
+        const st = ui.step('Checking the proposed change', 'check');
         const { plan, problem } = await buildPlan(args, freedom, model);
         if (plan) {
-          emit({ type: 'plan', plan });
-          planned = true;
-          convo.push({ role: 'tool', tool_name: name, content: 'The plan is shown to the person for review. Briefly tell them what to expect, then stop.' });
+          st.done(`Checked the proposed change: ${plan.steps.length === 1 ? 'one step' : `${plan.steps.length} steps`}`);
+          planned = plan;
+          convo.push({ role: 'tool', tool_name: name, content: 'The plan is shown to the person for review.' });
         } else {
-          emit({ type: 'tool', label: 'Checked the proposed changes', ok: false });
+          st.fail('The proposed change didn’t check out, so it’s being corrected', problem);
+          rejections++;
+          retry = true;
+          lastProblem = problem;
           convo.push({ role: 'tool', tool_name: name, content: `The plan was rejected: ${problem}` });
         }
         continue;
       }
-      emit({ type: 'tool', label: doingLabel(name, args), running: true, name });
-      phase(doingLabel(name, args));
+      ui.phase({ label: doingLabel(name, args) });
+      const st = ui.step(doingLabel(name, args).replace(/…$/, ''), 'lookup');
       try {
-        const r = await runTool(name, args);
-        emit({ type: 'tool', label: r.label, ok: true, name });
-        convo.push({ role: 'tool', tool_name: name, content: r.result });
+        const res = await runTool(name, args);
+        st.done(res.label);
+        const msg = { role: 'tool', tool_name: name, content: res.result };
+        convo.push(msg);
+        evidence.push({ role: 'assistant', content: '', tool_calls: [call] }, msg);
       } catch (e) {
-        emit({ type: 'tool', label: `Couldn’t ${name.replace(/_/g, ' ')}`, ok: false, name });
+        st.fail(`${doingLabel(name, args).replace(/…$/, '')} didn’t work`, (e as Error).message);
         convo.push({ role: 'tool', tool_name: name, content: `Error: ${(e as Error).message}` });
       }
     }
+
     if (planned) {
-      phase('Summing up…');
-      // One short closing sentence, then stop
-      let closing = '';
-      let first = true;
-      for await (const chunk of ollamaStream<{ message?: { content?: string } }>(
-        '/api/chat',
-        { model, messages: convo, stream: true, think: info?.think ?? false, options: { num_ctx: 16384, temperature: 0.2 } },
-        signal
-      )) {
-        const piece = chunk.message?.content || '';
-        closing += piece;
-        if (piece) {
-          emit({ type: 'text', delta: first && text.trim() ? `\n\n${piece.trimStart()}` : piece });
-          first = false;
-        }
-      }
-      emit({ type: 'done' });
-      return;
+      // The plan carries its own explanation: no extra round just to sum up
+      const lead = r.text.trim();
+      if (lead && planned.explanation && lead !== planned.explanation) ui.note(lead);
+      emit({ type: 'plan', plan: planned });
+      return finish(planned.explanation || lead || 'Here’s what I’d change. Nothing happens until you review it.');
     }
+    if (r.text.trim()) ui.note(r.text.trim());
+    hasEvidence = true;
+    if (rejections >= 2 && (await handOver('The proposed change didn’t check out twice.'))) {
+      rejections = 0;
+      retry = false;
+    } else if (round === 4 && route.effort !== 'quick') await handOver('This is taking a while.');
   }
-  emit({ type: 'text', delta: '\n\nI looked at a lot and still need more to be sure. Tell me more about what you’re seeing, or try again.' });
-  emit({ type: 'done' });
+  finish('I looked at a lot and still need more to be sure. Tell me more about what you’re seeing, or try again.');
 }
 
 // ----------------------------------------------------------------------------

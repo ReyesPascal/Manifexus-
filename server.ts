@@ -92,7 +92,7 @@ import {
 import { systemDiagnostics, systemReport, appDiagnostics, appLogs } from './server/diagnosticsService';
 import { getSystemSpecs } from './server/systemSpecs';
 import { aiStatus, saveAiSettings, installModel, cancelDownload, removeModel, warmUpEngine, catalogModel, stopEngine, installEngineNow } from './server/aiService';
-import { chat as aiChat, runPlan, getPlan } from './server/aiAgent';
+import { chat as aiChat, runPlan, getPlan, warm as aiWarm } from './server/aiAgent';
 import { learnActivity, recentCommands } from './server/commandLog';
 import { seedAiExample } from './server/aiExample';
 import {
@@ -865,6 +865,7 @@ async function startServer() {
     const b = req.body || {};
     const patch: Record<string, unknown> = {};
     for (const k of ['quickModel', 'fixerModel', 'freedom']) if (k in b) patch[k] = b[k] || undefined;
+    if ('auto' in b) patch.auto = b.auto !== false;
     res.json(saveAiSettings(patch));
   });
 
@@ -916,6 +917,12 @@ async function startServer() {
     } finally {
       res.end();
     }
+  });
+
+  // Opening Ask: load the everyday model and let it read its instructions while the person types
+  app.post('/api/ai/warm', (_req, res) => {
+    void aiWarm().catch(() => undefined);
+    res.json({ ok: true });
   });
 
   app.get('/api/ai/plans/:id', (req, res) => {

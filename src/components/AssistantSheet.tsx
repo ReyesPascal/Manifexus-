@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { BackButton, Button, Checkmark, GearButton, Group, IconTile, LinkButton, Row, SectionFooter, SectionHeader, Sheet, ios } from './ui/ios';
+import { BackButton, Button, Checkmark, GearButton, Group, IconTile, LinkButton, Row, SectionFooter, SectionHeader, Sheet, Switch, ios } from './ui/ios';
 import { ProgressView, useRun } from './ProgressTracker';
 import { CommandBlock, Explain } from './Commands';
 import { usePrefs } from '../prefs';
+import { Markdown } from './Markdown';
 
 /**
  * Ask Manifexus: the built-in AI. First run sets it up (your server's specs, the models that fit,
@@ -29,6 +30,8 @@ interface CatalogEntry {
   fit: Fit;
   why?: string;
   seconds: number;
+  /** The speed comes from real answers on this server, not a guess */
+  measured?: boolean;
   installed: boolean;
 }
 
@@ -41,7 +44,7 @@ interface Download {
 }
 
 interface Specs {
-  cpu: { model: string; cores: number; avx2: boolean; avx512: boolean; arch: string };
+  cpu: { model: string; cores: number; physicalCores?: number; avx2: boolean; avx512: boolean; arch: string };
   memory: { totalBytes: number; availableBytes: number; manifexusLimitBytes?: number };
   gpus: { vendor: string; name: string; vramBytes?: number }[];
   nvidiaRuntime: boolean;
@@ -65,7 +68,7 @@ interface Status {
   catalog: CatalogEntry[];
   installed: { id: string; bytes: number }[];
   downloads: Download[];
-  settings: { quickModel?: string; fixerModel?: string; freedom: Freedom };
+  settings: { quickModel?: string; fixerModel?: string; freedom: Freedom; auto?: boolean };
   ready: boolean;
 }
 
@@ -87,9 +90,44 @@ interface Plan {
   routine: boolean;
 }
 
+/** One line of the work log: what was decided, looked up, read, thought or checked */
+interface WorkStep {
+  id: string;
+  label: string;
+  kind: 'plan' | 'lookup' | 'model' | 'check' | 'note';
+  status: 'running' | 'done' | 'failed';
+  detail?: string;
+  ms?: number;
+}
+
+/** What it's doing this second, with a progress bar and time left when that can be worked out */
+interface Phase {
+  label: string;
+  detail?: string;
+  progress?: number;
+  eta?: number;
+  at: number;
+}
+
 type Item =
   | { kind: 'user'; text: string }
-  | { kind: 'assistant'; text: string; tools: { label: string; ok?: boolean; running?: boolean }[]; plan?: Plan; planState?: 'new' | 'done' | 'self' | 'failed'; streaming?: boolean; error?: string; phase?: { label: string; detail?: string }; started?: number };
+  | {
+      kind: 'assistant';
+      /** The answer, shown all at once when it's complete */
+      text: string;
+      steps: WorkStep[];
+      route?: { task: string; effort: string; name: string; why: string };
+      plan?: Plan;
+      planState?: 'new' | 'done' | 'self' | 'failed';
+      streaming?: boolean;
+      error?: string;
+      phase?: Phase;
+      started?: number;
+      /** "1 min 32 s · Qwen 3.5 Small", when it's done */
+      summary?: string;
+      /** Work log expanded after it's done */
+      showWork?: boolean;
+    };
 
 type View = 'chat' | 'setup' | 'models' | 'settings' | 'review' | 'progress' | 'guide';
 
@@ -98,7 +136,8 @@ type View = 'chat' | 'setup' | 'models' | 'settings' | 'review' | 'progress' | '
 // ----------------------------------------------------------------------------
 
 const fmtGB = (b: number) => (b >= 1e9 ? `${(b / 1e9).toFixed(b >= 10e9 ? 0 : 1)} GB` : `${Math.max(1, Math.round(b / 1e6))} MB`);
-const fmtSecs = (s: number) => (s < 60 ? `~${Math.max(5, Math.round(s / 5) * 5)} s` : `~${Math.round(s / 60)} min`);
+const fmtSecs = (s: number) => (s < 90 ? `~${Math.max(5, Math.round(s / 5) * 5)} s` : `~${(s / 60).toFixed(s < 600 ? 1 : 0).replace(/\.0$/, '')} min`);
+const fmtDur = (ms?: number) => (ms === undefined ? '' : ms < 1000 ? `${Math.max(0.1, ms / 1000).toFixed(1)} s` : ms < 60000 ? `${Math.round(ms / 1000)} s` : `${Math.floor(ms / 60000)} min ${Math.round((ms % 60000) / 1000)} s`);
 
 const FREEDOM: { value: Freedom; title: string; sub: string }[] = [
   { value: 'look', title: 'Look Only', sub: 'Explains and advises. Never changes anything.' },
@@ -122,46 +161,6 @@ export const AssistantIcon: React.FC<{ size?: number }> = ({ size = 29 }) => (
     <Spark size={size * 0.58} />
   </span>
 );
-
-/** Plain text with **bold**, `code`, and "- " bullet lines */
-const RichText: React.FC<{ text: string }> = ({ text }) => {
-  const inline = (s: string, key: string | number) =>
-    s.split(/(\*\*[^*]+\*\*|`[^`]+`)/g).map((part, i) =>
-      part.startsWith('**') && part.endsWith('**') ? (
-        <strong key={`${key}-${i}`} className="font-semibold text-white">{part.slice(2, -2)}</strong>
-      ) : part.startsWith('`') && part.endsWith('`') ? (
-        <code key={`${key}-${i}`} className="font-mono text-[13px] px-1 py-px rounded" style={{ background: 'rgba(255,255,255,0.08)' }}>{part.slice(1, -1)}</code>
-      ) : (
-        <React.Fragment key={`${key}-${i}`}>{part}</React.Fragment>
-      )
-    );
-  const blocks: React.ReactNode[] = [];
-  let bullets: string[] = [];
-  const flush = (k: number) => {
-    if (!bullets.length) return;
-    blocks.push(
-      <ul key={`ul${k}`} className="space-y-1 pl-1">
-        {bullets.map((b, i) => (
-          <li key={i} className="flex gap-2">
-            <span style={{ color: ios.tertiary }}>•</span>
-            <span>{inline(b, i)}</span>
-          </li>
-        ))}
-      </ul>
-    );
-    bullets = [];
-  };
-  text.split('\n').forEach((line, i) => {
-    const m = /^\s*(?:[-*•]|\d+\.)\s+(.*)$/.exec(line);
-    if (m) return bullets.push(m[1]);
-    flush(i);
-    const h = /^#{1,4}\s+(.*)$/.exec(line);
-    if (h) blocks.push(<p key={i} className="font-semibold text-white">{inline(h[1], i)}</p>);
-    else if (line.trim()) blocks.push(<p key={i}>{inline(line, i)}</p>);
-  });
-  flush(-1);
-  return <div className="space-y-2">{blocks}</div>;
-};
 
 /** A file change as a before/after, showing only the changed parts with a little context */
 const DiffView: React.FC<{ lines: string[] }> = ({ lines }) => {
@@ -213,8 +212,8 @@ const StepTile: React.FC<{ type: string }> = ({ type }) => (
   </IconTile>
 );
 
-/** What the AI is doing right now, with a clock, so it's clear it's working */
-const WorkingLine: React.FC<{ phase: { label: string; detail?: string }; started?: number }> = ({ phase, started }) => {
+/** What the AI is doing right now: a clock, the step, and a progress bar with time left when known */
+const WorkingLine: React.FC<{ phase: Phase; started?: number }> = ({ phase, started }) => {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000);
@@ -222,16 +221,29 @@ const WorkingLine: React.FC<{ phase: { label: string; detail?: string }; started
   }, []);
   const secs = started ? Math.max(0, Math.floor((now - started) / 1000)) : 0;
   const time = secs >= 60 ? `${Math.floor(secs / 60)} min ${secs % 60} s` : `${secs} s`;
+  const left = phase.eta !== undefined ? Math.max(1, Math.round(phase.eta - (now - phase.at) / 1000)) : undefined;
   return (
-    <div className="flex items-start gap-2.5 py-1" role="status" aria-live="polite">
+    <div className="flex items-start gap-2.5 pt-1.5" role="status" aria-live="polite">
       <span className="mt-[3px] w-3.5 h-3.5 flex-shrink-0 rounded-full border-2 border-t-transparent animate-spin motion-reduce:animate-none" style={{ borderColor: ios.blue, borderTopColor: 'transparent' }} />
-      <div className="min-w-0 flex-1">
+      <div className="min-w-0 flex-1 space-y-1">
         <div className="flex items-baseline gap-2 text-[14px]">
-          <span className="truncate text-white/90">{phase.label}</span>
-          <span className="flex-shrink-0 tabular-nums text-[12.5px]" style={{ color: ios.tertiary }} aria-hidden>
+          <span className="truncate text-white/90 font-medium">{phase.label}</span>
+          <span className="ml-auto flex-shrink-0 tabular-nums text-[12.5px]" style={{ color: ios.tertiary }}>
             {time}
           </span>
         </div>
+        {phase.progress !== undefined && (
+          <div className="flex items-center gap-2">
+            <div className="flex-1">
+              <Bar value={phase.progress} />
+            </div>
+            {left !== undefined && (
+              <span className="flex-shrink-0 tabular-nums text-[12px]" style={{ color: ios.secondary }}>
+                {left >= 60 ? `~${Math.round(left / 60)} min left` : `~${left} s left`}
+              </span>
+            )}
+          </div>
+        )}
         {phase.detail && (
           <div className="text-[12.5px] leading-[17px]" style={{ color: ios.secondary }}>
             {phase.detail}
@@ -241,6 +253,88 @@ const WorkingLine: React.FC<{ phase: { label: string; detail?: string }; started
     </div>
   );
 };
+
+/** The icon at the start of a work-log line */
+const StepMark: React.FC<{ step: WorkStep }> = ({ step }) => {
+  if (step.status === 'running') return <span className="mt-[4px] w-3 h-3 flex-shrink-0 rounded-full border-2 border-t-transparent animate-spin motion-reduce:animate-none" style={{ borderColor: ios.secondary, borderTopColor: 'transparent' }} />;
+  if (step.status === 'failed') return <span className="w-3 flex-shrink-0 text-center font-bold" style={{ color: ios.orange }}>!</span>;
+  if (step.kind === 'model') return <span className="mt-[2px] flex-shrink-0"><Spark size={12} color="#D69CFA" /></span>;
+  return <span className="w-3 flex-shrink-0 text-center" style={{ color: ios.green }}>✓</span>;
+};
+
+/**
+ * How it worked on the answer: each decision, lookup, AI round (with what it read and wrote) and
+ * check, with how long each took. Open while it works; folds into one line when it's done.
+ */
+const WorkLog: React.FC<{ item: Extract<Item, { kind: 'assistant' }>; onToggle: () => void }> = ({ item, onToggle }) => {
+  const open = item.streaming || item.showWork;
+  const steps = item.steps;
+  if (!steps.length && !item.streaming) return null;
+  const lookups = steps.filter((s) => s.kind === 'lookup').length;
+  return (
+    <div className="rounded-[12px] px-3 py-2" style={{ background: 'rgba(255,255,255,0.04)', boxShadow: '0 0 0 0.5px rgba(255,255,255,0.06)' }}>
+      {!item.streaming && (
+        <button type="button" onClick={onToggle} aria-expanded={Boolean(open)} className="w-full flex items-center gap-2 text-[13px] py-0.5 text-left" style={{ color: ios.secondary }}>
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="transition-transform duration-150" style={{ transform: open ? 'rotate(90deg)' : undefined }}>
+            <path d="M9 5l7 7-7 7" />
+          </svg>
+          <span className="truncate">
+            {item.summary ? `Worked for ${item.summary}` : 'How it worked on this'}
+            {lookups ? ` · ${lookups} ${lookups === 1 ? 'lookup' : 'lookups'}` : ''}
+          </span>
+        </button>
+      )}
+      {open && (
+        <ul className={`space-y-1.5 ${item.streaming ? '' : 'mt-1.5 pt-1.5'}`} style={item.streaming ? undefined : { borderTop: '0.5px solid rgba(255,255,255,0.06)' }}>
+          {steps.map((st) =>
+            st.kind === 'note' ? (
+              <li key={st.id} className="pl-5">
+                <div className="text-[13px] leading-[18px] italic line-clamp-3 pl-2.5" style={{ color: ios.secondary, borderLeft: '2px solid rgba(191,90,242,0.45)' }}>
+                  {st.label}
+                </div>
+              </li>
+            ) : (
+              <li key={st.id} className="flex items-start gap-2 text-[13px] leading-[18px]">
+                <StepMark step={st} />
+                <div className="min-w-0 flex-1">
+                  <div style={{ color: st.status === 'running' ? 'rgba(255,255,255,0.9)' : st.status === 'failed' ? ios.orange : 'rgba(235,235,245,0.75)' }} className="break-words">
+                    {st.label}
+                  </div>
+                  {st.detail && (
+                    <div className="text-[12px] leading-[16px] break-words" style={{ color: ios.tertiary }}>
+                      {st.detail}
+                    </div>
+                  )}
+                </div>
+                {st.ms !== undefined && (
+                  <span className="flex-shrink-0 tabular-nums text-[12px]" style={{ color: ios.tertiary }}>
+                    {fmtDur(st.ms)}
+                  </span>
+                )}
+              </li>
+            )
+          )}
+        </ul>
+      )}
+      {item.streaming && item.phase && <WorkingLine phase={item.phase} started={item.started} />}
+    </div>
+  );
+};
+
+/** What kind of request it decided this is, and which model took it */
+const RouteChips: React.FC<{ route: NonNullable<Extract<Item, { kind: 'assistant' }>['route']> }> = ({ route }) => (
+  <div className="flex flex-wrap items-center gap-1.5" title={route.why}>
+    <span className="text-[11.5px] font-semibold px-2 py-[2px] rounded-full" style={{ background: 'rgba(191,90,242,0.18)', color: '#D69CFA' }}>
+      {route.task}
+    </span>
+    <span className="text-[11.5px] font-medium px-2 py-[2px] rounded-full" style={{ background: 'rgba(10,132,255,0.16)', color: '#64B5FF' }}>
+      {route.effort} effort
+    </span>
+    <span className="text-[11.5px] font-medium px-2 py-[2px] rounded-full" style={{ background: 'rgba(118,118,128,0.24)', color: ios.secondary }}>
+      {route.name}
+    </span>
+  </div>
+);
 
 const Bar: React.FC<{ value: number }> = ({ value }) => (
   <div className="h-[4px] rounded-full overflow-hidden" style={{ background: 'rgba(118,118,128,0.3)' }}>
@@ -310,6 +404,8 @@ export const AssistantSheet: React.FC<{
     setReviewPlan(null);
     run.reset();
     load().then((s) => {
+      // Ready for a typed question: load the everyday model and let it read its instructions now
+      if (s?.ready && !initialQuestion) fetch('/api/ai/warm', { method: 'POST' }).catch(() => undefined);
       if (initialView) setStack(s?.ready || initialView === 'settings' ? ['chat', initialView] : ['setup']);
       else setStack(s?.ready ? ['chat'] : ['setup']);
     });
@@ -339,7 +435,7 @@ export const AssistantSheet: React.FC<{
       const history = items
         .filter((i) => (i.kind === 'user' || (i.kind === 'assistant' && i.text)))
         .map((i) => ({ role: i.kind === 'user' ? 'user' : 'assistant', content: i.kind === 'user' ? i.text : i.text }));
-      setItems((list) => [...list, { kind: 'user', text: q }, { kind: 'assistant', text: '', tools: [], streaming: true, started: Date.now(), phase: { label: 'Sending your question…' } }]);
+      setItems((list) => [...list, { kind: 'user', text: q }, { kind: 'assistant', text: '', steps: [], streaming: true, started: Date.now(), phase: { label: 'Sending your question', at: Date.now() } }]);
       setDraft('');
       setBusy(true);
       scrollDown();
@@ -374,18 +470,24 @@ export const AssistantSheet: React.FC<{
             if (!chunk.trim()) continue;
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const ev: any = JSON.parse(chunk);
-            if (ev.type === 'model') setModelName(ev.name);
-            else if (ev.type === 'text') patch((a) => ({ ...a, text: a.text + ev.delta }));
-            else if (ev.type === 'tool')
+            if (ev.type === 'model') {
+              setModelName(ev.name);
+              patch((a) => (a.route ? { ...a, route: { ...a.route, name: ev.name } } : a));
+            } else if (ev.type === 'route') patch((a) => ({ ...a, route: { task: ev.task, effort: ev.effort, name: ev.name, why: ev.why } }));
+            else if (ev.type === 'step')
               patch((a) => {
-                const tools = a.tools.slice();
-                const runningIdx = tools.findIndex((t) => t.running);
-                if (ev.running) tools.push({ label: ev.label, running: true });
-                else if (runningIdx >= 0) tools[runningIdx] = { label: ev.label, ok: ev.ok };
-                else tools.push({ label: ev.label, ok: ev.ok });
-                return { ...a, tools };
+                const steps = a.steps.slice();
+                const at = steps.findIndex((x) => x.id === ev.id);
+                const st: WorkStep = { id: ev.id, label: ev.label, kind: ev.kind, status: ev.status, detail: ev.detail, ms: ev.ms };
+                if (at >= 0) steps[at] = st;
+                else steps.push(st);
+                return { ...a, steps };
               });
-            else if (ev.type === 'phase') patch((a) => ({ ...a, phase: { label: ev.label, detail: ev.detail } }));
+            else if (ev.type === 'phase') {
+              patch((a) => ({ ...a, phase: { label: ev.label, detail: ev.detail, progress: ev.progress, eta: ev.eta, at: Date.now() } }));
+              continue; // every second: no need to scroll for it
+            } else if (ev.type === 'answer') patch((a) => ({ ...a, text: ev.text }));
+            else if (ev.type === 'done') patch((a) => ({ ...a, summary: ev.summary }));
             else if (ev.type === 'plan') patch((a) => ({ ...a, plan: ev.plan, planState: 'new' }));
             else if (ev.type === 'error') patch((a) => ({ ...a, error: ev.message }));
             scrollDown();
@@ -394,7 +496,7 @@ export const AssistantSheet: React.FC<{
       } catch (e) {
         if (!ac.signal.aborted) patch((a) => ({ ...a, error: (e as Error).message || 'Something went wrong.' }));
       } finally {
-        patch((a) => ({ ...a, streaming: false, text: a.text || (ac.signal.aborted ? 'Stopped.' : a.text) }));
+        patch((a) => ({ ...a, streaming: false, steps: a.steps.map((x) => (x.status === 'running' ? { ...x, status: 'failed' as const } : x)), text: a.text || (ac.signal.aborted ? 'Stopped.' : a.text) }));
         setBusy(false);
         abort.current = null;
         requestAnimationFrame(() => inputRef.current?.focus({ preventScroll: true }));
@@ -458,7 +560,7 @@ export const AssistantSheet: React.FC<{
     const s = status.specs;
     const rq = status.recommended.quick ? byId.get(status.recommended.quick) : undefined;
     const rf = status.recommended.fixer && status.recommended.fixer !== status.recommended.quick ? byId.get(status.recommended.fixer) : undefined;
-    const rec = [rq && { m: rq, role: 'quick' as const, label: 'Quick Helper', sub: 'Explains errors and logs' }, rf && { m: rf, role: 'fixer' as const, label: 'Fixer', sub: 'Finds causes and plans fixes' }].filter(Boolean) as {
+    const rec = [rq && { m: rq, role: 'quick' as const, label: 'Quick Helper', sub: 'Does most of the work: questions, lookups, simple fixes' }, rf && { m: rf, role: 'fixer' as const, label: 'Fixer', sub: 'Steps in for tricky problems' }].filter(Boolean) as {
       m: CatalogEntry;
       role: 'quick' | 'fixer';
       label: string;
@@ -505,6 +607,7 @@ export const AssistantSheet: React.FC<{
                 {extra ? `${m.name} · ${extra.sub}` : m.blurb}
                 <span className="block mt-0.5 tabular-nums" style={{ color: m.fit === 'no' ? ios.red : m.fit === 'tight' ? ios.orange : ios.tertiary }}>
                   {fmtGB(m.downloadBytes)} · answers in {fmtSecs(m.seconds)}
+                  {m.measured ? ' (measured)' : ''}
                   {m.why ? ` · ${m.why}` : ''}
                 </span>
               </span>
@@ -603,7 +706,7 @@ export const AssistantSheet: React.FC<{
           <section>
             <SectionHeader>Your Server</SectionHeader>
             <Group>
-              <Row title="Processor" trailing={<span className="text-[14px] truncate max-w-[60vw] sm:max-w-[420px]">{s.cpu.model.replace(/\(R\)|\(TM\)|CPU|Processor/g, '').replace(/\s+/g, ' ').trim()} · {s.cpu.cores} cores</span>} />
+              <Row title="Processor" trailing={<span className="text-[14px] truncate max-w-[60vw] sm:max-w-[420px]">{s.cpu.model.replace(/\(R\)|\(TM\)|CPU|Processor/g, '').replace(/\s+/g, ' ').trim()} · {s.cpu.physicalCores && s.cpu.physicalCores < s.cpu.cores ? `${s.cpu.physicalCores} cores, ${s.cpu.cores} threads` : `${s.cpu.cores} cores`}</span>} />
               <Row title="Memory" trailing={<span className="text-[14px] tabular-nums">{fmtGB(s.memory.availableBytes)} free of {fmtGB(s.memory.totalBytes)}</span>} />
               <Row title="Graphics" trailing={<span className="text-[14px]">{graphics}</span>} />
               <Row title="Disk" trailing={<span className="text-[14px] tabular-nums">{fmtGB(s.disk.freeBytes)} free</span>} />
@@ -624,7 +727,7 @@ export const AssistantSheet: React.FC<{
             <Group className="ios-inset-icon">{rec.length ? rec.map((r) => modelRow(r.m, { label: r.label, sub: r.sub })) : <Row title={status.recommended.note || 'Nothing fits right now.'} />}</Group>
             <SectionFooter>
               {status.recommended.note ||
-                'Picked to fit your memory and processor. Each is downloaded once and kept in Manifexus’s data folder. Only one runs at a time, and it lets go of the memory a few minutes after you’re done.'}
+                'Picked to fit your memory and processor. Each request goes to the one that suits it, with as much thinking as it needs. Only one runs at a time, and it lets go of the memory a few minutes after you’re done.'}
             </SectionFooter>
           </section>
         )}
@@ -690,6 +793,21 @@ export const AssistantSheet: React.FC<{
           </Group>
           <SectionFooter>Every change is backed up first and saved in Restore, except commands, which can’t be undone.</SectionFooter>
         </section>
+        <section>
+          <SectionHeader>Model and Thinking</SectionHeader>
+          <Group>
+            <Row
+              title="Choose Automatically"
+              subtitle="For each request it picks the model, how much it thinks and what to look up first. Quick questions stay quick; tricky problems get the fixer and more thinking."
+              trailing={<Switch checked={status.settings.auto !== false} onChange={(v) => setting({ auto: v })} label="Choose automatically" />}
+            />
+          </Group>
+          <SectionFooter>
+            {status.settings.auto !== false
+              ? 'The fixer only runs when there’s enough free memory at that moment, so your apps never run short. Each step shows which model did it and how long it took.'
+              : 'Off: every request uses the fixer, with the same settings each time.'}
+          </SectionFooter>
+        </section>
         {(['quick', 'fixer'] as const).map((role) => {
           const current = role === 'quick' ? status.settings.quickModel : status.settings.fixerModel;
           return (
@@ -704,11 +822,14 @@ export const AssistantSheet: React.FC<{
                     ariaChecked={current === m.id}
                     onClick={() => setting(role === 'quick' ? { quickModel: m.id } : { fixerModel: m.id })}
                     title={m.name}
-                    subtitle={`${fmtGB(m.downloadBytes)} · answers in ${fmtSecs(m.seconds)}`}
+                    subtitle={`${fmtGB(m.downloadBytes)} · answers in ${fmtSecs(m.seconds)}${m.measured ? ' (measured)' : ''}`}
                     trailing={<span className="w-[15px] flex justify-center">{current === m.id && <Checkmark />}</span>}
                   />
                 ))}
               </Group>
+              {status.settings.auto !== false && installed.length > 0 && (
+                <SectionFooter>{role === 'quick' ? 'Does most of the work: questions, lookups and simple fixes.' : 'Takes tricky problems, and steps in when the quick helper gets stuck.'}</SectionFooter>
+              )}
             </section>
           );
         })}
@@ -740,7 +861,7 @@ export const AssistantSheet: React.FC<{
           <AssistantIcon size={52} />
           <h3 className="mt-3.5 text-[20px] leading-[25px] font-semibold text-white px-4">{reviewPlan.title}</h3>
           <div className="mt-2 text-[14px] leading-[21px] max-w-[520px] text-left" style={{ color: ios.secondary }}>
-            <RichText text={reviewPlan.explanation} />
+            <Markdown text={reviewPlan.explanation} className="!text-[14px] !leading-[21px]" />
           </div>
         </div>
         <section>
@@ -910,12 +1031,12 @@ export const AssistantSheet: React.FC<{
         runningTitle={reviewPlan.title}
         doneMessage="All done. It’s saved in Restore, so you can undo it anytime."
         onDone={() => {
-          setItems((list) => [...list, { kind: 'assistant', text: `Done: **${reviewPlan.title}**. It’s saved in Restore if you want to undo it.`, tools: [] }]);
+          setItems((list) => [...list, { kind: 'assistant', text: `Done: **${reviewPlan.title}**. It’s saved in Restore if you want to undo it.`, steps: [] }]);
           setStack(['chat']);
           scrollDown();
         }}
         onClose={() => {
-          setItems((list) => [...list, { kind: 'assistant', text: 'That didn’t finish. What changed before the problem is saved in Restore. Want me to look at what went wrong?', tools: [] }]);
+          setItems((list) => [...list, { kind: 'assistant', text: 'That didn’t finish. What changed before the problem is saved in Restore. Want me to look at what went wrong?', steps: [] }]);
           setStack(['chat']);
           scrollDown();
         }}
@@ -950,23 +1071,14 @@ export const AssistantSheet: React.FC<{
             ) : (
               <div key={i} className="flex gap-3">
                 <AssistantIcon size={26} />
-                <div className="flex-1 min-w-0 space-y-2.5 text-[15px] leading-[22px]" style={{ color: 'rgba(235,235,245,0.88)' }}>
-                  {it.tools.some((t) => !t.running) && (
-                    <ul className="space-y-1">
-                      {it.tools.filter((t) => !t.running).map((t, k) => (
-                        <li key={k} className="flex items-center gap-2 text-[13px]" style={{ color: ios.secondary }}>
-                          {t.running ? (
-                            <span className="w-3 h-3 rounded-full border-2 border-current border-t-transparent animate-spin motion-reduce:animate-none" />
-                          ) : (
-                            <span style={{ color: t.ok === false ? ios.orange : ios.green }}>{t.ok === false ? '!' : '✓'}</span>
-                          )}
-                          {t.label}
-                        </li>
-                      ))}
-                    </ul>
+                <div className="flex-1 min-w-0 space-y-3 text-[15px] leading-[22px]" style={{ color: 'rgba(235,235,245,0.88)' }}>
+                  {it.route && <RouteChips route={it.route} />}
+                  <WorkLog item={it} onToggle={() => setItems((list) => list.map((x) => (x === it ? { ...it, showWork: !it.showWork } : x)))} />
+                  {it.text && (
+                    <div className="motion-safe:animate-[ios-rise-in_280ms_ease-out]">
+                      <Markdown text={it.text} lead={Boolean(it.route)} />
+                    </div>
                   )}
-                  {it.text && <RichText text={it.text} />}
-                  {it.streaming && it.phase && !(it.phase.label.startsWith('Writing') && it.text) && <WorkingLine phase={it.phase} started={it.started} />}
                   {it.plan && (
                     <div className="rounded-[14px] overflow-hidden mt-1" style={{ background: ios.group, boxShadow: '0 0 0 0.5px rgba(255,255,255,0.08)' }}>
                       <div className="px-4 pt-3 pb-2.5">

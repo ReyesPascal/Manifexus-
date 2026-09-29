@@ -18,6 +18,8 @@ const MODELS_DIR = path.join(AI_DIR, 'models');
 /** Where Manifexus installs the engine itself when the image doesn't include it */
 const ENGINE_DIR = path.join(AI_DIR, 'engine');
 const DOWNLOADS_FILE = path.join(AI_DIR, 'downloads.json');
+/** How fast each model really is on this server, measured from every answer */
+const SPEEDS_FILE = path.join(AI_DIR, 'speeds.json');
 /** A private port, so it never collides with an Ollama you already run */
 const PORT = 11439;
 
@@ -41,19 +43,26 @@ export interface AiSettings {
   quickModel?: string;
   fixerModel?: string;
   freedom: Freedom;
+  /**
+   * Automatic (default): each request picks the model, thinking and effort that fit it (quick
+   * lookups on the quick helper, hard problems on the fixer when there's memory for it).
+   * Off: always the fixer, with its usual settings.
+   */
+  auto: boolean;
 }
 
 export function getAiSettings(): AiSettings {
   try {
-    return { freedom: 'ask', ...JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8')) };
+    return { freedom: 'ask', auto: true, ...JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8')) };
   } catch {
-    return { freedom: 'ask' };
+    return { freedom: 'ask', auto: true };
   }
 }
 
 export function saveAiSettings(patch: Partial<AiSettings>): AiSettings {
   const next = { ...getAiSettings(), ...patch };
   if (!['look', 'ask', 'routine', 'expert'].includes(next.freedom)) next.freedom = 'ask';
+  next.auto = next.auto !== false;
   fs.mkdirSync(AI_DIR, { recursive: true });
   fs.writeFileSync(SETTINGS_FILE, JSON.stringify(next, null, 2));
   return next;
@@ -75,19 +84,27 @@ export interface CatalogModel {
   activeBytes: number;
   /** Mixture-of-experts: big-model smarts, small-model speed */
   moe?: boolean;
-  /** How the engine should run it (reasoning off or low keeps CPU answers quick) */
+  /** How the engine runs it when nothing else is decided (reasoning off or low keeps CPU answers quick) */
   think: boolean | 'low';
+  /** What thinking it supports: on/off (Qwen) or low/medium/high levels that can't be fully off (GPT-OSS) */
+  thinking: 'onoff' | 'levels';
+  /** How good it is at finding causes and planning fixes, 1 (basic) to 5 (best), for choosing per request */
+  smarts: number;
 }
 
 const GB = 1e9;
 export const CATALOG: CatalogModel[] = [
-  { id: 'qwen3.5:2b', name: 'Qwen 3.5 Mini', role: 'quick', blurb: 'For small servers. Explains errors and summarizes logs.', downloadBytes: 2.7 * GB, memoryBytes: 3.6 * GB, activeBytes: 2.7 * GB, think: false },
-  { id: 'qwen3.5:4b', name: 'Qwen 3.5 Small', role: 'quick', blurb: 'Quick, clear explanations of errors and logs.', downloadBytes: 3.4 * GB, memoryBytes: 4.6 * GB, activeBytes: 3.4 * GB, think: false },
-  { id: 'qwen3.5:9b', name: 'Qwen 3.5', role: 'fixer', blurb: 'Solid at finding causes and planning fixes.', downloadBytes: 6.6 * GB, memoryBytes: 8.5 * GB, activeBytes: 6.6 * GB, think: false },
-  { id: 'gpt-oss:20b', name: 'GPT-OSS 20B', role: 'fixer', blurb: 'Strong reasoning and tool use; fast for its size.', downloadBytes: 14 * GB, memoryBytes: 16 * GB, activeBytes: 2.4 * GB, moe: true, think: 'low' },
-  { id: 'qwen3.5:35b-a3b', name: 'Qwen 3.5 Large', role: 'fixer', blurb: 'The smartest that still runs well without a graphics card.', downloadBytes: 24 * GB, memoryBytes: 27 * GB, activeBytes: 2.6 * GB, moe: true, think: false },
-  { id: 'qwen3.5:27b', name: 'Qwen 3.5 Pro', role: 'fixer', blurb: 'Very capable, but needs a graphics card to be quick.', downloadBytes: 17 * GB, memoryBytes: 20 * GB, activeBytes: 17 * GB, think: false },
+  { id: 'qwen3.5:2b', name: 'Qwen 3.5 Mini', role: 'quick', blurb: 'For small servers. Explains errors and summarizes logs.', downloadBytes: 2.7 * GB, memoryBytes: 3.6 * GB, activeBytes: 2.7 * GB, think: false, thinking: 'onoff', smarts: 1 },
+  { id: 'qwen3.5:4b', name: 'Qwen 3.5 Small', role: 'quick', blurb: 'Quick, clear explanations, lookups and simple fixes.', downloadBytes: 3.4 * GB, memoryBytes: 4.6 * GB, activeBytes: 3.4 * GB, think: false, thinking: 'onoff', smarts: 2 },
+  { id: 'qwen3.5:9b', name: 'Qwen 3.5', role: 'fixer', blurb: 'Solid at finding causes and planning fixes.', downloadBytes: 6.6 * GB, memoryBytes: 8.5 * GB, activeBytes: 6.6 * GB, think: false, thinking: 'onoff', smarts: 3 },
+  // 14 GB of weights plus a small working space (half its layers only look at recent words)
+  { id: 'gpt-oss:20b', name: 'GPT-OSS 20B', role: 'fixer', blurb: 'Strong reasoning and tool use; fast for its size.', downloadBytes: 14 * GB, memoryBytes: 15 * GB, activeBytes: 2.4 * GB, moe: true, think: 'low', thinking: 'levels', smarts: 4 },
+  { id: 'qwen3.5:35b-a3b', name: 'Qwen 3.5 Large', role: 'fixer', blurb: 'The smartest that still runs well without a graphics card.', downloadBytes: 24 * GB, memoryBytes: 27 * GB, activeBytes: 2.6 * GB, moe: true, think: false, thinking: 'onoff', smarts: 5 },
+  { id: 'qwen3.5:27b', name: 'Qwen 3.5 Pro', role: 'fixer', blurb: 'Very capable, but needs a graphics card to be quick.', downloadBytes: 17 * GB, memoryBytes: 20 * GB, activeBytes: 17 * GB, think: false, thinking: 'onoff', smarts: 5 },
 ];
+
+/** Every request uses the same working space, so switching thinking or effort never reloads a model */
+export const NUM_CTX = 16384;
 
 export const catalogModel = (id?: string) => CATALOG.find((m) => m.id === id);
 
@@ -101,14 +118,120 @@ export function aiMemoryBudget(specs: SystemSpecs): number {
   return Math.max(0, budget);
 }
 
-/** Rough seconds for a typical reply on this machine (reading a few pages of logs, writing a paragraph) */
+// ----------------------------------------------------------------------------
+// Speed: predicted from the hardware, then measured from real answers on this server
+// ----------------------------------------------------------------------------
+
+/** Tokens (word pieces) per second: reading the prompt, and writing */
+export interface Speed {
+  prefill: number;
+  gen: number;
+  /** Seconds to load it into memory from disk */
+  loadSecs?: number;
+  /** Characters per token in what Manifexus sends it */
+  charsPerToken?: number;
+  /** The engine re-reads the whole conversation each turn (no reuse of what it read before) */
+  noPrefixCache?: boolean;
+  samples: number;
+  at?: string;
+}
+
+let speeds: Record<string, Speed> | undefined;
+function speedStore(): Record<string, Speed> {
+  if (!speeds) {
+    try {
+      speeds = JSON.parse(fs.readFileSync(SPEEDS_FILE, 'utf8'));
+    } catch {
+      speeds = {};
+    }
+  }
+  return speeds!;
+}
+
+/** What the hardware suggests before anything has been measured */
+export function predictedSpeed(m: CatalogModel, specs: SystemSpecs): Speed {
+  // Hyper-threads barely help: count real cores. Laptop and desktop CPUs stream roughly 5 GB/s of
+  // memory per core in practice, and writing each word means reading the active part of the model once.
+  const cores = specs.cpu.physicalCores || Math.max(1, Math.round(specs.cpu.cores / 2));
+  const simd = specs.cpu.avx512 ? 1.3 : specs.cpu.avx2 ? 1 : 0.45;
+  const activeGB = m.activeBytes / GB;
+  const bandwidth = Math.min(60, 5 * cores);
+  let gen = (bandwidth / activeGB) * (m.moe ? 0.75 : 1);
+  // Reading is compute-bound: about 50 tokens/s per core for a 1B-parameter model (4-bit ≈ 0.6 GB per 1B)
+  let prefill = ((cores * 50 * simd) / (activeGB / 0.6)) * (m.moe ? 0.8 : 1);
+  if (specs.gpuUsable) {
+    gen *= 6;
+    prefill *= 15;
+  }
+  return { prefill: Math.max(2, prefill), gen: Math.max(0.5, gen), loadSecs: m.downloadBytes / (1.2 * GB) + 2, charsPerToken: 3.6, samples: 0 };
+}
+
+/** The measured speed if there is one, else the prediction */
+export function speedOf(model: string, specs: SystemSpecs): Speed {
+  const m = catalogModel(model);
+  const guess = m ? predictedSpeed(m, specs) : { prefill: 20, gen: 5, loadSecs: 8, charsPerToken: 3.6, samples: 0 };
+  const got = speedStore()[model];
+  if (!got?.samples) return guess;
+  return { ...guess, ...got, prefill: got.prefill || guess.prefill, gen: got.gen || guess.gen };
+}
+
+export interface EngineStats {
+  prompt_eval_count?: number;
+  prompt_eval_duration?: number;
+  eval_count?: number;
+  eval_duration?: number;
+  load_duration?: number;
+}
+
+/** Learn from an answer's timings (durations are in nanoseconds) */
+export function recordSpeed(model: string, st: EngineStats, info: { promptChars: number; expectedNewChars: number; fresh: boolean }) {
+  const all = speedStore();
+  const cur: Speed = all[model] || { prefill: 0, gen: 0, samples: 0 };
+  const ema = (old: number, v: number) => (old ? old * 0.6 + v * 0.4 : v);
+  const pc = st.prompt_eval_count || 0;
+  if (pc >= 64 && st.prompt_eval_duration) cur.prefill = ema(cur.prefill, pc / (st.prompt_eval_duration / 1e9));
+  if ((st.eval_count || 0) >= 16 && st.eval_duration) cur.gen = ema(cur.gen, st.eval_count! / (st.eval_duration / 1e9));
+  if (st.load_duration && st.load_duration > 1e9) cur.loadSecs = ema(cur.loadSecs || 0, st.load_duration / 1e9);
+  // A fresh read of everything tells us how long a token is in characters
+  if (info.fresh && pc >= 200) cur.charsPerToken = ema(cur.charsPerToken || 0, info.promptChars / pc);
+  // It re-read far more than what was new: this engine/model doesn't reuse what it read last turn
+  if (!info.fresh && pc > 200) {
+    const cpt = cur.charsPerToken || 3.6;
+    cur.noPrefixCache = pc * cpt > Math.max(2000, info.expectedNewChars * 1.8);
+  }
+  cur.samples++;
+  cur.at = new Date().toISOString();
+  all[model] = cur;
+  try {
+    fs.mkdirSync(AI_DIR, { recursive: true });
+    fs.writeFileSync(SPEEDS_FILE, JSON.stringify(all, null, 2));
+  } catch {
+    // best effort
+  }
+}
+
+/** Rough seconds for a typical reply on this machine (reading the question and what it looked up, writing a paragraph) */
 export function estimateSeconds(m: CatalogModel, specs: SystemSpecs): number {
-  const coreFactor = Math.min(1.5, Math.max(0.5, specs.cpu.cores / 8)) * (specs.cpu.avx512 ? 1.15 : specs.cpu.avx2 ? 1 : 0.6);
-  const wordsPerSec = Math.min(40, (40 / (m.activeBytes / GB)) * coreFactor);
-  const gpu = specs.gpuUsable ? 6 : 1;
-  const reading = 3000 / (wordsPerSec * 8 * gpu); // reading the problem is much faster than writing
-  const writing = 250 / (wordsPerSec * gpu);
+  const sp = speedOf(m.id, specs);
+  const reading = 1800 / sp.prefill;
+  const writing = (200 + (m.thinking === 'levels' ? 80 : 0)) / sp.gen;
   return Math.round(reading + writing);
+}
+
+/** Whether a model can run right now without squeezing your apps (or it's already in memory) */
+export async function fitsNow(model: string): Promise<{ ok: boolean; why?: string }> {
+  const m = catalogModel(model);
+  if (!m) return { ok: true };
+  try {
+    const ps = await ollama<{ models?: { name?: string; model?: string }[] }>('/api/ps', undefined, 'GET', 3000);
+    if ((ps.models || []).some((x) => x.name === model || x.model === model)) return { ok: true };
+  } catch {
+    // can't tell: go by memory
+  }
+  const specs = await getSystemSpecs(true);
+  const budget = aiMemoryBudget(specs);
+  if (m.memoryBytes <= budget) return { ok: true };
+  return { ok: false, why: `${m.name} needs about ${(m.memoryBytes / GB).toFixed(0)} GB and only ${(Math.max(0, budget) / GB).toFixed(0)} GB can be spared right now` };
 }
 
 export type Fit = 'fits' | 'tight' | 'no';
@@ -452,7 +575,7 @@ export async function aiStatus() {
     specs,
     budgetBytes: aiMemoryBudget(specs),
     recommended: recommend(specs),
-    catalog: CATALOG.map((m) => ({ ...m, ...fitOf(m, specs), seconds: estimateSeconds(m, specs), installed: installed.some((i) => i.id === m.id) })),
+    catalog: CATALOG.map((m) => ({ ...m, ...fitOf(m, specs), seconds: estimateSeconds(m, specs), measured: Boolean(speedStore()[m.id]?.samples), installed: installed.some((i) => i.id === m.id) })),
     installed,
     downloads: Array.from(downloads.values()),
     settings,
