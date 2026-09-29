@@ -12,7 +12,10 @@
         "Downloads that don't give up. If the connection drops, the AI download picks up where it stopped, even after a restart. Every download is checked before it's used.",
         "Fix with AI. One tap from the To Fix list in Diagnostics, and it works out what's wrong.",
         "You're always in control. Every change is shown to you first, with a before and after of every file. It's backed up, and you can undo it from Restore.",
-        "Choose how much it may do on its own: Look Only, Ask Before Changes, Fix Routine Things or Expert."
+        "Choose how much it may do on its own: Look Only, Ask Before Changes, Fix Routine Things or Expert.",
+        "Learn how it's done. Turn on Show Commands (or choose Advanced in Settings) to see the command behind every step, with a plain explanation of each part.",
+        "Do It Myself. Every AI fix can be done by hand instead, one step at a time, with the terminal a tap away.",
+        "Activity → Commands. A learning log of every command behind your recent changes, and How It Was Done on every activity."
       ],
       "improved": [
         "Updates now show version numbers and notes like these, instead of build codes.",
@@ -20,7 +23,8 @@
       ],
       "fixed": [
         "On phones, the dashboard no longer shifts sideways by a few pixels.",
-        "If an AI model can't download, you get a clear reason and a Try Again button."
+        "If an AI model can't download, you get a clear reason and a Try Again button.",
+        "Updating Manifexus keeps your settings, history, backups and AI models, even if no data folder was set up. Diagnostics now tells you if one is missing."
       ]
     },
     {

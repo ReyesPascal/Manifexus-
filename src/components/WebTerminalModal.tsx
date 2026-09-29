@@ -249,7 +249,7 @@ export const WebTerminalModal: React.FC<WebTerminalModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-150">
+    <div className="fixed inset-0 z-[80] flex items-center justify-center p-2 sm:p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-150">
       <div
         className={`flex flex-col bg-[#080c14] border border-cyan-500/40 rounded-2xl shadow-2xl overflow-hidden transition-all duration-200 ${
           isMaximized ? 'w-full h-full max-w-none' : 'w-full max-w-5xl h-[80vh] min-h-[480px]'

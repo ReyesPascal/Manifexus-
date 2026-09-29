@@ -83,6 +83,10 @@ export interface ManifexusConfig {
   refreshIntervalSeconds: number;
   /** Folder new stacks are created in. Empty = use the folder existing stacks share. */
   stacksDir?: string;
+  /** Simple keeps screens clean; Advanced shows the technical side (commands, and later the terminal editor) */
+  experienceMode?: 'simple' | 'advanced';
+  /** Show the command behind each step. Unset = follow the mode (on in Advanced) */
+  showCommands?: boolean;
 }
 
 export interface EmptyComposeStack {

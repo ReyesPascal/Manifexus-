@@ -1,4 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { usePrefs } from '../prefs';
+import { CommandItem, useLearnSteps } from './Commands';
 import { Button, Group, IconTile, LinkButton, Row, SectionFooter, ios } from './ui/ios';
 import { copyText } from './ActivitySheet';
 
@@ -200,16 +202,19 @@ export const ProgressView: React.FC<{
   onClose?: () => void;
 }> = ({ run, runningTitle, doneMessage, onDone, onClose }) => {
   const [copy, setCopy] = useState<'idle' | 'busy' | 'done' | 'failed'>('idle');
+  const { showCommands } = usePrefs();
+  const learning = useLearnSteps(showCommands ? run.activityId : undefined, run.status === 'running' || run.status === 'idle');
 
   // Success: refresh the dashboard, show "Done" briefly, then close by itself
+  // (not when commands are shown: there's something to read, so Done is left to the person)
   useEffect(() => {
     if (run.status === 'done' || run.status === 'failed' || run.status === 'rolled_back') {
       window.dispatchEvent(new CustomEvent('manifexus:refresh_fleet'));
     }
-    if (run.status !== 'done' || !onDone) return;
+    if (run.status !== 'done' || !onDone || showCommands) return;
     const t = setTimeout(onDone, 2200);
     return () => clearTimeout(t);
-  }, [run.status, onDone]);
+  }, [run.status, onDone, showCommands]);
 
   const running = run.status === 'running' || run.status === 'idle';
   const current = run.steps.find((s) => s.status === 'running');
@@ -269,7 +274,7 @@ export const ProgressView: React.FC<{
         >
           {subtitle}
         </p>
-        {run.status === 'done' && onDone && (
+        {run.status === 'done' && onDone && !showCommands && (
           <p className="mt-3 text-[12px]" style={{ color: ios.tertiary }}>
             Closing…
           </p>
@@ -299,8 +304,8 @@ export const ProgressView: React.FC<{
         <section>
           <Group className="ios-inset-icon">
             {run.steps.map((s) => (
+              <React.Fragment key={s.index}>
               <Row
-                key={s.index}
                 leading={<StepIcon step={s} />}
                 title={
                   <span style={{ color: s.status === 'pending' || s.status === 'skipped' ? ios.tertiary : s.status === 'failed' ? '#FF8A80' : ios.label }}>
@@ -314,12 +319,20 @@ export const ProgressView: React.FC<{
                 }
                 trailing={s.status === 'success' || s.status === 'failed' ? <span className="text-[13px] tabular-nums">{fmt(s.durationMs)}</span> : undefined}
               />
+              {showCommands && (learning.get(s.index)?.length || 0) > 0 && (
+                <div className="pl-[52px] pr-4 pb-3 space-y-3">
+                  {learning.get(s.index)!.map((c, i) => (
+                    <CommandItem key={i} c={c} collapsible hideTitle={learning.get(s.index)!.length === 1} />
+                  ))}
+                </div>
+              )}
+              </React.Fragment>
             ))}
           </Group>
           {running && <SectionFooter>You can close this screen. It keeps going, and the result is saved in Activity.</SectionFooter>}
           {!running && run.activityId && run.status === 'done' && (
             <SectionFooter>
-              <LinkButton onClick={openActivity}>View Details in Activity</LinkButton>
+              <LinkButton onClick={openActivity}>{showCommands ? 'See Every Step in Activity' : 'View Details in Activity'}</LinkButton>
             </SectionFooter>
           )}
         </section>

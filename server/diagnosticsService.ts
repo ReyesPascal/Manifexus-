@@ -332,6 +332,15 @@ export async function systemDiagnostics() {
       : { id: 'folders', level: 'info', title: 'No stack folders mounted', detail: 'Stack files are reached through Docker helpers instead of a direct mount. That works, but is a little slower.' }
   );
 
+  // Where Manifexus keeps its data: it must outlive updates (settings, history, backups, AI models)
+  const selfMounts = (env.manifexus?.mounts || []) as { type: string; source: string; destination: string }[];
+  const dataMount = selfMounts.find((m) => m.destination === '/data');
+  if (env.manifexus?.containerId && !dataMount) {
+    checks.push({ id: 'data', level: 'error', title: 'Your data isn’t saved outside Manifexus', detail: 'Settings, history, backups and AI models would be lost when Manifexus is recreated. Add a volume for /data (for example ./data:/data) to its compose file.' });
+  } else if (dataMount?.type === 'volume' && /^[0-9a-f]{64}$/.test(dataMount.source.split('/').filter(Boolean).slice(-2, -1)[0] || dataMount.source)) {
+    checks.push({ id: 'data', level: 'info', title: 'Data is in an unnamed Docker volume', detail: 'Manifexus keeps it across its own updates, but removing the container by hand would lose it. Adding ./data:/data to its compose file makes it permanent.' });
+  }
+
   // Apps listed in two stacks
   const dup = await duplicateAppsCheck().catch(() => undefined);
   if (dup) checks.push(dup);

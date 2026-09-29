@@ -1,4 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { usePrefs } from '../prefs';
+import { CommandItem, useLearn, LearnCommand } from './Commands';
 import {
   Alert,
   BackButton,
@@ -501,6 +503,11 @@ const ActivityDetail: React.FC<{ id: string; subscribe: Subscribe }> = ({ id, su
   const [mode, setMode] = useState<'key' | 'all'>('key');
   const [shown, setShown] = useState(250);
   const [copyState, setCopyState] = useState<'idle' | 'copying' | 'copied' | 'failed'>('idle');
+  // How it was done: the commands behind each step (on by default when Show Commands is on)
+  const { showCommands } = usePrefs();
+  const [showHow, setShowHow] = useState(showCommands);
+  useEffect(() => setShowHow(showCommands), [showCommands, id]);
+  const learn = useLearn(showHow ? id : undefined, bundle?.activity.status === 'running');
 
   const load = useCallback(async () => {
     try {
@@ -641,6 +648,68 @@ const ActivityDetail: React.FC<{ id: string; subscribe: Subscribe }> = ({ id, su
               />
             ))}
           </Group>
+          <SectionFooter>
+            <LinkButton onClick={() => setShowHow((v) => !v)}>{showHow ? 'Hide How It Was Done' : 'Show How It Was Done'}</LinkButton>
+            {!showHow && ' · the commands behind each step, explained'}
+          </SectionFooter>
+        </section>
+      )}
+
+      {steps.length === 0 && !showHow && (
+        <section>
+          <Group>
+            <Row onClick={() => setShowHow(true)} title="How It Was Done" subtitle="The commands behind this, explained" chevron />
+          </Group>
+        </section>
+      )}
+
+      {showHow && (
+        <section>
+          <SectionHeader>How It Was Done</SectionHeader>
+          {!learn.loaded ? (
+            <Group>
+              <Row title={<span style={{ color: ios.secondary }}>Reading the record…</span>} />
+            </Group>
+          ) : (
+            <div className="space-y-3">
+              {steps.map((s) => {
+                const cmds = learn.steps.get(s.index) || [];
+                return (
+                  <Group key={s.index}>
+                    <div className="px-4 py-3 space-y-3">
+                      <div className="text-[14px] font-semibold text-white">
+                        {s.index}. {s.name}
+                      </div>
+                      {cmds.length ? (
+                        cmds.map((c, i) => <CommandItem key={i} c={c} hideTitle={cmds.length === 1} />)
+                      ) : (
+                        <p className="text-[13px]" style={{ color: ios.tertiary }}>
+                          No commands for this step: it happened inside Manifexus (like keeping its own backup copy) or only checked things.
+                        </p>
+                      )}
+                    </div>
+                  </Group>
+                );
+              })}
+              {learn.loose.length > 0 && (
+                <Group>
+                  <div className="px-4 py-3 space-y-3">
+                    {learn.loose.map((c, i) => (
+                      <CommandItem key={i} c={c} />
+                    ))}
+                  </div>
+                </Group>
+              )}
+              {!steps.length && !learn.loose.length && (
+                <Group>
+                  <Row title={<span style={{ color: ios.secondary }}>Nothing was changed here, so there are no commands to show.</span>} />
+                </Group>
+              )}
+            </div>
+          )}
+          <SectionFooter>
+            “Equivalent command” means Manifexus did it directly (through Docker, or by writing the file itself); typing the command in your server’s terminal does the same thing.
+          </SectionFooter>
         </section>
       )}
 
@@ -901,6 +970,87 @@ const EventsView: React.FC<{
 };
 
 // ----------------------------------------------------------------------------
+// Commands: every command behind recent activity, to learn from
+// ----------------------------------------------------------------------------
+
+const CommandsView: React.FC<{ onOpenActivity: (id: string) => void }> = ({ onOpenActivity }) => {
+  const [list, setList] = useState<{ activityId: string; activityTitle: string; status: string; command: LearnCommand }[] | null>(null);
+  const [error, setError] = useState<string>();
+  useEffect(() => {
+    fetch('/api/learn/commands?limit=150', { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((j) => setList(j.commands || []))
+      .catch(() => setError('Couldn’t load the commands.'));
+  }, []);
+  // One card per change (newest first), its commands in the order they ran, grouped by day
+  const byDay = useMemo(() => {
+    type Change = { activityId: string; activityTitle: string; status: string; ts: string; commands: LearnCommand[] };
+    const changes = new Map<string, Change>();
+    for (const c of list || []) {
+      let ch = changes.get(c.activityId);
+      if (!ch) changes.set(c.activityId, (ch = { activityId: c.activityId, activityTitle: c.activityTitle, status: c.status, ts: c.command.ts, commands: [] }));
+      ch.commands.push(c.command);
+      if (c.command.ts < ch.ts) ch.ts = c.command.ts;
+    }
+    const m = new Map<string, Change[]>();
+    for (const ch of Array.from(changes.values()).sort((a, b) => b.ts.localeCompare(a.ts))) {
+      ch.commands.sort((a, b) => a.ts.localeCompare(b.ts));
+      const k = dayLabel(ch.ts);
+      if (!m.has(k)) m.set(k, []);
+      m.get(k)!.push(ch);
+    }
+    return Array.from(m.entries());
+  }, [list]);
+  if (error) return <p className="text-[15px] text-center py-16" style={{ color: ios.orange }}>{error}</p>;
+  if (!list) return <p className="text-[15px] text-center py-16" style={{ color: ios.secondary }}>Loading…</p>;
+  if (!list.length)
+    return (
+      <p className="text-[15px] text-center py-16 px-6" style={{ color: ios.secondary }}>
+        Nothing yet. When Manifexus moves, restores or fixes something, the commands behind it show up here.
+      </p>
+    );
+  return (
+    <div className="space-y-6">
+      <p className="text-[14px] leading-[20px] px-1" style={{ color: ios.secondary }}>
+        Every change Manifexus made, as the commands you’d type to do it yourself. Tap a change to see the whole story.
+      </p>
+      {byDay.map(([day, items]) => (
+        <section key={day}>
+          <SectionHeader>{day}</SectionHeader>
+          <div className="space-y-3">
+            {items.map((ch) => (
+              <Group key={ch.activityId}>
+                <div className="px-4 py-3 space-y-3">
+                  <button
+                    type="button"
+                    onClick={() => onOpenActivity(ch.activityId)}
+                    className="w-full flex items-baseline gap-2 text-left rounded hover:opacity-80 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0A84FF]"
+                    aria-label={`${ch.activityTitle}: open in Activity`}
+                  >
+                    <span className="flex-1 min-w-0 truncate text-[14.5px] font-semibold" style={{ color: ch.status === 'failed' ? ios.red : 'white' }}>
+                      {ch.activityTitle}
+                    </span>
+                    <span className="tabular-nums flex-shrink-0 text-[12.5px]" style={{ color: ios.tertiary }}>
+                      {fmtTime(ch.ts)}
+                    </span>
+                    <span className="flex-shrink-0 text-[15px] leading-none" style={{ color: ios.tertiary }} aria-hidden>
+                      ›
+                    </span>
+                  </button>
+                  {ch.commands.map((c, i) => (
+                    <CommandItem key={i} c={c} collapsible />
+                  ))}
+                </div>
+              </Group>
+            ))}
+          </div>
+        </section>
+      ))}
+    </div>
+  );
+};
+
+// ----------------------------------------------------------------------------
 // Settings
 // ----------------------------------------------------------------------------
 
@@ -1052,7 +1202,7 @@ export const ActivitySheet: React.FC<{
   onBack?: () => void;
 }> = ({ open, onClose, initialActivityId, initialFilter, backLabel, onBack }) => {
   const [tab, setTab] = useState<'activity' | 'events'>('activity');
-  const [view, setView] = useState<{ kind: 'list' } | { kind: 'detail'; id: string } | { kind: 'settings' }>({ kind: 'list' });
+  const [view, setView] = useState<{ kind: 'list' } | { kind: 'detail'; id: string; from?: 'commands' } | { kind: 'settings' } | { kind: 'commands' }>({ kind: 'list' });
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
   const [debounced, setDebounced] = useState('');
@@ -1171,6 +1321,11 @@ export const ActivitySheet: React.FC<{
     requestAnimationFrame(() => bodyRef.current?.scrollTo({ top: 0 }));
   };
   const back = () => {
+    // An activity opened from Commands goes back to Commands
+    if (view.kind === 'detail' && view.from === 'commands') {
+      setView({ kind: 'commands' });
+      return;
+    }
     setView({ kind: 'list' });
     requestAnimationFrame(() => bodyRef.current?.scrollTo({ top: listScroll.current }));
   };
@@ -1178,7 +1333,7 @@ export const ActivitySheet: React.FC<{
   const isList = view.kind === 'list';
   const onEvents = tab === 'events';
   const gear = <GearButton label="Activity settings" onClick={() => setView({ kind: 'settings' })} />;
-  const title = view.kind === 'settings' ? 'Activity Settings' : view.kind === 'detail' ? 'Activity' : onEvents ? 'All Events' : 'Activity';
+  const title = view.kind === 'settings' ? 'Activity Settings' : view.kind === 'commands' ? 'Commands' : view.kind === 'detail' ? 'Activity' : onEvents ? 'All Events' : 'Activity';
   const ev = eventFilters;
 
   const toolbar = !isList ? undefined : onEvents ? (
@@ -1236,12 +1391,20 @@ export const ActivitySheet: React.FC<{
         <span className="w-[7px] h-[7px] rounded-full" style={{ background: ios.green }} title="Recording" />
         {`${items.length}${cursor ? '+' : ''} activit${items.length === 1 ? 'y' : 'ies'}`}
       </span>
+      <span className="flex items-center gap-5">
+      <LinkButton onClick={() => { listScroll.current = bodyRef.current?.scrollTop || 0; setView({ kind: 'commands' }); requestAnimationFrame(() => bodyRef.current?.scrollTo({ top: 0 })); }}>
+        <span className="inline-flex items-center gap-1">
+          Commands
+          <svg width="6" height="10" viewBox="0 0 8 13" aria-hidden="true"><path d="M1.5 1.5 6.5 6.5 1.5 11.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+        </span>
+      </LinkButton>
       <LinkButton onClick={() => { listScroll.current = 0; setTab('events'); requestAnimationFrame(() => bodyRef.current?.scrollTo({ top: 0 })); }}>
         <span className="inline-flex items-center gap-1">
           All Events
           <svg width="6" height="10" viewBox="0 0 8 13" aria-hidden="true"><path d="M1.5 1.5 6.5 6.5 1.5 11.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
         </span>
       </LinkButton>
+      </span>
     </div>
   );
 
@@ -1250,11 +1413,11 @@ export const ActivitySheet: React.FC<{
       open={open}
       onClose={onClose}
       title={title}
-      zIndex={60}
+      zIndex={70}
       bodyRef={bodyRef}
       leftAction={
         view.kind !== 'list' ? (
-          <BackButton label={onEvents && view.kind === 'detail' ? 'All Events' : 'Activity'} onClick={back} />
+          <BackButton label={view.kind === 'detail' && view.from === 'commands' ? 'Commands' : onEvents && view.kind === 'detail' ? 'All Events' : 'Activity'} onClick={back} />
         ) : onEvents ? (
           <BackButton label="Activity" onClick={() => setTab('activity')} />
         ) : backLabel && onBack ? (
@@ -1268,6 +1431,14 @@ export const ActivitySheet: React.FC<{
       footer={footer}
     >
       {view.kind === 'settings' && <LogSettingsView />}
+      {view.kind === 'commands' && (
+        <CommandsView
+          onOpenActivity={(aid) => {
+            setView({ kind: 'detail', id: aid, from: 'commands' });
+            requestAnimationFrame(() => bodyRef.current?.scrollTo({ top: 0 }));
+          }}
+        />
+      )}
       {view.kind === 'detail' && <ActivityDetail id={view.id} subscribe={subscribe} />}
       {/* Stays mounted behind an opened activity, so Back returns to the same filters and results */}
       {eventsMounted && (

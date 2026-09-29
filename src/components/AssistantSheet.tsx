@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BackButton, Button, Checkmark, GearButton, Group, IconTile, LinkButton, Row, SectionFooter, SectionHeader, Sheet, ios } from './ui/ios';
 import { ProgressView, useRun } from './ProgressTracker';
+import { CommandBlock, Explain } from './Commands';
+import { usePrefs } from '../prefs';
 
 /**
  * Ask Manifexus: the built-in AI. First run sets it up (your server's specs, the models that fit,
@@ -74,6 +76,7 @@ interface PlanStep {
   newFile?: boolean;
   undoable: boolean;
   impact?: string;
+  howTo?: { command: string; note?: string; equivalent?: boolean; explain: Explain[] }[];
 }
 
 interface Plan {
@@ -86,9 +89,9 @@ interface Plan {
 
 type Item =
   | { kind: 'user'; text: string }
-  | { kind: 'assistant'; text: string; tools: { label: string; ok?: boolean; running?: boolean }[]; plan?: Plan; planState?: 'new' | 'done' | 'failed'; streaming?: boolean; error?: string };
+  | { kind: 'assistant'; text: string; tools: { label: string; ok?: boolean; running?: boolean }[]; plan?: Plan; planState?: 'new' | 'done' | 'self' | 'failed'; streaming?: boolean; error?: string };
 
-type View = 'chat' | 'setup' | 'models' | 'settings' | 'review' | 'progress';
+type View = 'chat' | 'setup' | 'models' | 'settings' | 'review' | 'progress' | 'guide';
 
 // ----------------------------------------------------------------------------
 // Helpers
@@ -241,6 +244,9 @@ export const AssistantSheet: React.FC<{
   const [busy, setBusy] = useState(false);
   const [modelName, setModelName] = useState<string>();
   const [reviewPlan, setReviewPlan] = useState<Plan | null>(null);
+  // Do It Myself: which step of the guide is showing (0 = the overview)
+  const [guideAt, setGuideAt] = useState(0);
+  const { showCommands } = usePrefs();
   const abort = useRef<AbortController | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -718,6 +724,19 @@ export const AssistantSheet: React.FC<{
                     <DiffView lines={s.diff} />
                   </div>
                 )}
+                {showCommands && (s.howTo || []).length > 0 && (
+                  <div className="px-4 pb-3.5 space-y-2.5">
+                    <div className="text-[12px] font-semibold uppercase tracking-wide" style={{ color: ios.tertiary }}>
+                      By hand
+                    </div>
+                    {s.howTo!.map((h, k) => (
+                      <div key={k} className="space-y-1">
+                        {h.note && <p className="text-[12.5px] leading-[18px]" style={{ color: ios.secondary }}>{h.note}</p>}
+                        <CommandBlock command={h.command} explain={h.explain} collapsible />
+                      </div>
+                    ))}
+                  </div>
+                )}
               </Group>
             ))}
           </div>
@@ -735,8 +754,18 @@ export const AssistantSheet: React.FC<{
       </div>
     );
     footer = (
-      <div className="flex justify-end gap-2">
-        <Button tone="gray" onClick={pop} className="sm:min-w-[110px]">
+      <div className="flex items-center justify-end gap-2">
+        <span className="mr-auto">
+          <LinkButton
+            onClick={() => {
+              setGuideAt(0);
+              push('guide');
+            }}
+          >
+            Do It Myself
+          </LinkButton>
+        </span>
+        <Button tone="gray" onClick={pop} className="hidden sm:inline-flex sm:min-w-[110px]">
           Cancel
         </Button>
         <Button
@@ -748,6 +777,99 @@ export const AssistantSheet: React.FC<{
         >
           Make Changes
         </Button>
+      </div>
+    );
+  } else if (view === 'guide' && reviewPlan) {
+    title = 'Do It Myself';
+    const steps = reviewPlan.steps;
+    const s = guideAt > 0 ? steps[guideAt - 1] : undefined;
+    body = !s ? (
+      <div className="space-y-7">
+        <div className="flex flex-col items-center text-center pt-1">
+          <IconTile color="#30D158" size={52}>
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M4 6l5 5-5 5M11 17h9" />
+            </svg>
+          </IconTile>
+          <h3 className="mt-3.5 text-[20px] font-semibold text-white">Do it yourself, step by step</h3>
+          <p className="mt-1.5 text-[14px] leading-[20px] max-w-[460px]" style={{ color: ios.secondary }}>
+            You’ll type each command in a terminal on your server (for example over SSH). Every step explains what the command does. Nothing here runs by
+            itself, and you can go back and forth as you like.
+          </p>
+        </div>
+        <section>
+          <SectionHeader>{steps.length === 1 ? 'The Step' : `${steps.length} Steps`}</SectionHeader>
+          <Group className="ios-inset-icon">
+            {steps.map((st, i) => (
+              <Row key={i} onClick={() => setGuideAt(i + 1)} leading={<StepTile type={st.action.type} />} title={<span className="whitespace-normal">{st.label}</span>} chevron />
+            ))}
+          </Group>
+          <SectionFooter>Tip: tap Copy on a command, then paste it into your terminal with Ctrl+Shift+V (or right-click → Paste).</SectionFooter>
+        </section>
+      </div>
+    ) : (
+      <div className="space-y-6">
+        <div>
+          <div className="text-[12px] font-semibold uppercase tracking-wide" style={{ color: ios.tertiary }}>
+            Step {guideAt} of {steps.length}
+          </div>
+          <h3 className="mt-1 text-[20px] leading-[25px] font-semibold text-white">{s.label}</h3>
+          <p className="mt-1.5 text-[14px] leading-[20px]" style={{ color: ios.secondary }}>
+            {s.action.reason}
+          </p>
+        </div>
+        {(s.howTo || []).map((h, k) => (
+          <section key={k} className="space-y-2">
+            <div className="flex gap-3">
+              <span
+                className="w-[22px] h-[22px] rounded-full flex items-center justify-center text-[12px] font-semibold flex-shrink-0 mt-px"
+                style={{ background: 'rgba(10,132,255,0.2)', color: ios.blue }}
+              >
+                {k + 1}
+              </span>
+              <div className="flex-1 min-w-0 space-y-2">
+                {h.note && <p className="text-[14px] leading-[20px] text-white">{h.note}</p>}
+                <CommandBlock command={h.command} explain={h.explain} />
+                {s.action.type === 'write_file' && h.command.startsWith('nano') && s.action.path && (
+                  <LinkButton onClick={() => window.dispatchEvent(new CustomEvent('manifexus:open-terminal', { detail: { file: s.action.path } }))}>
+                    Open This File in Manifexus’s Terminal Instead
+                  </LinkButton>
+                )}
+              </div>
+            </div>
+          </section>
+        ))}
+        {s.diff && (
+          <section className="space-y-2">
+            <SectionHeader>The Change to Make</SectionHeader>
+            <DiffView lines={s.diff} />
+            <SectionFooter>Red lines go away, green lines are new. Keep the spaces at the start of each line exactly as shown: they matter in these files.</SectionFooter>
+          </section>
+        )}
+      </div>
+    );
+    const last = guideAt === steps.length;
+    footer = (
+      <div className="flex items-center justify-between gap-2">
+        <Button tone="gray" onClick={() => (guideAt === 0 ? pop() : setGuideAt((n) => n - 1))} className="sm:min-w-[110px]">
+          Back
+        </Button>
+        {!last ? (
+          <Button onClick={() => setGuideAt((n) => n + 1)} className="flex-1 sm:flex-none sm:min-w-[170px]">
+            {guideAt === 0 ? 'Start' : 'Next Step'}
+          </Button>
+        ) : (
+          <Button
+            onClick={() => {
+              setItems((list) => list.map((it) => (it.kind === 'assistant' && it.plan?.id === reviewPlan.id ? { ...it, planState: 'self' } : it)));
+              setStack(['chat']);
+              setTimeout(() => send(`I made these changes myself: “${reviewPlan.title}”. Can you check that everything is fixed now?`), 50);
+            }}
+            className="flex-1 sm:flex-none sm:min-w-[170px]"
+          >
+            I’m Done: Check It
+          </Button>
+        )}
       </div>
     );
   } else if (view === 'progress' && reviewPlan) {
@@ -837,8 +959,8 @@ export const AssistantSheet: React.FC<{
                         </ul>
                       </div>
                       <div className="flex items-center justify-between px-4 py-2.5" style={{ borderTop: `0.5px solid ${ios.separator}` }}>
-                        <span className="text-[13px]" style={{ color: it.planState === 'done' ? ios.green : ios.tertiary }}>
-                          {it.planState === 'done' ? 'Started' : status.settings.freedom === 'look' ? 'Look-only mode: nothing will change' : 'Nothing changes until you review it'}
+                        <span className="text-[13px]" style={{ color: it.planState === 'done' || it.planState === 'self' ? ios.green : ios.tertiary }}>
+                          {it.planState === 'done' ? 'Started' : it.planState === 'self' ? 'You did this yourself' : status.settings.freedom === 'look' ? 'Look-only mode: nothing will change' : 'Nothing changes until you review it'}
                         </span>
                         {it.planState === 'new' && status.settings.freedom !== 'look' && (
                           <Button
@@ -908,7 +1030,7 @@ export const AssistantSheet: React.FC<{
   // ---------------------------------------------------------------- navigation
   const gear = <GearButton label="AI settings" onClick={() => push(status?.ready ? 'settings' : 'setup')} />;
   const prev = stack[stack.length - 2];
-  const backText = prev === 'chat' ? 'Ask' : prev === 'setup' ? 'Built-in AI' : prev === 'settings' ? 'Settings' : 'Back';
+  const backText = prev === 'chat' ? 'Ask' : prev === 'setup' ? 'Built-in AI' : prev === 'settings' ? 'Settings' : prev === 'review' ? 'Review' : 'Back';
   const leftAction =
     view === 'progress' ? undefined : stack.length > 1 ? <BackButton label={backText} onClick={pop} /> : backLabel && onBack ? <BackButton label={backLabel} onClick={onBack} /> : view === 'chat' ? gear : undefined;
   const rightExtra =

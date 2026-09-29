@@ -30,6 +30,7 @@ import { ActivitySheet } from './components/ActivitySheet';
 import { AppCard } from './components/AppCard';
 import { AppDetailsSheet } from './components/AppDetailsSheet';
 import { AssistantSheet } from './components/AssistantSheet';
+import { setPrefsFromConfig } from './prefs';
 import { GroupManagerModal } from './components/GroupManagerModal';
 import { SettingsModal } from './components/SettingsModal';
 import { SimulateContainerModal } from './components/SimulateContainerModal';
@@ -484,6 +485,22 @@ export default function App() {
 
     return { stacksMap, standalone };
   }, [filteredContainers, emptyStacks, searchQuery]);
+
+  // Simple / Advanced and Show Commands, for every screen
+  useEffect(() => setPrefsFromConfig(config), [config]);
+
+  // Any screen can open a file in the terminal editor (e.g. Do It Myself guides)
+  useEffect(() => {
+    const onOpen = (e: Event) => {
+      const d = (e as CustomEvent<{ file: string; stack?: string }>).detail;
+      if (!d?.file) return;
+      setTerminalTargetFile(d.file);
+      setTerminalStackName(d.stack || d.file.split('/').slice(-2, -1)[0] || '');
+      setIsTerminalModalOpen(true);
+    };
+    window.addEventListener('manifexus:open-terminal', onOpen);
+    return () => window.removeEventListener('manifexus:open-terminal', onOpen);
+  }, []);
 
   const hostAddress = config?.hostAddress || 'localhost';
 

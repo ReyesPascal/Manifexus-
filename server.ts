@@ -93,6 +93,7 @@ import { systemDiagnostics, systemReport, appDiagnostics, appLogs } from './serv
 import { getSystemSpecs } from './server/systemSpecs';
 import { aiStatus, saveAiSettings, installModel, cancelDownload, removeModel, warmUpEngine, catalogModel, stopEngine, installEngineNow } from './server/aiService';
 import { chat as aiChat, runPlan, getPlan } from './server/aiAgent';
+import { learnActivity, recentCommands } from './server/commandLog';
 import {
   getSoftwareUpdateState,
   checkForUpdate,
@@ -175,6 +176,14 @@ async function startServer() {
       })
     );
   });
+
+  // Learn how it was done: an activity's steps with the commands behind them, and every recent command
+  app.get('/api/learn/activities/:id', async (req, res) => {
+    const l = await learnActivity(req.params.id);
+    if (!l) return res.status(404).json({ error: 'That activity isn’t in the log anymore.' });
+    res.json(l);
+  });
+  app.get('/api/learn/commands', async (req, res) => res.json({ commands: await recentCommands(Math.min(400, Number(req.query.limit) || 150)) }));
 
   app.get('/api/logs/activities/:id', async (req, res) => {
     const a = getActivity(req.params.id);

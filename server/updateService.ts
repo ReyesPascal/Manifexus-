@@ -582,7 +582,29 @@ function cloneCreatePayload(self: SelfInfo): any {
       Links: e.Links || undefined,
     };
   }
-  return { ...cfg, Image: self.imageRef, HostConfig: self.inspect.HostConfig, NetworkingConfig: { EndpointsConfig: endpoints } };
+  return { ...cfg, Image: self.imageRef, HostConfig: keepVolumes(self), NetworkingConfig: { EndpointsConfig: endpoints } };
+}
+
+/**
+ * The new container gets the same folders. Docker only lists folders you set up yourself in
+ * HostConfig; a data folder it created on its own (an unnamed volume for /data or /app/backups)
+ * would be left behind, losing settings, history, backups and downloaded AI models. Carry those over.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function keepVolumes(self: SelfInfo): any {
+  const hc = { ...(self.inspect.HostConfig || {}) };
+  const covered = new Set<string>([
+    ...((hc.Binds as string[]) || []).map((b) => b.split(':')[1]),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ...(((hc.Mounts as any[]) || []).map((m) => m.Target)),
+  ]);
+  const extra: string[] = [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  for (const m of (self.inspect.Mounts || []) as any[]) {
+    if (m.Type === 'volume' && m.Name && !covered.has(m.Destination)) extra.push(`${m.Name}:${m.Destination}`);
+  }
+  if (extra.length) hc.Binds = [...((hc.Binds as string[]) || []), ...extra];
+  return hc;
 }
 
 function mountSource(self: SelfInfo, destination: string): string | undefined {

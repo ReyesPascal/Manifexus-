@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { BackButton, FieldRow, Group, Row, SectionFooter, SectionHeader, Segmented, Sheet, ios } from './ui/ios';
+import { BackButton, FieldRow, Group, Row, SectionFooter, SectionHeader, Segmented, Sheet, Switch, ios } from './ui/ios';
 import { ManifexusConfig, AutomationPrivileges } from '../types';
 
 interface SettingsModalProps {
@@ -20,7 +20,7 @@ interface SettingsModalProps {
   onBack?: () => void;
 }
 
-type Field = 'host' | 'dir' | 'refresh';
+type Field = 'host' | 'dir' | 'refresh' | 'mode' | 'commands';
 
 /** Small green check shown in a row for a moment after it saves */
 const SavedCheck: React.FC = () => (
@@ -206,6 +206,42 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </SectionFooter>
           </section>
         )}
+
+        <section>
+          <SectionHeader>How Manifexus Looks</SectionHeader>
+          <Segmented
+            label="Experience"
+            value={config?.experienceMode === 'advanced' ? 'advanced' : 'simple'}
+            // Switching modes sets Show Commands to match (on in Advanced); it can still be changed on its own
+            onChange={(v) => void save('mode', { experienceMode: v as 'simple' | 'advanced', showCommands: v === 'advanced' })}
+            options={[
+              { value: 'simple', label: 'Simple' },
+              { value: 'advanced', label: 'Advanced' },
+            ]}
+          />
+          <div className="mt-3">
+            <Group>
+              <Row
+                title="Show Commands"
+                subtitle="The command behind each step, explained, with Copy"
+                trailing={
+                  <span className="flex items-center gap-2">
+                    {savedIn('commands')}
+                    <Switch
+                      checked={config?.showCommands ?? config?.experienceMode === 'advanced'}
+                      onChange={(v) => void save('commands', { showCommands: v })}
+                      label="Show commands"
+                    />
+                  </span>
+                }
+              />
+            </Group>
+          </div>
+          <SectionFooter>
+            Simple keeps screens clean. Advanced is for people who like to see how things work: commands are shown everywhere. Either way, every
+            activity can show How It Was Done, and Activity → Commands lists every command behind recent changes.
+          </SectionFooter>
+        </section>
 
         {onOpenAssistant && (
           <section>

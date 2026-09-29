@@ -18,6 +18,34 @@ import { resolveBackupDir, saveMergeHistoryRecord, MergeHistoryRecord } from './
 import { getSystemSpecs } from './systemSpecs';
 import { getAiSettings, modelFor, ollamaStream, catalogModel, Freedom } from './aiService';
 import type { DeepContainerMetadata } from '../src/types';
+import { explain, Explain } from './commandLog';
+
+const sq = (s: string) => (/^[A-Za-z0-9_./:@%+=,-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
+
+/** The commands a person would type for a step (Do It Myself, and Show Commands in the review) */
+async function howToFor(a: PlanAction): Promise<PlanStep['howTo']> {
+  const one = (command: string, note?: string, equivalent = true) => ({ command, note, equivalent, explain: explain(command) });
+  if (a.type === 'restart' || a.type === 'start' || a.type === 'stop') {
+    const c = await findApp(a.app || '');
+    return [one(`docker ${a.type} ${sq(c?.name.replace(/^\//, '') || a.app || '')}`)];
+  }
+  if (a.type === 'remove_container') {
+    const c = await findApp(a.app || '');
+    return [one(`docker rm -f ${sq(c?.name.replace(/^\//, '') || a.app || '')}`, 'Removes the container only. Its folders and volumes stay.')];
+  }
+  if (a.type === 'compose_up') {
+    const st = await findStack(a.stack || '');
+    return [one(`cd ${sq(st?.dir || a.stack || '')} && docker compose up -d${a.services?.length ? ` ${a.services.join(' ')}` : ''}`, undefined, false)];
+  }
+  if (a.type === 'write_file' && a.path) {
+    return [
+      one(`cp ${sq(a.path)} ${sq(`${a.path}.backup`)}`, 'First keep a copy, so you can go back if something goes wrong.'),
+      one(`nano ${sq(a.path)}`, 'Make the changes shown below: delete the red lines, add the green ones, keep everything else the same. Save with Ctrl+O then Enter, and exit with Ctrl+X.'),
+    ];
+  }
+  if (a.type === 'run_command' && a.command) return [one(a.command, undefined, false)];
+  return [];
+}
 
 // ----------------------------------------------------------------------------
 // Shared helpers
@@ -302,6 +330,8 @@ export interface PlanStep {
   undoable: boolean;
   /** What it interrupts, e.g. "lidarr stops for a few seconds" */
   impact?: string;
+  /** How to do this step yourself, in your server's terminal */
+  howTo?: { command: string; note?: string; equivalent?: boolean; explain: Explain[] }[];
 }
 
 export interface Plan {
@@ -376,6 +406,7 @@ async function buildPlan(args: { title?: string; explanation?: string; actions?:
       return { problem: `Unknown action "${t}".` };
     }
   }
+  for (const st of steps) st.howTo = await howToFor(st.action);
   const plan: Plan = {
     id: `plan_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
     title: String(args.title || 'Proposed changes').slice(0, 120),
