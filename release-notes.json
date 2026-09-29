@@ -2,18 +2,40 @@
   "_about": "What's new in each version of Manifexus, newest first. Shown in Updates. Write for people, not developers: short, plain sentences about what they can now do. The newest entry's version is what gets built and tagged; older entries can give the \"commit\" they were released from.",
   "releases": [
     {
+      "version": "1.7",
+      "date": "2026-09-29",
+      "headline": "You decide when Manifexus may change your server, plus stack icons, a friendlier New Stack and Server Cleanup.",
+      "new": [
+        "Server Changes. Manifexus now starts out only looking at your server (it shows your apps and can start, stop or restart them). Turn on Server Changes in Settings to let it move apps, create and delete stacks, restore backups, clean up and fix problems: it gets your server ready step by step and only switches on when everything works. Turn it off again anytime.",
+        "A friendlier New Stack. Give it any name (like Media Server) and see the folder it becomes as you type. A taken name is caught right away, and once it's made you can add apps straight from there.",
+        "Stack icons. Every stack gets its own icon from the start, guessed from its name (Downloads gets a download arrow, Media a clapperboard) in its own colour. Tap it in New Stack or Stack Details to choose any of 1,600+ symbols, 12 colours, or an app's logo. Once a stack has apps, it shows their icons, unless you picked one.",
+        "Server Cleanup. Tap Clean Up in the header to find folders no app uses anymore (empty folders, and stacks with no apps) and delete the ones you pick. Stacks are backed up first and can be restored."
+      ],
+      "improved": [
+        "App cards: Move to Another Stack and Details now sit beside the app's name, and tapping a card opens its details.",
+        "A cleaner header. The version sits quietly beside Manifexus (tap it for Updates), and the light on the logo shows whether Docker is connected: point at it to see what it means and the dashboard's port, or tap it for Diagnostics.",
+        "Rename stacks and apps right on the dashboard: point at a name and tap the pencil beside it (or choose Rename in a stack's menu). Only the name you see changes, never the folder or container, and clearing it brings back the original. Names you give apps now stay after updates.",
+        "Stacks sit side by side and take only the room their apps need: a stack with one app is one column wide, so you see all your stacks at a glance instead of scrolling past empty space.",
+        "Search and New Stack are in the header, right under the toolbar, and a quiet Your Stacks line separates the header from your stacks.",
+        "Progress follows along: while a move, restore or fix runs, the screen scrolls to the step that's working (scroll up yourself and it waits for you).",
+        "Show All Steps opens every step with its commands right on top of the progress, and Back takes you straight back to it.",
+        "Each app's icon is its own: the one its page shows in the browser tab, saved in Manifexus the first time it's seen and used on every screen (cards, Details, Move, Ports, stacks). It works even when a firewall keeps Manifexus's container from reaching the app: the icon is read from the server itself.",
+        "App Details shows how long an app has really been on your server (On This Server Since), even after updates recreate it, and when it last started. The Move and Ports lists show each app's real icon.",
+        "Manifexus's own browser tab shows its icon and simply says Manifexus."
+      ],
+      "fixed": [
+        "Deleting a stack removes its folder from the server, trying harder when something inside won't go, and tells you if the folder couldn't be removed instead of saying it's all gone."
+      ]
+    },
+    {
       "version": "1.5",
       "date": "2026-09-29",
       "headline": "A fresh, calmer dashboard, and problems fixed in one tap: automatically, step by step yourself, or with a private AI.",
       "new": [
-        "A friendlier New Stack. Give it any name (like Media Server) and see the folder it becomes as you type. A taken name is caught right away, and once it's made you can add apps straight from there.",
-        "Stack icons. Every stack gets its own icon from the start, guessed from its name (Downloads gets a download arrow, Media a clapperboard) in its own colour. Tap it in New Stack or Stack Details to choose any of 1,600+ symbols, 12 colours, or an app's logo. Once a stack has apps, it shows their icons, unless you picked one.",
         "A fresh, calmer dashboard. Every stack is one clean panel with its apps inside, showing at a glance whether everything is running. Tap a stack's name to fold it away.",
         "Stack actions. Each stack's ⋯ menu can Start, Restart or Stop all its apps, edit its compose file, or open the new Stack Details screen.",
-        "Server Changes. Manifexus now starts out only looking at your server (it shows your apps and can start, stop or restart them). Turn on Server Changes in Settings to let it move apps, create and delete stacks, restore backups, clean up and fix problems: it gets your server ready step by step and only switches on when everything works. Turn it off again anytime.",
-        "Server Cleanup. Tap Clean Up in the header to find folders no app uses anymore (empty folders, and stacks with no apps) and delete the ones you pick. Stacks are backed up first and can be restored.",
         "Apps and their databases together. A database or cache that belongs to an app (like Nextcloud's MariaDB) no longer gets its own card. The app's icon gets a small database badge, the card warns \"Database stopped\" if it stops, and starting the app starts it too. Its details are inside the app's Details.",
-        "Cleaner app cards. Each card shows the app's icon, name and whether it's running, with Open, Restart and Stop right there. Move to Another Stack and Details sit beside the app's name, and tapping a card opens its details too.",
+        "Cleaner app cards. Each card shows the app's icon, name and whether it's running, with Open, Restart and Stop right there. Moving and groups are in the ⋯ menu, and tapping a card opens its details.",
         "Open goes straight to the app's web page. Manifexus checks each port and picks the one that is really a web page (never a peer or database port). If there are several, the arrow next to Open lists them and lets you pick the default.",
         "Real icons and names. Manifexus finds each app's icon (from the big icon sets, the app's own web page, or its GitHub project) and uses its real name, like Usenet Ultimate instead of usenet-ultimate.",
         "Project Page. App Details links to the app's project on GitHub and shows its latest release.",
@@ -23,16 +45,8 @@
         "Fix with AI. For everything else, a private AI built into Manifexus looks into the problem and proposes a fix. It runs on your own server: free, private, and nothing leaves your network."
       ],
       "improved": [
-        "A cleaner header. The version sits quietly beside Manifexus (tap it for Updates), and the light on the logo shows whether Docker is connected: point at it to see what it means and the dashboard's port, or tap it for Diagnostics.",
         "Running, Stopped, Stacks and Ports now live in the header. Tap Running or Stopped to show only those apps, or Ports to see which app uses each port.",
-        "Rename stacks and apps right on the dashboard: point at a name and tap the pencil beside it (or choose Rename in a stack's menu). Only the name you see changes, never the folder or container, and clearing it brings back the original. Names you give apps now stay after updates.",
-        "Stacks sit side by side and take only the room their apps need: a stack with one app is one column wide, so you see all your stacks at a glance instead of scrolling past empty space.",
-        "Search and New Stack are in the header, right under the toolbar, and a quiet Your Stacks line separates the header from your stacks.",
-        "Progress follows along: while a move, restore or fix runs, the screen scrolls to the step that's working (scroll up yourself and it waits for you).",
-        "Show All Steps opens every step with its commands right on top of the progress, and Back takes you straight back to it.",
-        "Each app's icon is its own: the one its page shows in the browser tab, saved in Manifexus the first time it's seen and used on every screen (cards, Details, Move, Ports, stacks). It works even when a firewall keeps Manifexus's container from reaching the app: the icon is read from the server itself.",
-        "App Details shows how long an app has really been on your server (On This Server Since), even after updates recreate it, and when it last started. The Move and Ports lists show each app's real icon.",
-        "Manifexus's own browser tab shows its icon and simply says Manifexus.",
+        "Stacks and Groups are now two big titles you tap between, with search beside them and one + button for New Stack and New Group.",
         "Fixing has its own screen. It shows the problem, works on it step by step, then shows the change with a before and after of every file: Make Changes, Do It Myself or Not Now. After the change it runs the checks again to confirm the problem is gone. One problem, start to finish.",
         "The AI knows what Manifexus can do: when a screen does the job (Move, Restore, Settings…) it offers a button that opens it, instead of terminal steps.",
         "The AI chooses the model for each problem by its real speed on your server: when the smarter model is about as fast, it does everything. Thinking is kept short on slow processors unless the problem needs it.",
@@ -54,7 +68,6 @@
         "Activity has new Fixes and Fix with AI filters."
       ],
       "fixed": [
-        "Deleting a stack removes its folder from the server, trying harder when something inside won't go, and tells you if the folder couldn't be removed instead of saying it's all gone.",
         "When a fix finishes, a Done button is always there to close it.",
         "No more garbled patches behind a screen while the AI starts up.",
         "Undo Fix no longer says it failed when it actually put the file back.",
@@ -64,7 +77,8 @@
         "The AI's look at recent Activity shows the real error messages instead of \"[object Object]\".",
         "Removing an AI model no longer shows \"Unexpected end of JSON input\" when it actually worked, and tapping Remove on a model that's already gone isn't an error.",
         "AI fixes no longer stay \"In progress\" in Activity forever. Each ends as done, failed (with the reason) or stopped."
-      ]
+      ],
+      "commit": "6878620"
     },
     {
       "version": "1.1",
