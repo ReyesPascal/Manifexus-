@@ -196,7 +196,7 @@ export const AppCard: React.FC<AppCardProps> = ({ container, inStack, stackName,
       }}
       aria-label={`${name}, ${st.label}. Show details`}
       className={`group/card relative flex flex-col gap-4 rounded-[18px] p-4 cursor-pointer text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0A84FF] ${
-        running ? 'bg-white/[0.045] hover:bg-white/[0.07]' : 'bg-white/[0.025] hover:bg-white/[0.05]'
+        running ? 'bg-white/[0.07] hover:bg-white/[0.10]' : 'bg-white/[0.045] hover:bg-white/[0.075]'
       }`}
       style={{ fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", Roboto, sans-serif' }}
     >

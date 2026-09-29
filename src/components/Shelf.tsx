@@ -10,10 +10,16 @@ import { MenuButton, MenuItem, ios } from './ui/ios';
 
 export const displayFont = '"Inter Tight", "SF Pro Display", -apple-system, system-ui, sans-serif';
 
-/** Same glass as the hero, a little quieter */
+/**
+ * Liquid glass: a light, translucent pane that blurs and tints what's behind it (the soft glow behind
+ * the dashboard), with a bright top edge like light catching glass
+ */
 export const panelStyle: React.CSSProperties = {
-  background: 'linear-gradient(180deg, rgba(36,36,40,0.78) 0%, rgba(24,24,27,0.82) 100%)',
-  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.06), 0 0 0 1px rgba(255,255,255,0.06), 0 24px 48px -28px rgba(0,0,0,0.9)',
+  background: 'linear-gradient(165deg, rgba(255,255,255,0.105) 0%, rgba(255,255,255,0.055) 45%, rgba(255,255,255,0.04) 100%)',
+  backdropFilter: 'blur(28px) saturate(170%)',
+  WebkitBackdropFilter: 'blur(28px) saturate(170%)',
+  boxShadow:
+    'inset 0 1px 0 rgba(255,255,255,0.22), inset 0 0 0 1px rgba(255,255,255,0.09), inset 0 -1px 0 rgba(255,255,255,0.04), 0 24px 48px -28px rgba(0,0,0,0.75)',
 };
 
 const Chevron: React.FC<{ open: boolean }> = ({ open }) => (
@@ -458,7 +464,7 @@ export const TileGrid: React.FC<{ span?: number; children: React.ReactNode }> = 
 
 /** A calm one-line message inside a panel (an empty stack or group) */
 export const ShelfNote: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <div className="rounded-[16px] px-4 py-5 text-center text-[14px] leading-[20px]" style={{ background: 'rgba(255,255,255,0.03)', color: ios.secondary }}>
+  <div className="rounded-[16px] px-4 py-5 text-center text-[14px] leading-[20px]" style={{ background: 'rgba(255,255,255,0.05)', color: ios.secondary }}>
     {children}
   </div>
 );

@@ -7,7 +7,8 @@
       "headline": "Stacks fill every gap: bigger stacks take a neat shape and smaller ones fit beside them.",
       "new": [],
       "improved": [
-        "A stack with more apps than fit across takes the shape with no empty spots (four apps become a 2 × 2 block, three apps on a narrow window a single column), and the smaller stacks fill the space beside it. Every app card stays the same size."
+        "A stack with more apps than fit across takes the shape with no empty spots (four apps become a 2 × 2 block, three apps on a narrow window a single column), and the smaller stacks fill the space beside it. Every app card stays the same size.",
+        "Stacks are made of liquid glass: lighter, see-through panels with a bright edge that pick up a soft glow behind the dashboard. App cards are a touch brighter to match."
       ],
       "fixed": []
     },

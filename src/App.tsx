@@ -683,7 +683,13 @@ export default function App() {
       : { onClose: close };
 
   return (
-    <div className="min-h-screen bg-[#09090b] text-slate-100 flex flex-col font-sans selection:bg-[#0A84FF]/40">
+    <div className="relative isolate min-h-screen bg-[#09090b] text-slate-100 flex flex-col font-sans selection:bg-[#0A84FF]/40">
+      {/* A soft glow behind everything, for the glass to catch */}
+      <div aria-hidden className="fixed inset-0 -z-10 pointer-events-none overflow-hidden">
+        <div className="absolute -top-[10%] -left-[10%] w-[60vw] h-[60vw] rounded-full blur-3xl" style={{ background: 'radial-gradient(circle, rgba(10,132,255,0.16), transparent 62%)' }} />
+        <div className="absolute top-[25%] -right-[15%] w-[55vw] h-[55vw] rounded-full blur-3xl" style={{ background: 'radial-gradient(circle, rgba(94,92,230,0.14), transparent 62%)' }} />
+        <div className="absolute -bottom-[20%] left-[15%] w-[60vw] h-[50vw] rounded-full blur-3xl" style={{ background: 'radial-gradient(circle, rgba(48,176,199,0.10), transparent 65%)' }} />
+      </div>
 
       {/* Main Dashboard Canvas */}
       <main data-dashboard className="flex-1 max-w-7xl w-full mx-auto px-4 lg:px-6 py-6">
