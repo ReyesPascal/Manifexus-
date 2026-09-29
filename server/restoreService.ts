@@ -707,8 +707,8 @@ export async function executeRestore(id: string, emit: Emit, opts: { filesOnly?:
     const rec: MergeHistoryRecord = {
       id: restoreId,
       timestamp: new Date().toISOString(),
-      targetStackName: snapshots[0].project,
-      targetDirectory: snapshots[0].dir,
+      targetStackName: snapshots[0]?.project || '',
+      targetDirectory: snapshots[0]?.dir || '',
       backupArchiveDir: snapDir,
       sourceStacks: [],
       affectedServices: [],

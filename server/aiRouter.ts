@@ -36,7 +36,10 @@ export const taskLabel = (t: Task) => TASK_LABEL[t];
 export const effortLabel = (e: Effort) => EFFORT_LABEL[e];
 
 const FIX_WORDS = /\b(fix|broken|repair|not working|doesn['’]?t work|won['’]?t (start|run|load|open)|fail(s|ed|ing)?|error|crash(es|ed|ing)?|keeps? (restarting|stopping|crashing)|down|issues?|problems?|wrong)\b/i;
-const CHANGE_WORDS = /^\s*(please\s+)?(restart|start|stop|change|set|update|move|edit|add|remove|delete|rename|open|expose|turn (on|off)|enable|disable|make)\b/i;
+const ACTION_VERBS = '(restart|start|stop|change|set|update|upgrade|move|edit|add|remove|delete|rename|open|expose|turn (on|off)|enable|disable|make|create|put|install|recreate|clean( up)?)';
+const CHANGE_WORDS = new RegExp(`^\\s*(please\\s+)?${ACTION_VERBS}\\b`, 'i');
+/** "Can you move kavita…", "I want to add…", "Help me restart…": requests, even with a question mark */
+const REQUEST_WORDS = new RegExp(`^\\s*(please\\s+)?((can|could|would|will) you( please)?|i (want|need|would like|'d like) to|help me|let's|lets)\\s+(\\w+\\s+)?${ACTION_VERBS}\\b`, 'i');
 const HARD_WORDS = /\b(why|keeps?|random(ly)?|sometimes|intermittent|slow(er)?|crash|loop|after (the |an )?update|still|again|didn['’]?t (work|help|fix)|not fixed|every time|can['’]?t figure|weird|strange)\b/i;
 const DEEP_ASK = /\b(think (hard|carefully|deeply)|thorough(ly)?|in depth|deep dive|take your time|investigate)\b/i;
 const QUICK_ASK = /\b(quick(ly)?|briefly|short answer|tl;?dr|in a word|one line)\b/i;
@@ -89,7 +92,7 @@ export async function planRoute(
   let task: Task = 'question';
   if (/^I made these changes myself/i.test(q)) task = 'check';
   else if (fromDiagnostics || /\b(fix|repair|solve|sort (it|this) out)\b/i.test(q) || (!asking && FIX_WORDS.test(q))) task = 'fix';
-  else if (CHANGE_WORDS.test(q)) task = 'change';
+  else if (CHANGE_WORDS.test(q) || REQUEST_WORDS.test(q)) task = 'change';
 
   // How hard it looks
   const files = mentionedFiles(all);
