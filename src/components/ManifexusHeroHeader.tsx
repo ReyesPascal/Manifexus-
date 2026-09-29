@@ -23,7 +23,8 @@ interface ManifexusHeroHeaderProps {
   /** Ask Manifexus (the built-in AI) */
   onOpenAssistant?: () => void;
   onOpenSettings: () => void;
-  onRefresh: () => void;
+  /** No longer shown: the dashboard refreshes itself */
+  onRefresh?: () => void;
   isRefreshing?: boolean;
   /** Search apps, beside New Stack under the toolbar */
   search?: string;
@@ -61,39 +62,6 @@ const Tip: React.FC<{ text: string; side?: 'top' | 'bottom'; align?: 'center' | 
     {text}
   </span>
 );
-
-/** A status capsule: quiet label, bright value. */
-const Chip: React.FC<{
-  label: string;
-  tip: string;
-  onClick?: () => void;
-  tone?: 'default' | 'blue';
-  className?: string;
-  children: React.ReactNode;
-}> = ({ label, tip, onClick, tone = 'default', className = '', children }) => {
-  const cls =
-    `${className} group relative inline-flex items-center gap-2 h-8 pl-3 pr-3.5 rounded-full text-[12.5px] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0A84FF]`;
-  const style: React.CSSProperties =
-    tone === 'blue'
-      ? { background: 'rgba(10,132,255,0.16)', boxShadow: 'inset 0 0 0 0.5px rgba(10,132,255,0.55)' }
-      : { background: 'rgba(118,118,128,0.14)', boxShadow: 'inset 0 0 0 0.5px rgba(255,255,255,0.08)' };
-  const body = (
-    <>
-      <span style={{ color: ios.secondary }}>{label}</span>
-      {children}
-      <Tip text={tip} />
-    </>
-  );
-  return onClick ? (
-    <button type="button" onClick={onClick} aria-label={`${label}. ${tip}`} className={`${cls} hover:brightness-125 cursor-pointer`} style={style}>
-      {body}
-    </button>
-  ) : (
-    <span tabIndex={0} aria-label={`${label}. ${tip}`} className={`${cls} cursor-default`} style={style}>
-      {body}
-    </span>
-  );
-};
 
 /** A button inside the glass toolbar. The label hides on narrower screens; the tooltip always explains it. */
 const ToolButton: React.FC<{
@@ -170,31 +138,81 @@ export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
         <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-5">
           {/* Identity */}
           <div className="flex items-start sm:items-center gap-4 sm:gap-5 min-w-0">
-            <div
-              className="relative flex-shrink-0 w-12 h-12 sm:w-16 sm:h-16 [&>svg]:w-full [&>svg]:h-full"
+            <button
+              type="button"
+              onClick={container && onInspectContainer ? () => onInspectContainer(container) : undefined}
+              aria-label={`${socketOn ? 'Connected to Docker' : 'Not connected to Docker'}. Dashboard port ${port}. Open Diagnostics`}
+              className="group relative flex-shrink-0 w-12 h-12 sm:w-16 sm:h-16 rounded-[14px] [&_svg.mfx]:w-full [&_svg.mfx]:h-full focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0A84FF]"
               style={{ filter: 'drop-shadow(0 10px 22px rgba(47,140,255,0.35))' }}
             >
-              <ManifexusAppIcon size={64} />
+              <span className="block w-full h-full [&>svg]:w-full [&>svg]:h-full">
+                <ManifexusAppIcon size={64} />
+              </span>
+              {/* The light: Manifexus's connection to Docker */}
               <span
-                className="absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full"
+                className={`absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full ${socketOn ? '' : 'motion-safe:animate-pulse'}`}
                 style={{ background: socketOn ? ios.green : ios.red, boxShadow: '0 0 0 3px #1f1f23' }}
                 aria-hidden="true"
               />
-            </div>
-            <div className="min-w-0">
-              <h1
-                className="text-[30px] sm:text-[38px] leading-none font-bold"
-                style={{
-                  fontFamily: '"Inter Tight", "SF Pro Display", -apple-system, system-ui, sans-serif',
-                  letterSpacing: '-0.035em',
-                  backgroundImage: 'linear-gradient(180deg, #ffffff 0%, #e4e4ea 45%, #9a9aa6 100%)',
-                  WebkitBackgroundClip: 'text',
-                  backgroundClip: 'text',
-                  color: 'transparent',
-                }}
+              {/* What the light means, and where the dashboard lives */}
+              <span
+                role="tooltip"
+                className="max-sm:hidden pointer-events-none absolute z-30 left-0 top-full mt-3 w-[250px] rounded-[12px] px-3.5 py-3 text-left opacity-0 scale-95 origin-top-left transition-all duration-150 delay-150 group-hover:opacity-100 group-hover:scale-100 group-focus-visible:opacity-100 group-focus-visible:scale-100"
+                style={{ background: 'rgba(44,44,46,0.97)', boxShadow: '0 0 0 0.5px rgba(255,255,255,0.12), 0 12px 32px rgba(0,0,0,0.55)', fontFamily: ios.font }}
               >
-                Manifexus
-              </h1>
+                <span className="flex items-center gap-2 text-[13.5px] font-semibold" style={{ color: socketOn ? ios.green : '#FF6961' }}>
+                  <span className="w-2 h-2 rounded-full" style={{ background: 'currentColor', boxShadow: '0 0 8px currentColor' }} />
+                  {socketOn ? 'Connected to Docker' : 'Not connected to Docker'}
+                </span>
+                <span className="block mt-1 text-[12.5px] leading-[17px]" style={{ color: 'rgba(235,235,245,0.75)' }}>
+                  {socketOn ? 'Manifexus can see and manage your apps.' : 'Manifexus can’t see or manage your apps. Check that the Docker socket is mounted.'}
+                </span>
+                <span className="mt-2.5 pt-2.5 flex items-center justify-between text-[12.5px]" style={{ borderTop: '0.5px solid rgba(255,255,255,0.1)', color: 'rgba(235,235,245,0.6)' }}>
+                  Dashboard port
+                  <span className="font-semibold tabular-nums text-white">{port}</span>
+                </span>
+                <span className="block mt-2 text-[11.5px]" style={{ color: 'rgba(235,235,245,0.45)' }}>
+                  Click for Diagnostics
+                </span>
+              </span>
+            </button>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2.5 flex-wrap">
+                <h1
+                  className="text-[30px] sm:text-[38px] leading-none font-bold"
+                  style={{
+                    fontFamily: '"Inter Tight", "SF Pro Display", -apple-system, system-ui, sans-serif',
+                    letterSpacing: '-0.035em',
+                    backgroundImage: 'linear-gradient(180deg, #ffffff 0%, #e4e4ea 45%, #9a9aa6 100%)',
+                    WebkitBackgroundClip: 'text',
+                    backgroundClip: 'text',
+                    color: 'transparent',
+                  }}
+                >
+                  Manifexus
+                </h1>
+                {build && (
+                  <button
+                    type="button"
+                    onClick={onOpenUpdates}
+                    title={updateAvailable ? 'A new version is ready. Click to open Updates.' : 'The version you’re running. Click to open Updates.'}
+                    className="self-center mt-1 inline-flex items-center gap-1.5 h-6 px-2.5 rounded-full text-[12px] font-semibold tabular-nums transition-colors hover:brightness-125 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0A84FF]"
+                    style={
+                      updateAvailable
+                        ? { background: 'rgba(10,132,255,0.18)', color: '#6CB6FF', boxShadow: 'inset 0 0 0 0.5px rgba(10,132,255,0.55)' }
+                        : { background: 'rgba(118,118,128,0.16)', color: 'rgba(235,235,245,0.6)' }
+                    }
+                  >
+                    {isVersion ? build : `Build ${build}`}
+                    {updateAvailable && (
+                      <>
+                        <span className="w-1.5 h-1.5 rounded-full" style={{ background: ios.blue }} />
+                        Update
+                      </>
+                    )}
+                  </button>
+                )}
+              </div>
               <p className="mt-2 text-[13px] sm:text-[14px] leading-[1.45] max-w-[34rem]" style={{ color: ios.secondary }}>
                 All your Docker apps in one place. See what&rsquo;s running, organize apps into stacks, and move them
                 safely, with a backup before every change.
@@ -323,60 +341,6 @@ export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
           </div>
         </div>
 
-        {/* Manifexus itself; what your apps are doing is on the Your Stacks line below */}
-        <div
-          className="mt-5 pt-4 flex flex-wrap items-center gap-3"
-          style={{ borderTop: '0.5px solid rgba(255,255,255,0.09)' }}
-        >
-          <div className="flex-1 flex flex-wrap items-center gap-2">
-            <Chip
-              label={isVersion ? 'Version' : 'Build'}
-              tone={updateAvailable ? 'blue' : 'default'}
-              tip={
-                updateAvailable
-                  ? 'The version you are running. A newer one is available. Click to open Updates.'
-                  : 'The version of Manifexus you are running. Click to open Updates.'
-              }
-              onClick={onOpenUpdates}
-            >
-              <span className="font-mono text-[12px] font-semibold text-white">{build || '…'}</span>
-              {updateAvailable && <span className="w-1.5 h-1.5 rounded-full" style={{ background: ios.blue }} />}
-            </Chip>
-
-            <Chip
-              label="Docker Socket"
-              tip={
-                socketOn
-                  ? 'Connected. Manifexus can see and manage your containers.'
-                  : 'Not connected. Manifexus cannot see or manage containers.'
-              }
-            >
-              <span className="inline-flex items-center gap-1.5 font-semibold" style={{ color: socketOn ? ios.green : ios.red }}>
-                <span
-                  className="w-[7px] h-[7px] rounded-full"
-                  style={{ background: 'currentColor', boxShadow: '0 0 8px currentColor' }}
-                />
-                {socketOn ? 'On' : 'Off'}
-              </span>
-            </Chip>
-
-            <Chip className="max-sm:hidden" label="Dashboard Port" tip="The port this dashboard is served on. Open it as http://your-server:port.">
-              <span className="text-[14px] font-semibold text-white tabular-nums tracking-wide">{port}</span>
-            </Chip>
-          </div>
-
-          <button
-            type="button"
-            onClick={onRefresh}
-            aria-label="Refresh"
-            className="group relative -mr-3 inline-flex items-center gap-1.5 h-8 px-3 rounded-full text-[13px] font-medium transition-colors hover:bg-white/[0.08] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0A84FF]"
-            style={{ color: ios.blue }}
-          >
-            <RefreshCw className={`${iconCls} ${isRefreshing ? 'animate-spin' : ''}`} />
-            {isRefreshing ? 'Refreshing…' : 'Refresh'}
-            <Tip text="Reload apps, stacks and status from Docker now." align="end" />
-          </button>
-        </div>
       </div>
     </section>
   );

@@ -22,6 +22,7 @@
         "Fix with AI. For everything else, a private AI built into Manifexus looks into the problem and proposes a fix. It runs on your own server: free, private, and nothing leaves your network."
       ],
       "improved": [
+        "A cleaner header. The version sits quietly beside Manifexus (tap it for Updates), and the light on the logo shows whether Docker is connected: point at it to see what it means and the dashboard's port, or tap it for Diagnostics.",
         "Running, Stopped, Stacks and Ports now live in the header. Tap Running or Stopped to show only those apps, or Ports to see which app uses each port.",
         "Rename stacks and apps right on the dashboard: point at a name and tap the pencil beside it (or choose Rename in a stack's menu). Only the name you see changes, never the folder or container, and clearing it brings back the original. Names you give apps now stay after updates.",
         "Stacks sit side by side and take only the room their apps need: a stack with one app is one column wide, so you see all your stacks at a glance instead of scrolling past empty space.",
