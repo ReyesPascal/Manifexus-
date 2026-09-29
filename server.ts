@@ -929,7 +929,7 @@ async function startServer() {
       if (!res.writableEnded) res.write(`data: ${JSON.stringify(data)}\n\n`);
     };
     try {
-      await aiChat(Array.isArray(req.body?.messages) ? req.body.messages : [], { focus: req.body?.focus, role: req.body?.role }, send, ac.signal);
+      await aiChat(Array.isArray(req.body?.messages) ? req.body.messages : [], { focus: req.body?.focus, role: req.body?.role, mode: req.body?.mode === 'fix' ? 'fix' : undefined }, send, ac.signal);
     } catch (e) {
       if (!ac.signal.aborted) send({ type: 'error', message: (e as Error).message });
     } finally {

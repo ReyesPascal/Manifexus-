@@ -51,6 +51,8 @@ function mentionedFiles(text: string): string[] {
   for (const m of text.matchAll(/(?:^|[\s"'`(:])(\/[A-Za-z0-9._\-/]+)/g)) {
     const p = m[1].replace(/[.,:;)]+$/, '');
     const base = p.split('/').pop() || '';
+    // Sockets, devices and the kernel's files aren't documents to read (e.g. /var/run/docker.sock)
+    if (/\.(sock|pid|lock)$/.test(base) || /^\/(dev|proc|sys)\//.test(p)) continue;
     if (/\.[A-Za-z0-9]{1,8}$/.test(base) || /^\.env/.test(base)) out.add(p);
   }
   return Array.from(out).slice(0, 3);
@@ -128,8 +130,14 @@ export async function planRoute(
     // A basic quick model shouldn't plan changes if the fixer can run
     const wantHeavy = effort === 'deep' || ((task === 'fix' || task === 'change') && (mLight?.smarts || 2) < 2);
     // The fixer isn't worth it when it's far slower than the quick model for this machine
-    const tooSlow = slowerBy(mHeavy, mLight, specs) > 4 && effort !== 'deep';
-    if (wantHeavy && heavyFits.ok && !tooSlow) {
+    const ratio = slowerBy(mHeavy, mLight, specs);
+    const tooSlow = ratio > 4 && effort !== 'deep';
+    // Measured (or predicted) about as fast here: the smarter one takes everything, no switching mid-question
+    const asFast = ratio <= 1.3;
+    if (asFast && heavyFits.ok) {
+      model = heavy;
+      why = `${nameOf(heavy)} is about as fast as ${nameOf(light)} on your server and smarter, so it takes this.`;
+    } else if (wantHeavy && heavyFits.ok && !tooSlow) {
       model = heavy;
       why = effort === 'deep' ? `This looks tricky, so ${nameOf(heavy)} takes it and thinks it through.` : `${nameOf(heavy)} plans changes more reliably than ${nameOf(light)}.`;
     } else if (wantHeavy && !heavyFits.ok) {
@@ -177,10 +185,14 @@ function slowerBy(a: CatalogModel | undefined, b: CatalogModel | undefined, spec
  * quick → never; standard → only to recover from a mistake (or when a graphics card makes it cheap);
  * deep → whenever it has something to think about.
  */
-export function thinkFor(model: string, effort: Effort, state: { hasEvidence: boolean; retry: boolean }, gpu: boolean): Think {
+export function thinkFor(model: string, effort: Effort, state: { hasEvidence: boolean; retry: boolean }, gpu: boolean, writesPerSec = 10): Think {
   const m = catalogModel(model);
   const levels = m?.thinking === 'levels';
+  // Every thought is written out word by word: on a slow writer (a few words a second) a few hundred
+  // words of thinking is minutes, so models that always think a little keep it at the minimum
+  const slow = !gpu && writesPerSec < 4;
   const on = effort === 'deep' ? state.hasEvidence || state.retry : effort === 'standard' ? state.retry || (gpu && state.hasEvidence) : false;
+  if (levels && slow && effort !== 'deep') return state.retry ? 'medium' : 'low';
   if (!levels) return on;
   if (effort === 'deep') return state.retry || gpu ? 'high' : 'medium';
   if (on) return 'medium';

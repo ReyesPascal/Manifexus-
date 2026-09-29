@@ -5,7 +5,7 @@ import { CommandBlock, Explain } from './Commands';
 import { usePrefs } from '../prefs';
 import { Markdown } from './Markdown';
 import { setupWizard, ModelChoice } from './AiSetupWizard';
-import { ACCESS, Freedom, Fit, CatalogEntry, DownloadStep, Download, ACTIVE_DL, Specs, Status, fmtGB, fmtSecs, fmtDur, FREEDOM, fmtLeft, Bar, Spark, AssistantIcon } from './aiShared';
+import { ACCESS, Answer, AiAction, Plan, PlanStep, WorkStep, Phase, newAnswer, applyAiEvent, settleAnswer, streamAiChat, Freedom, Fit, CatalogEntry, DownloadStep, Download, ACTIVE_DL, Specs, Status, fmtGB, fmtSecs, fmtDur, FREEDOM, fmtLeft, Bar, Spark, AssistantIcon } from './aiShared';
 
 export { AssistantIcon };
 
@@ -20,71 +20,16 @@ export { AssistantIcon };
 // Types (mirror server/aiService.ts and server/aiAgent.ts)
 // ----------------------------------------------------------------------------
 
-interface PlanStep {
-  action: { type: string; app?: string; stack?: string; path?: string; command?: string; reason: string };
-  label: string;
-  diff?: string[];
-  newFile?: boolean;
-  undoable: boolean;
-  impact?: string;
-  howTo?: { command: string; note?: string; equivalent?: boolean; explain: Explain[] }[];
-}
+type Item = { kind: 'user'; text: string } | ({ kind: 'assistant' } & Answer);
 
-interface Plan {
-  id: string;
-  title: string;
-  explanation: string;
-  steps: PlanStep[];
-  routine: boolean;
-}
-
-/** One line of the work log: what was decided, looked up, read, thought or checked */
-interface WorkStep {
-  id: string;
-  label: string;
-  kind: 'plan' | 'lookup' | 'model' | 'check' | 'note';
-  status: 'running' | 'done' | 'failed';
-  detail?: string;
-  ms?: number;
-}
-
-/** What it's doing this second, with a progress bar and time left when that can be worked out */
-interface Phase {
-  label: string;
-  detail?: string;
-  progress?: number;
-  eta?: number;
-  at: number;
-}
-
-type Item =
-  | { kind: 'user'; text: string }
-  | {
-      kind: 'assistant';
-      /** The answer, shown all at once when it's complete */
-      text: string;
-      steps: WorkStep[];
-      route?: { task: string; effort: string; name: string; why: string };
-      plan?: Plan;
-      planState?: 'new' | 'done' | 'self' | 'failed';
-      streaming?: boolean;
-      error?: string;
-      phase?: Phase;
-      started?: number;
-      /** "1 min 32 s · Qwen 3.5 Small", when it's done */
-      summary?: string;
-      /** Work log expanded after it's done */
-      showWork?: boolean;
-    };
-
-type View = 'chat' | 'wizard' | 'setup' | 'models' | 'settings' | 'review' | 'progress' | 'guide';
+type View = 'chat' | 'history' | 'wizard' | 'setup' | 'models' | 'settings' | 'review' | 'progress' | 'guide';
 
 // ----------------------------------------------------------------------------
 // Helpers
 // ----------------------------------------------------------------------------
 
 /** A file change as a before/after, showing only the changed parts with a little context */
-const DiffView: React.FC<{ lines: string[] }> = ({ lines }) => {
+export const DiffView: React.FC<{ lines: string[] }> = ({ lines }) => {
   const keep = new Set<number>();
   lines.forEach((l, i) => {
     if (l.startsWith('+ ') || l.startsWith('- ')) for (let k = Math.max(0, i - 3); k <= Math.min(lines.length - 1, i + 3); k++) keep.add(k);
@@ -125,7 +70,7 @@ const stepIcon = (t: string) =>
   : t === 'stop' ? 'M7 7h10v10H7z'
   : 'M20 12a8 8 0 1 1-2.3-5.7M20 4v4.5h-4.5';
 
-const StepTile: React.FC<{ type: string }> = ({ type }) => (
+export const StepTile: React.FC<{ type: string }> = ({ type }) => (
   <IconTile color={type === 'run_command' ? '#FF9F0A' : type === 'remove_container' ? ios.red : type === 'write_file' ? '#0A84FF' : '#30D158'}>
     <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d={stepIcon(type)} />
@@ -187,7 +132,7 @@ const StepMark: React.FC<{ step: WorkStep }> = ({ step }) => {
  * How it worked on the answer: each decision, lookup, AI round (with what it read and wrote) and
  * check, with how long each took. Open while it works; folds into one line when it's done.
  */
-const WorkLog: React.FC<{ item: Extract<Item, { kind: 'assistant' }>; onToggle: () => void }> = ({ item, onToggle }) => {
+export const WorkLog: React.FC<{ item: Answer; onToggle: () => void }> = ({ item, onToggle }) => {
   const open = item.streaming || item.showWork;
   const steps = item.steps;
   if (!steps.length && !item.streaming) return null;
@@ -243,7 +188,7 @@ const WorkLog: React.FC<{ item: Extract<Item, { kind: 'assistant' }>; onToggle: 
 };
 
 /** What kind of request it decided this is, and which model took it */
-const RouteChips: React.FC<{ route: NonNullable<Extract<Item, { kind: 'assistant' }>['route']> }> = ({ route }) => (
+export const RouteChips: React.FC<{ route: NonNullable<Answer['route']> }> = ({ route }) => (
   <div className="flex flex-wrap items-center gap-1.5" title={route.why}>
     <span className="text-[11.5px] font-semibold px-2 py-[2px] rounded-full" style={{ background: 'rgba(191,90,242,0.18)', color: '#D69CFA' }}>
       {route.task}
@@ -297,6 +242,42 @@ const InstallSteps: React.FC<{ steps: DownloadStep[] }> = ({ steps }) => (
 // Sheet
 // ----------------------------------------------------------------------------
 
+// ----------------------------------------------------------------------------
+// Previous chats: kept in this browser, newest first
+// ----------------------------------------------------------------------------
+
+interface SavedChat {
+  id: string;
+  at: string;
+  title: string;
+  items: Item[];
+}
+const CHATS_KEY = 'manifexus.ai.chats';
+const newChatId = () => `chat_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+function loadChats(): SavedChat[] {
+  try {
+    const v = JSON.parse(localStorage.getItem(CHATS_KEY) || '[]');
+    return Array.isArray(v) ? v : [];
+  } catch {
+    return [];
+  }
+}
+function saveChat(c: SavedChat) {
+  try {
+    const all = [c, ...loadChats().filter((x) => x.id !== c.id)].slice(0, 30);
+    localStorage.setItem(CHATS_KEY, JSON.stringify(all));
+  } catch {
+    // storage full or unavailable: the chat just isn't kept
+  }
+}
+function forgetChats() {
+  try {
+    localStorage.removeItem(CHATS_KEY);
+  } catch {
+    // unavailable
+  }
+}
+
 /** The setup's starting choice: what was chosen before, else this server's recommendation (one model when one is enough) */
 const freshChoice = (s: Status) =>
   s.settings.quickModel
@@ -314,7 +295,17 @@ export const AssistantSheet: React.FC<{
   focus?: string;
   backLabel?: string;
   onBack?: () => void;
-}> = ({ open, onClose, initialView, initialQuestion, focus, backLabel, onBack }) => {
+  /** Opened to set up the AI for a fix: when setup is done, go back to the fix instead of chatting */
+  afterSetup?: () => void;
+  /** What setup is for, shown on its first page (e.g. the problem Fix with AI will work on) */
+  setupFor?: string;
+  /** Continue a conversation that started elsewhere (e.g. a fix that needs an answer) */
+  seedChat?: { question: string; answer: string };
+  /** A button the AI offered: open that Manifexus screen */
+  onAction?: (a: AiAction) => void;
+}> = ({ open, onClose, initialView, initialQuestion, focus, backLabel, onBack, afterSetup, setupFor, seedChat, onAction }) => {
+  const [chatId, setChatId] = useState(newChatId);
+  const [chats, setChats] = useState<SavedChat[]>([]);
   const [status, setStatus] = useState<Status | null>(null);
   const [loadError, setLoadError] = useState<string>();
   const [bundleError, setBundleError] = useState<string>();
@@ -364,6 +355,11 @@ export const AssistantSheet: React.FC<{
     asked.current = undefined;
     setReviewPlan(null);
     run.reset();
+    // Every open is a new chat (earlier ones are in Previous Chats)
+    setChatId(newChatId());
+    setChats(loadChats());
+    setItems(seedChat ? [{ kind: 'user', text: seedChat.question }, { kind: 'assistant', text: seedChat.answer, steps: [] }] : []);
+    setDraft('');
     load().then((s) => {
       // Ready for a typed question: load the everyday model and let it read its instructions now
       if (s?.ready && !initialQuestion) fetch('/api/ai/warm', { method: 'POST' }).catch(() => undefined);
@@ -417,7 +413,7 @@ export const AssistantSheet: React.FC<{
       const history = items
         .filter((i) => (i.kind === 'user' || (i.kind === 'assistant' && i.text)))
         .map((i) => ({ role: i.kind === 'user' ? 'user' : 'assistant', content: i.kind === 'user' ? i.text : i.text }));
-      setItems((list) => [...list, { kind: 'user', text: q }, { kind: 'assistant', text: '', steps: [], streaming: true, started: Date.now(), phase: { label: 'Sending your question', at: Date.now() } }]);
+      setItems((list) => [...list, { kind: 'user', text: q }, { kind: 'assistant', ...newAnswer() }]);
       setDraft('');
       setBusy(true);
       scrollDown();
@@ -431,54 +427,15 @@ export const AssistantSheet: React.FC<{
           return copy;
         });
       try {
-        const res = await fetch('/api/ai/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ messages: [...history, { role: 'user', content: q }], focus }),
-          signal: ac.signal,
-        });
-        if (!res.body) throw new Error('No answer.');
-        const reader = res.body.getReader();
-        const dec = new TextDecoder();
-        let buf = '';
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buf += dec.decode(value, { stream: true });
-          let i: number;
-          while ((i = buf.indexOf('\n\n')) >= 0) {
-            const chunk = buf.slice(0, i).replace(/^data: /, '');
-            buf = buf.slice(i + 2);
-            if (!chunk.trim()) continue;
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const ev: any = JSON.parse(chunk);
-            if (ev.type === 'model') {
-              setModelName(ev.name);
-              patch((a) => (a.route ? { ...a, route: { ...a.route, name: ev.name } } : a));
-            } else if (ev.type === 'route') patch((a) => ({ ...a, route: { task: ev.task, effort: ev.effort, name: ev.name, why: ev.why } }));
-            else if (ev.type === 'step')
-              patch((a) => {
-                const steps = a.steps.slice();
-                const at = steps.findIndex((x) => x.id === ev.id);
-                const st: WorkStep = { id: ev.id, label: ev.label, kind: ev.kind, status: ev.status, detail: ev.detail, ms: ev.ms };
-                if (at >= 0) steps[at] = st;
-                else steps.push(st);
-                return { ...a, steps };
-              });
-            else if (ev.type === 'phase') {
-              patch((a) => ({ ...a, phase: { label: ev.label, detail: ev.detail, progress: ev.progress, eta: ev.eta, at: Date.now() } }));
-              continue; // every second: no need to scroll for it
-            } else if (ev.type === 'answer') patch((a) => ({ ...a, text: ev.text }));
-            else if (ev.type === 'done') patch((a) => ({ ...a, summary: ev.summary }));
-            else if (ev.type === 'plan') patch((a) => ({ ...a, plan: ev.plan, planState: 'new' }));
-            else if (ev.type === 'error') patch((a) => ({ ...a, error: ev.message }));
-            scrollDown();
-          }
-        }
+        await streamAiChat({ messages: [...history, { role: 'user', content: q }], focus }, (ev) => {
+          if (ev.type === 'model') setModelName(ev.name);
+          patch((a) => ({ ...a, ...applyAiEvent(a, ev) }));
+          if (ev.type !== 'phase') scrollDown();
+        }, ac.signal);
       } catch (e) {
         if (!ac.signal.aborted) patch((a) => ({ ...a, error: (e as Error).message || 'Something went wrong.' }));
       } finally {
-        patch((a) => ({ ...a, streaming: false, steps: a.steps.map((x) => (x.status === 'running' ? { ...x, status: 'failed' as const } : x)), text: a.text || (ac.signal.aborted ? 'Stopped.' : a.text) }));
+        patch((a) => ({ ...a, ...settleAnswer(a, ac.signal.aborted) }));
         setBusy(false);
         abort.current = null;
         requestAnimationFrame(() => inputRef.current?.focus({ preventScroll: true }));
@@ -486,6 +443,14 @@ export const AssistantSheet: React.FC<{
     },
     [busy, items, focus]
   );
+
+  // Keep the chat once an answer is complete
+  useEffect(() => {
+    if (!open || busy || !items.some((i) => i.kind === 'user')) return;
+    const first = items.find((i) => i.kind === 'user') as { text: string } | undefined;
+    saveChat({ id: chatId, at: new Date().toISOString(), title: (first?.text || 'Chat').slice(0, 90), items });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [busy, items.length, chatId]);
 
   // Ask the question we were opened with, once the AI is ready
   useEffect(() => {
@@ -680,10 +645,11 @@ export const AssistantSheet: React.FC<{
       setting,
       finish: () => {
         setting({ setupAt: true });
+        if (afterSetup) return afterSetup();
         setStack(['chat']);
         fetch('/api/ai/warm', { method: 'POST' }).catch(() => undefined);
       },
-      firstQuestion: initialQuestion,
+      firstQuestion: initialQuestion || setupFor,
     });
     title = w.title;
     subtitle = w.subtitle;
@@ -1207,6 +1173,51 @@ export const AssistantSheet: React.FC<{
         )}
       </div>
     );
+  } else if (view === 'history') {
+    title = 'Previous Chats';
+    const when = (iso: string) => {
+      const d = new Date(iso);
+      const today = new Date().toDateString() === d.toDateString();
+      return today ? d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+    };
+    body = chats.length ? (
+      <section>
+        <Group>
+          {chats.map((c) => (
+            <Row
+              key={c.id}
+              onClick={() => {
+                // Proposals from an earlier chat can't be run any more: the server only keeps them for a while
+                setItems(c.items.map((it) => (it.kind === 'assistant' && it.plan && it.planState === 'new' ? { ...it, planState: 'expired' as const, streaming: false } : it.kind === 'assistant' ? { ...it, streaming: false } : it)));
+                setChatId(c.id);
+                setStack(['chat']);
+                scrollDown();
+              }}
+              title={<span className="truncate block">{c.title}</span>}
+              subtitle={`${when(c.at)} · ${c.items.filter((i) => i.kind === 'user').length} ${c.items.filter((i) => i.kind === 'user').length === 1 ? 'question' : 'questions'}`}
+              chevron
+            />
+          ))}
+        </Group>
+        <SectionFooter>
+          Kept in this browser (the last 30).{' '}
+          <LinkButton
+            tone="red"
+            onClick={() => {
+              forgetChats();
+              setChats([]);
+              pop();
+            }}
+          >
+            Clear All
+          </LinkButton>
+        </SectionFooter>
+      </section>
+    ) : (
+      <p className="text-[15px] text-center py-20" style={{ color: ios.secondary }}>
+        No previous chats.
+      </p>
+    );
   } else if (view === 'progress' && reviewPlan) {
     title = run.state.status === 'done' ? 'Done' : 'Making Changes';
     body = (
@@ -1281,7 +1292,15 @@ export const AssistantSheet: React.FC<{
                       </div>
                       <div className="flex items-center justify-between px-4 py-2.5" style={{ borderTop: `0.5px solid ${ios.separator}` }}>
                         <span className="text-[13px]" style={{ color: it.planState === 'done' || it.planState === 'self' ? ios.green : ios.tertiary }}>
-                          {it.planState === 'done' ? 'Started' : it.planState === 'self' ? 'You did this yourself' : status.settings.freedom === 'look' ? 'Look-only mode: nothing will change' : 'Nothing changes until you review it'}
+                          {it.planState === 'done'
+                            ? 'Started'
+                            : it.planState === 'self'
+                              ? 'You did this yourself'
+                              : it.planState === 'expired'
+                                ? 'From an earlier chat: ask again for a fresh proposal'
+                                : status.settings.freedom === 'look'
+                                  ? 'Look-only mode: nothing will change'
+                                  : 'Nothing changes until you review it'}
                         </span>
                         {it.planState === 'new' && status.settings.freedom !== 'look' && (
                           <Button
@@ -1297,6 +1316,15 @@ export const AssistantSheet: React.FC<{
                       </div>
                     </div>
                   )}
+                  {!it.streaming && it.actions && it.actions.length > 0 && (
+                    <div className="flex flex-wrap gap-2">
+                      {it.actions.map((x, k) => (
+                        <Button key={k} tone="gray" onClick={() => onAction?.(x)} className="!h-[34px] !px-4 !text-[14px]">
+                          {x.label}
+                        </Button>
+                      ))}
+                    </div>
+                  )}
                   {it.error && (
                     <p className="text-[14px]" style={{ color: ios.orange }}>
                       {it.error}
@@ -1308,7 +1336,17 @@ export const AssistantSheet: React.FC<{
           )}
         </div>
       );
-    footer = (
+    // Your turn only: while it works there's nothing to type into, just a way to stop it
+    footer = busy ? (
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-[13px] truncate" style={{ color: ios.secondary }}>
+          Working on your question…
+        </span>
+        <Button tone="gray" onClick={() => abort.current?.abort()} className="!h-[34px] !px-4 !text-[14px] flex-shrink-0">
+          Stop
+        </Button>
+      </div>
+    ) : (
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -1333,11 +1371,7 @@ export const AssistantSheet: React.FC<{
           className="flex-1 min-h-[38px] max-h-[140px] resize-none rounded-[19px] px-4 py-[8px] text-[15px] leading-[21px] text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0A84FF] placeholder:text-[rgba(235,235,245,0.4)] disabled:opacity-50"
           style={{ background: ios.fill, fieldSizing: 'content' } as React.CSSProperties}
         />
-        {busy ? (
-          <button type="button" onClick={() => abort.current?.abort()} aria-label="Stop" className="w-[38px] h-[38px] rounded-full flex items-center justify-center flex-shrink-0" style={{ background: 'rgba(118,118,128,0.4)' }}>
-            <span className="w-3 h-3 rounded-[3px] bg-white" />
-          </button>
-        ) : (
+        {(
           <button type="submit" disabled={!draft.trim() || !status.ready} aria-label="Send" className="w-[38px] h-[38px] rounded-full flex items-center justify-center flex-shrink-0 disabled:opacity-35" style={{ background: ios.blue }}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M12 19V5M5.5 11.5 12 5l6.5 6.5" />
@@ -1351,7 +1385,7 @@ export const AssistantSheet: React.FC<{
   // ---------------------------------------------------------------- navigation
   const gear = <GearButton label="AI settings" onClick={() => (status?.ready ? push('settings') : setStack(['wizard']))} />;
   const prev = stack[stack.length - 2];
-  const backText = prev === 'chat' ? 'Ask' : prev === 'setup' ? 'Built-in AI' : prev === 'settings' ? 'Settings' : prev === 'review' ? 'Review' : 'Back';
+  const backText = prev === 'chat' ? 'Ask' : prev === 'history' ? 'Chats' : prev === 'setup' ? 'Built-in AI' : prev === 'settings' ? 'Settings' : prev === 'review' ? 'Review' : 'Back';
   const leftAction =
     view === 'wizard' && setupPage > 0 ? (
       <BackButton label="Back" onClick={() => setSetupPage((n) => Math.max(0, n - 1))} />
@@ -1362,8 +1396,15 @@ export const AssistantSheet: React.FC<{
     view === 'chat' && stack.length === 1 ? (
       <span className="flex items-center gap-4">
         {backLabel && onBack && gear}
+        {!busy && chats.length > 0 && (
+          <button type="button" onClick={() => { setChats(loadChats()); push('history'); }} aria-label="Previous chats" title="Previous chats" className="p-1 -m-1 rounded hover:opacity-80" style={{ color: ios.blue }}>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5M12 7v5l3 2" />
+            </svg>
+          </button>
+        )}
         {items.length > 0 && !busy && (
-          <button type="button" onClick={() => setItems([])} aria-label="New conversation" title="New conversation" className="p-1 -m-1 rounded hover:opacity-80" style={{ color: ios.blue }}>
+          <button type="button" onClick={() => { setItems([]); setChatId(newChatId()); setChats(loadChats()); }} aria-label="New conversation" title="New conversation" className="p-1 -m-1 rounded hover:opacity-80" style={{ color: ios.blue }}>
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
             </svg>

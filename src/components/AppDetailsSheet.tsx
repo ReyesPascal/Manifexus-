@@ -19,6 +19,7 @@ import { DeepContainerMetadata, UserGroup, AppOverride, ContainerMount } from '.
 import { ManifexusAppIcon } from './SoftwareUpdateSheet';
 import { copyText } from './ActivitySheet';
 import { AssistantIcon } from './AssistantSheet';
+import type { FixRequest } from './FixSheet';
 
 /**
  * One screen for any app, and Diagnostics for Manifexus itself: health checks in plain words, live
@@ -237,10 +238,11 @@ export const AppDetailsSheet: React.FC<{
   onOpenSettings?: () => void;
   onOpenActivity?: (filter?: string) => void;
   /** Ask the built-in AI to fix these issues */
-  onAskAI?: (question: string, focus: string) => void;
+  /** Fix with AI: the issues, and where to check them again afterwards */
+  onFixWithAI?: (r: FixRequest) => void;
   /** Another screen is open on top of this one */
   covered?: boolean;
-}> = ({ container, system, groups, hostAddress, onClose, onSaveOverride, onAction, onOpenUpdates, onOpenRestore, onOpenSettings, onOpenActivity, onAskAI, covered }) => {
+}> = ({ container, system, groups, hostAddress, onClose, onSaveOverride, onAction, onOpenUpdates, onOpenRestore, onOpenSettings, onOpenActivity, onFixWithAI, covered }) => {
   const open = Boolean(container);
   const [stack, setStack] = useState<View[]>(['overview']);
   const view = stack[stack.length - 1];
@@ -499,13 +501,16 @@ export const AppDetailsSheet: React.FC<{
             <SectionHeader>To Fix</SectionHeader>
             <Group>
               {issues.map(checkRow)}
-              {onAskAI && (
+              {onFixWithAI && container && (
                 <Row
                   onClick={() =>
-                    onAskAI(
-                      issues.length === 1 ? `Please fix this: ${issues[0].title}` : `Please fix these ${issues.length} issues`,
-                      `${system ? 'Manifexus Diagnostics' : `The app ${name}`} shows these issues to fix:\n${issues.map((c) => `- ${c.title}: ${c.detail}`).join('\n')}`
-                    )
+                    onFixWithAI({
+                      question: issues.length === 1 ? `Please fix this: ${issues[0].title}` : `Please fix these ${issues.length} issues`,
+                      focus: `${system ? 'Manifexus Diagnostics' : `The app ${name}`} shows these issues to fix:\n${issues.map((c) => `- ${c.title}: ${c.detail}`).join('\n')}`,
+                      issues: issues.map((c) => ({ title: c.title, detail: c.detail, level: c.level })),
+                      recheckUrl: system ? '/api/diagnostics' : `/api/containers/${encodeURIComponent(container.id)}/diagnostics`,
+                      subject: system ? 'Manifexus' : name,
+                    })
                   }
                   leading={<AssistantIcon size={26} />}
                   title={<span style={{ color: ios.blue }}>{issues.length === 1 ? 'Fix with AI' : 'Fix These with AI'}</span>}

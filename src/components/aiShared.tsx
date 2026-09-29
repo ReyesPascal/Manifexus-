@@ -1,5 +1,6 @@
 import React from 'react';
 import { ios } from './ui/ios';
+import type { Explain } from './Commands';
 
 /**
  * What the Ask Manifexus screens share: the AI status from the server (mirrors server/aiService.ts),
@@ -136,3 +137,136 @@ export const AssistantIcon: React.FC<{ size?: number }> = ({ size = 29 }) => (
   </span>
 );
 
+
+export interface PlanStep {
+  action: { type: string; app?: string; stack?: string; path?: string; command?: string; reason: string };
+  label: string;
+  diff?: string[];
+  newFile?: boolean;
+  undoable: boolean;
+  impact?: string;
+  howTo?: { command: string; note?: string; equivalent?: boolean; explain: Explain[] }[];
+}
+
+export interface Plan {
+  id: string;
+  title: string;
+  explanation: string;
+  steps: PlanStep[];
+  routine: boolean;
+}
+
+/** One line of the work log: what was decided, looked up, read, thought or checked */
+export interface WorkStep {
+  id: string;
+  label: string;
+  kind: 'plan' | 'lookup' | 'model' | 'check' | 'note';
+  status: 'running' | 'done' | 'failed';
+  detail?: string;
+  ms?: number;
+}
+
+/** What it's doing this second, with a progress bar and time left when that can be worked out */
+export interface Phase {
+  label: string;
+  detail?: string;
+  progress?: number;
+  eta?: number;
+  at: number;
+}
+
+/** A button the AI offered under its answer, opening one of Manifexus's own screens */
+export interface AiAction {
+  screen: 'move_app' | 'new_stack' | 'restore' | 'diagnostics' | 'activity' | 'updates' | 'settings' | 'app_details';
+  label: string;
+  app?: string;
+  appId?: string;
+}
+
+/** One answer from the AI as it comes in: the work log, the live step, the answer, a plan, buttons */
+export interface Answer {
+  /** The answer, shown all at once when it's complete */
+  text: string;
+  steps: WorkStep[];
+  route?: { task: string; effort: string; name: string; why: string };
+  plan?: Plan;
+  /** expired: from a saved chat; the server no longer holds the plan */
+  planState?: 'new' | 'done' | 'self' | 'failed' | 'expired';
+  streaming?: boolean;
+  error?: string;
+  phase?: Phase;
+  started?: number;
+  /** "1 min 32 s · Qwen 3.5 Small", when it's done */
+  summary?: string;
+  /** Work log expanded after it's done */
+  showWork?: boolean;
+  actions?: AiAction[];
+  /** It ended by asking the person something */
+  asks?: boolean;
+  /** The model currently working on it */
+  modelName?: string;
+}
+
+export const newAnswer = (): Answer => ({ text: '', steps: [], streaming: true, started: Date.now(), phase: { label: 'Sending your question', at: Date.now() } });
+
+/** Fold one event from /api/ai/chat into the answer */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function applyAiEvent(a: Answer, ev: any): Answer {
+  switch (ev.type) {
+    case 'model':
+      return { ...a, modelName: ev.name, route: a.route ? { ...a.route, name: ev.name } : a.route };
+    case 'route':
+      return { ...a, route: { task: ev.task, effort: ev.effort, name: ev.name, why: ev.why } };
+    case 'step': {
+      const steps = a.steps.slice();
+      const at = steps.findIndex((x) => x.id === ev.id);
+      const st: WorkStep = { id: ev.id, label: ev.label, kind: ev.kind, status: ev.status, detail: ev.detail, ms: ev.ms };
+      if (at >= 0) steps[at] = st;
+      else steps.push(st);
+      return { ...a, steps };
+    }
+    case 'phase':
+      return { ...a, phase: { label: ev.label, detail: ev.detail, progress: ev.progress, eta: ev.eta, at: Date.now() } };
+    case 'answer':
+      return { ...a, text: ev.text };
+    case 'actions':
+      return { ...a, actions: ev.actions };
+    case 'done':
+      return { ...a, summary: ev.summary, asks: Boolean(ev.asks) };
+    case 'plan':
+      return { ...a, plan: ev.plan, planState: 'new' };
+    case 'error':
+      return { ...a, error: ev.message };
+    default:
+      return a;
+  }
+}
+
+/** When it's over (finished, stopped or failed): nothing left spinning */
+export const settleAnswer = (a: Answer, stopped: boolean): Answer => ({
+  ...a,
+  streaming: false,
+  steps: a.steps.map((x) => (x.status === 'running' ? { ...x, status: 'failed' as const } : x)),
+  text: a.text || (stopped ? 'Stopped.' : a.text),
+});
+
+/** Ask the AI and receive its events as they happen */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function streamAiChat(body: Record<string, unknown>, onEvent: (ev: any) => void, signal: AbortSignal): Promise<void> {
+  const res = await fetch('/api/ai/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
+  if (!res.body) throw new Error('No answer.');
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let i: number;
+    while ((i = buf.indexOf('\n\n')) >= 0) {
+      const chunk = buf.slice(0, i).replace(/^data: /, '');
+      buf = buf.slice(i + 2);
+      if (chunk.trim()) onEvent(JSON.parse(chunk));
+    }
+  }
+}

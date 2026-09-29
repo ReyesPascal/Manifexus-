@@ -30,6 +30,8 @@ import { ActivitySheet } from './components/ActivitySheet';
 import { AppCard } from './components/AppCard';
 import { AppDetailsSheet } from './components/AppDetailsSheet';
 import { AssistantSheet } from './components/AssistantSheet';
+import { FixSheet, FixRequest } from './components/FixSheet';
+import type { AiAction } from './components/aiShared';
 import { setPrefsFromConfig } from './prefs';
 import { GroupManagerModal } from './components/GroupManagerModal';
 import { SettingsModal } from './components/SettingsModal';
@@ -84,6 +86,41 @@ export default function App() {
     setIsMergeModalOpen(true);
   };
 
+  // A button the AI offered under an answer: close the AI screens and open that one, ready to go
+  const handleAiAction = (a: AiAction) => {
+    const app = a.appId ? containers.find((c) => c.id === a.appId) : undefined;
+    setFixRequest(null);
+    setAssistant({ open: false });
+    setOverDetails(null);
+    if (a.screen !== 'diagnostics' && a.screen !== 'app_details') setInspectContainer(null);
+    switch (a.screen) {
+      case 'move_app':
+        if (app) openMoveForApp(app);
+        break;
+      case 'new_stack':
+        setIsCreateStackModalOpen(true);
+        break;
+      case 'restore':
+        setIsRestoreOpen(true);
+        break;
+      case 'diagnostics':
+        if (manifexusHeroContainer) setInspectContainer(manifexusHeroContainer);
+        break;
+      case 'activity':
+        setActivity({ open: true });
+        break;
+      case 'updates':
+        setIsUpdatesOpen(true);
+        break;
+      case 'settings':
+        setIsSettingsOpen(true);
+        break;
+      case 'app_details':
+        if (app) setInspectContainer(app);
+        break;
+    }
+  };
+
   // Directive 2 & 3: Web Terminal state
   const [isTerminalModalOpen, setIsTerminalModalOpen] = useState(false);
   const [terminalTargetFile, setTerminalTargetFile] = useState<string>('');
@@ -115,7 +152,19 @@ export default function App() {
   // A screen opened from Diagnostics / App Details sits on top of it, with a way back
   const [overDetails, setOverDetails] = useState<null | 'activity' | 'restore' | 'updates' | 'settings' | 'assistant'>(null);
   // Ask Manifexus (the built-in AI); `from` is the screen it was opened from, for its Back button
-  const [assistant, setAssistant] = useState<{ open: boolean; view?: 'setup' | 'settings'; question?: string; focus?: string; from?: 'settings' }>({ open: false });
+  const [assistant, setAssistant] = useState<{
+    open: boolean;
+    view?: 'setup' | 'settings';
+    question?: string;
+    focus?: string;
+    from?: 'settings';
+    /** Setting up the AI on the way to this fix: go back to it when setup is done */
+    fixAfter?: FixRequest;
+    /** Carry on a conversation started in Fix with AI */
+    seed?: { question: string; answer: string };
+  }>({ open: false });
+  // Fix with AI: its own screen for one problem, start to finish
+  const [fixRequest, setFixRequest] = useState<FixRequest | null>(null);
   // The badge compares server timestamps only (the newest failure vs. the newest one already seen),
   // so a browser clock that's off can't hide it or make it stick
   const [unseenFailure, setUnseenFailure] = useState(false);
@@ -959,9 +1008,9 @@ export default function App() {
           setOverDetails('settings');
           setIsSettingsOpen(true);
         }}
-        onAskAI={(question, focus) => {
+        onFixWithAI={(r) => {
           setOverDetails('assistant');
-          setAssistant({ open: true, question, focus });
+          setFixRequest(r);
         }}
         onOpenActivity={(filter) => {
           setOverDetails('activity');
@@ -991,11 +1040,40 @@ export default function App() {
         onOpenAssistant={() => setAssistant({ open: true, view: 'settings', from: 'settings' })}
       />
 
+      <FixSheet
+        request={fixRequest}
+        onClose={() => {
+          setFixRequest(null);
+          setOverDetails(null);
+        }}
+        onNeedsSetup={(r) => {
+          setFixRequest(null);
+          setAssistant({ open: true, question: r.question, focus: r.focus, fixAfter: r });
+        }}
+        onAction={handleAiAction}
+        onContinueInAsk={(question, answer, focus) => {
+          setFixRequest(null);
+          setAssistant({ open: true, focus, seed: { question, answer } });
+        }}
+      />
+
       <AssistantSheet
         open={assistant.open}
         initialView={assistant.view}
-        initialQuestion={assistant.question}
+        initialQuestion={assistant.fixAfter || assistant.seed ? undefined : assistant.question}
         focus={assistant.focus}
+        seedChat={assistant.seed}
+        setupFor={assistant.fixAfter?.question}
+        onAction={handleAiAction}
+        afterSetup={
+          assistant.fixAfter
+            ? () => {
+                const r = assistant.fixAfter!;
+                setAssistant({ open: false });
+                setFixRequest(r);
+              }
+            : undefined
+        }
         {...(assistant.from === 'settings'
           ? { backLabel: 'Settings', onBack: () => setAssistant({ open: false }), onClose: () => { setAssistant({ open: false }); setIsSettingsOpen(false); } }
           : backProps('assistant', () => setAssistant({ open: false })))}

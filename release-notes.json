@@ -18,6 +18,12 @@
         "Activity → Commands. A learning log of every command behind your recent changes, and How It Was Done on every activity."
       ],
       "improved": [
+        "Fix with AI has its own screen. It shows the problem, works on it step by step, then shows the change with a before and after of every file: Make Changes, Do It Myself or Not Now. After the change it runs the checks again to confirm the problem is gone. No chat box, no settings: one problem, start to finish.",
+        "Ask Manifexus starts a new chat every time you open it. Earlier chats are under Previous Chats (the clock), kept in your browser.",
+        "The message box only appears when it's your turn. While the AI works you just see what it's doing and a Stop button.",
+        "The AI knows what Manifexus can do. Ask \"can you move kavita to a new stack?\" and it offers a button that opens Move for kavita, instead of terminal steps. It asks you a short question when it needs a detail, and treats \"can you…\" as a request, not a question.",
+        "The AI chooses the model per question by its real speed on your server: when the smarter model is about as fast, it does everything. Thinking is kept short on slow processors unless the problem needs it.",
+        "If the AI can't come up with a change that checks out, it stops and explains instead of trying again and again, and it no longer repeats the same lookup.",
         "Smarter AI recommendations for every server. Setup measures your server's memory speed in a second or two, combines it with its processor, graphics card and free memory, and recommends the smartest model that answers in a reasonable time there, with the reason and the expected answer time. Usually that's one model: a second is only suggested when it would be clearly faster.",
         "Estimates that learn your server. Every answer measures how fast the model really reads and writes on your server, and corrects the estimates for the other models too, so recommendations and progress times get more accurate the more you use it.",
         "Progress while the AI works now counts the whole step (loading, reading and writing), not just reading, so the time left is much closer to reality.",

@@ -178,6 +178,16 @@ const READ_TOOLS: ToolDef[] = [
   tool('docker_overview', 'Networks, volumes, host ports in use.'),
 ];
 
+/** A button under the answer that opens one of Manifexus's own screens, ready to go */
+const SCREENS = ['move_app', 'new_stack', 'restore', 'diagnostics', 'activity', 'updates', 'settings', 'app_details'] as const;
+type Screen = (typeof SCREENS)[number];
+const OPEN_SCREEN = tool(
+  'open_screen',
+  'Show a button that opens a Manifexus screen (move_app, new_stack, restore, diagnostics, activity, updates, settings, app_details).',
+  { screen: { type: 'string', enum: SCREENS }, app: str('App (move_app, app_details)'), label: str('Button text, e.g. "Move kavita…"') },
+  ['screen', 'label']
+);
+
 /** Which lookups each kind of access allows (apps, stacks and Diagnostics are always allowed) */
 const ACCESS_TOOLS: Record<keyof AiAccess, string[]> = {
   logs: ['app_logs'],
@@ -525,7 +535,8 @@ function systemPrompt(freedom: Freedom, access?: AiAccess): string {
     freedom === 'look'
       ? 'You can only look and advise, not change anything.'
       : 'To change something, call propose_changes (the person reviews it; it is backed up and can be undone). For a small file change use edit_file. Smallest safe fix; never delete volumes or data folders.',
-    'If unsure, say so and what you would check next.',
+    'Manifexus itself can: move apps into another or a new stack (Move, backed up first), create stacks (New Stack), undo any change (Restore), check health (Diagnostics), show what happened (Activity) and update itself (Updates). For those, offer the screen with open_screen instead of terminal steps.',
+    'If a request is missing something you need (which app, a name, a value), ask one short question instead of guessing. If unsure what is wrong, say so and what you would check next.',
     off.length ? `The person has not allowed you to look at ${off.join(', ')}. If you need them, say what you would look at and that they can allow it in AI Settings.` : '',
     'Answer for someone who may never have used a terminal: first one sentence with the answer or cause, key point in **bold**; then only what helps (a short paragraph or numbered steps). Names, paths and values in `code`, commands and file contents in code blocks. Plain words, no filler, under 150 words unless asked.',
   ]
@@ -542,7 +553,7 @@ const FIX_SKIPS = ['restore_points', 'server_specs'];
 const toolsFor = (s: AiSettings, canChange = true) => {
   // Fixes rarely need the backup list or the server's specs; questions keep every lookup
   const read = READ_TOOLS.filter((t) => allowedTool(t.function.name, s.access) && !(canChange && FIX_SKIPS.includes(t.function.name)));
-  return s.freedom === 'look' || !canChange ? read : [...read, changeTool(s.freedom, s.access)];
+  return [...read, OPEN_SCREEN, ...(s.freedom === 'look' || !canChange ? [] : [changeTool(s.freedom, s.access)])];
 };
 
 const ACCESS_WORDS: Record<keyof AiAccess, string> = { logs: 'app logs', files: 'files on the server', history: 'Activity and Restore', server: 'details of the server itself' };
@@ -823,7 +834,7 @@ const argsOf = (call: Msg): Record<string, unknown> => {
  * and each round gets the model and amount of thinking it needs; a stronger model takes over if
  * the first gets stuck.
  */
-export async function chat(messages: ChatMessage[], opts: { focus?: string; role?: 'quick' | 'fixer' }, emit: Emit, signal?: AbortSignal): Promise<void> {
+export async function chat(messages: ChatMessage[], opts: { focus?: string; role?: 'quick' | 'fixer'; mode?: 'fix' }, emit: Emit, signal?: AbortSignal): Promise<void> {
   const started = Date.now();
   const settings = getAiSettings();
   const freedom = settings.freedom;
@@ -856,6 +867,8 @@ export async function chat(messages: ChatMessage[], opts: { focus?: string; role
   ui.phase({ label: 'Working out what you need' });
   const list = await apps().catch(() => [] as DeepContainerMetadata[]);
   const route = await planRoute({ question, focus: opts.focus, history, apps: list.map((c) => ({ cleanName: c.cleanName, service: c.compose?.service })) }, settings, specs, opts.role);
+  // From Fix with AI: always a fix, whatever the wording
+  if (route && opts.mode === 'fix') route.task = 'fix';
   if (!route) {
     sorting.fail('No AI model is installed');
     emit({ type: 'error', message: 'No AI model is installed yet. Set one up first.' });
@@ -897,16 +910,20 @@ export async function chat(messages: ChatMessage[], opts: { focus?: string; role
   let convo: Msg[] = [...base, ...evidence];
 
   let hasEvidence = looked.length > 0;
+  const seen = new Set(looked.map((x) => `${x.l.name}:${JSON.stringify(x.l.args)}`));
   let retry = false;
   let rejections = 0;
   let lastProblem: string | undefined;
   let handedOver = false;
   let recovered = false;
 
+  const offered: { screen: Screen; label: string; app?: string; appId?: string }[] = [];
   const finish = (answer: string) => {
     ui.answer(answer);
+    if (offered.length) emit({ type: 'actions', actions: offered });
     const secs = (Date.now() - started) / 1000;
-    emit({ type: 'done', seconds: Math.round(secs), summary: `${secsText(secs)} · ${Array.from(used).map(nameOf).join(' + ')}` });
+    // Ending on a question: it needs something from the person before it can go on
+    emit({ type: 'done', seconds: Math.round(secs), summary: `${secsText(secs)} · ${Array.from(used).map(nameOf).join(' + ')}`, asks: /\?\s*$/.test(answer.trim()) && !offered.length });
   };
 
   /** Hand the problem to the stronger model, with what's been found but without the dead ends */
@@ -928,7 +945,7 @@ export async function chat(messages: ChatMessage[], opts: { focus?: string; role
   };
 
   for (let round = 0; round < 8; round++) {
-    const think: Think = settings.auto ? thinkFor(model, route.effort, { hasEvidence, retry }, specs.gpuUsable) : (catalogModel(model)?.think ?? false);
+    const think: Think = settings.auto ? thinkFor(model, route.effort, { hasEvidence, retry }, specs.gpuUsable, speedOf(model, specs).gen) : (catalogModel(model)?.think ?? false);
     const purpose = round === 0 ? (hasEvidence ? 'Reading your question and what was looked up' : 'Reading your question') : retry ? 'Correcting the proposed change' : 'Going over what it found';
     let r: RoundResult;
     try {
@@ -962,9 +979,27 @@ export async function chat(messages: ChatMessage[], opts: { focus?: string; role
 
     retry = false;
     let planned: Plan | undefined;
+    const offeredTools = new Set(tools.map((t) => t.function.name));
+    const key = (n: string, a: Record<string, unknown>) => `${n}:${JSON.stringify(a)}`;
     for (const call of calls) {
       const name = call?.function?.name as string;
       const args = argsOf(call);
+      if (name === 'open_screen') {
+        const screen = String(args.screen || '') as Screen;
+        const app = args.app ? await findApp(String(args.app)) : undefined;
+        if (!SCREENS.includes(screen) || ((screen === 'move_app' || screen === 'app_details') && !app)) {
+          convo.push({ role: 'tool', tool_name: name, content: `No such screen or app. Screens: ${SCREENS.join(', ')}; use list_apps for app names.` });
+          continue;
+        }
+        offered.push({ screen, label: String(args.label || 'Open').slice(0, 60), app: app?.cleanName, appId: app?.id });
+        convo.push({ role: 'tool', tool_name: name, content: 'The button is shown under your answer.' });
+        continue;
+      }
+      // Something it wasn't given for this request (e.g. changes for a plain question): steer it back, quietly
+      if (!offeredTools.has(name)) {
+        convo.push({ role: 'tool', tool_name: name, content: `${name} isn’t available for this request. Answer in words; if something should change, say what and offer open_screen, or suggest they ask for it to be done.` });
+        continue;
+      }
       if (name === 'propose_changes') {
         ui.phase({ label: 'Checking the proposed change', detail: 'Is the file still valid, does the text to change exist, will anything break' });
         const st = ui.step('Checking the proposed change', 'check');
@@ -987,6 +1022,12 @@ export async function chat(messages: ChatMessage[], opts: { focus?: string; role
         convo.push({ role: 'tool', tool_name: name, content: 'Not allowed: the person has turned this off in AI Settings.' });
         continue;
       }
+      // The same lookup again: it already has the answer, so say so instead of fetching it again
+      if (seen.has(key(name, args))) {
+        convo.push({ role: 'tool', tool_name: name, content: 'You already looked this up; the result is above. Use it, look at something else, or answer.' });
+        continue;
+      }
+      seen.add(key(name, args));
       ui.phase({ label: doingLabel(name, args) });
       const st = ui.step(doingLabel(name, args).replace(/…$/, ''), 'lookup');
       try {
@@ -1008,11 +1049,16 @@ export async function chat(messages: ChatMessage[], opts: { focus?: string; role
       emit({ type: 'plan', plan: planned });
       return finish(planned.explanation || lead || 'Here’s what I’d change. Nothing happens until you review it.');
     }
+    // It offered a button and already said what to say: that's the answer, no extra round
+    if (offered.length && r.text.trim() && calls.every((c: Msg) => c?.function?.name === 'open_screen')) return finish(r.text.trim());
     if (r.text.trim()) ui.note(r.text.trim());
     hasEvidence = true;
     if (rejections >= 2 && (await handOver('The proposed change didn’t check out twice.'))) {
       rejections = 0;
       retry = false;
+    } else if (rejections >= 3) {
+      // Nobody left to hand over to and it keeps getting it wrong: stop, and say what it was trying to do
+      return finish(`I couldn’t put together a change that checks out, so I’ve stopped rather than guess.\n\nThe last attempt failed because: ${lastProblem || 'it didn’t match the files'}\n\n${r.text.trim() ? `What I was going for: ${r.text.trim()}` : ''}`.trim());
     } else if (round === 4 && route.effort !== 'quick') await handOver('This is taking a while.');
   }
   finish('I looked at a lot and still need more to be sure. Tell me more about what you’re seeing, or try again.');

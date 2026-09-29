@@ -62,7 +62,9 @@ Manifexus is a lightweight, self-hosted central command hub that automatically t
 * **Sees everything Manifexus sees:** apps, stacks, compose and `.env` files, logs, Activity, Restore, Diagnostics and the server itself. Passwords and tokens are always hidden from it.
 * **Fixes with your OK:** proposed changes show a before/after of every file. Making them takes a backup first, uses the same progress tracker as moves, is saved in Restore (Undo This Fix) and recorded in Activity.
 * **Choose what it may do:** Look Only, Ask Before Changes (default), Fix Routine Things (starts and restarts on its own), or Expert (may also propose commands, each shown first).
-* **Fix with AI** from Diagnostics' To Fix list sends it the issue with everything it needs.
+* **Fix with AI** from Diagnostics' To Fix list opens its own screen: the problem, the AI working on it step by step, the proposed change as a before/after (Make Changes, Do It Myself or Not Now), then the checks run again to confirm it's fixed.
+* **Knows Manifexus:** for things Manifexus has a screen for (Move, New Stack, Restore, Diagnostics…) it offers a button that opens that screen ready to go, and asks a short question when it needs a detail.
+* **Chats:** every time Ask opens it's a new chat; earlier ones are under Previous Chats (kept in your browser). The message box only shows when it's your turn.
 * **Chooses automatically:** each request is sorted (question, fix or change) and gets the model and amount of thinking it needs. The obvious things are looked up before the AI starts, small file changes are one-line edits, and the fixer takes over if the quick helper gets stuck (only when there's memory free). Turn it off in AI Settings to always use the fixer.
 * **See it work:** every lookup, AI round (what it read and wrote, with a progress bar and time left from its measured speed on your server) and check is listed with how long it took. Answers appear all at once, formatted, when they're complete.
 
