@@ -1035,7 +1035,7 @@ export const AssistantSheet: React.FC<{
                     {s.howTo!.map((h, k) => (
                       <div key={k} className="space-y-1">
                         {h.note && <p className="text-[12.5px] leading-[18px]" style={{ color: ios.secondary }}>{h.note}</p>}
-                        <CommandBlock command={h.command} explain={h.explain} collapsible />
+                        <CommandBlock command={h.command} explain={h.explain} />
                       </div>
                     ))}
                   </div>

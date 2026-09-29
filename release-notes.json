@@ -14,9 +14,9 @@
         "Downloads that don't give up. If the connection drops, the AI download picks up where it stopped, even after a restart. Every download is checked before it's used.",
         "You're always in control. Every change is shown to you first, with a before and after of every file. It's backed up, and you can undo it from Restore.",
         "Choose how much the AI may do on its own: Look Only, Ask Before Changes, Fix Routine Things or Expert.",
-        "Learn how it's done. Turn on Show Commands (or choose Advanced in Settings) to see the command behind every step, with a plain explanation of each part.",
+        "Learn how it's done. Turn on Show Commands (or choose Advanced in Settings) to see the command behind every step, with what each part means right beside it, no extra taps.",
         "Do It Myself. Every fix can be done by hand instead, one step at a time, with the terminal a tap away.",
-        "Activity → Commands. A learning log of every command behind your recent changes, and How It Was Done on every activity."
+        "Activity → Commands. A learning log of every command behind your recent changes, and Show Commands on every activity puts them right under each step."
       ],
       "improved": [
         "Fixing has its own screen. It shows the problem, works on it step by step, then shows the change with a before and after of every file: Make Changes, Do It Myself or Not Now. After the change it runs the checks again to confirm the problem is gone. One problem, start to finish.",
@@ -41,6 +41,8 @@
         "Activity has new Fixes and Fix with AI filters."
       ],
       "fixed": [
+        "When a fix finishes, a Done button is always there to close it.",
+        "No more garbled patches behind a screen while the AI starts up.",
         "Undo Fix no longer says it failed when it actually put the file back.",
         "Fix with AI no longer fails with \"fetch failed\" after 5 minutes when it takes a long time on a slow processor. If the AI engine really stops responding, you get a plain explanation.",
         "Fix with AI waits until setup is completely finished (every model downloaded, tested and loaded into memory), so the right model can be chosen and nothing else slows it down.",

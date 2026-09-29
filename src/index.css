@@ -93,3 +93,10 @@
   from { opacity: 0; }
   to { opacity: 1; }
 }
+
+/* A sheet is open: freeze the dashboard behind it (it's dimmed anyway). Constant pulsing there made
+   Chromium repaint all the time, which showed up as garbled patches under memory pressure. */
+.sheet-open [data-dashboard] *:not([role='dialog'], [role='dialog'] *) {
+  animation-play-state: paused !important;
+  transition: none !important;
+}

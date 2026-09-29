@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Group, IconTile, LinkButton, Row, SectionFooter, SectionHeader, Sheet, ios } from './ui/ios';
 import { ProgressView, useRun } from './ProgressTracker';
-import { CommandBlock } from './Commands';
+import { CommandBlock, Explain } from './Commands';
 import { Markdown } from './Markdown';
 import { AiAction, Answer, AssistantIcon, Plan, Status, applyAiEvent, newAnswer, settleAnswer, streamAiChat } from './aiShared';
 import { DiffView, RouteChips, StepTile, WorkLog } from './AssistantSheet';
@@ -18,7 +18,7 @@ import { DiffView, RouteChips, StepTile, WorkLog } from './AssistantSheet';
 /** How to fix one problem without AI (mirrors server/fixCatalog.ts) */
 export interface FixInfo {
   auto?: string;
-  manual: { text: string; command?: string; screen?: 'settings' | 'restore' | 'updates' | 'activity' | 'logs' }[];
+  manual: { text: string; command?: string; explain?: Explain[]; screen?: 'settings' | 'restore' | 'updates' | 'activity' | 'logs' }[];
 }
 
 export interface FixRequest {
@@ -386,7 +386,7 @@ export const FixSheet: React.FC<{
                       </span>
                       <div className="min-w-0 flex-1 space-y-2">
                         <p className="text-[14.5px] leading-[20px] text-white/90">{st.text}</p>
-                        {st.command && <CommandBlock command={st.command} />}
+                        {st.command && <CommandBlock command={st.command} explain={st.explain} />}
                         {btn && st.screen && (
                           <Button tone="gray" onClick={() => onAction({ ...btn, label: SCREEN_LABEL[st.screen!] } as AiAction)} className="!h-[32px] !px-3.5 !text-[13.5px]">
                             {SCREEN_LABEL[st.screen]}
@@ -427,7 +427,7 @@ export const FixSheet: React.FC<{
           run={run.state}
           runningTitle={plan?.title || 'Making the changes'}
           doneMessage="Done. It’s saved in Restore, so you can undo it anytime."
-          onDone={() => {
+          onFinished={() => {
             setStage('done');
             void verify();
           }}
@@ -445,7 +445,7 @@ export const FixSheet: React.FC<{
             </Button>
           )}
           <Button onClick={close} className="flex-1 sm:flex-none sm:min-w-[150px]">
-            Close
+            Done
           </Button>
         </div>
       );

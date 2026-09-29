@@ -8,6 +8,7 @@ import yaml from 'yaml';
 import type { Check } from './diagnosticsService';
 import type { PlanAction } from './aiAgent';
 import { readHostFile } from './hostFsService';
+import { explain, Explain } from './commandLog';
 
 export interface ManualStep {
   text: string;
@@ -15,6 +16,8 @@ export interface ManualStep {
   command?: string;
   /** A Manifexus screen that does this step */
   screen?: 'settings' | 'restore' | 'updates' | 'activity' | 'logs';
+  /** What each part of the command means, in plain words */
+  explain?: Explain[];
 }
 
 export interface FixInfo {
@@ -34,6 +37,12 @@ const q = (s: string) => (/^[A-Za-z0-9_./:@%+=,-]+$/.test(s) ? s : `'${s.replace
 
 /** Whether Manifexus can fix it by itself, and the steps to do it by hand */
 export function describeFix(c: Check, ctx: FixContext): FixInfo | undefined {
+  const info = describeFixRaw(c, ctx);
+  if (info) info.manual = info.manual.map((m) => (m.command && !m.command.startsWith('- ') ? { ...m, explain: explain(m.command) } : m));
+  return info;
+}
+
+function describeFixRaw(c: Check, ctx: FixContext): FixInfo | undefined {
   if (c.level === 'ok' || c.level === 'info') return undefined;
   const app = ctx.app || 'the app';
   const inSelf = (cmd: string) => (ctx.selfDir ? `cd ${q(ctx.selfDir)} && ${cmd}` : cmd);

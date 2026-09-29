@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePrefs } from '../prefs';
-import { CommandItem, useLearn, LearnCommand } from './Commands';
+import { CommandItem, StepCommands, useLearn, LearnCommand } from './Commands';
 import {
   Alert,
   BackButton,
@@ -508,7 +508,7 @@ const ActivityDetail: React.FC<{ id: string; subscribe: Subscribe }> = ({ id, su
   const { showCommands } = usePrefs();
   const [showHow, setShowHow] = useState(showCommands);
   useEffect(() => setShowHow(showCommands), [showCommands, id]);
-  const learn = useLearn(showHow ? id : undefined, bundle?.activity.status === 'running');
+  const learn = useLearn(id, bundle?.activity.status === 'running');
 
   const load = useCallback(async () => {
     try {
@@ -625,92 +625,56 @@ const ActivityDetail: React.FC<{ id: string; subscribe: Subscribe }> = ({ id, su
         </section>
       )}
 
-      {steps.length > 0 && (
+      {(steps.length > 0 || learn.loose.length > 0) && (
         <section>
-          <SectionHeader>Steps</SectionHeader>
+          <SectionHeader
+            action={
+              <LinkButton onClick={() => setShowHow((v) => !v)}>
+                {showHow ? 'Hide Commands' : 'Show Commands'}
+              </LinkButton>
+            }
+          >
+            {steps.length ? 'Steps' : 'Commands'}
+          </SectionHeader>
           <Group className="ios-inset-icon">
             {steps.map((s) => (
-              <Row
-                key={s.index}
-                leading={
-                  <span className="w-[29px] flex justify-center">
-                    {s.status === 'running' ? (
-                      <StatusTile status="running" size={22} />
-                    ) : s.status === 'success' ? (
-                      <span className="w-[22px] h-[22px] rounded-full flex items-center justify-center text-white" style={{ background: ios.green }}><Glyph d="m6 12.5 4 4 8-9" size={13} stroke={3} /></span>
-                    ) : (
-                      <span className="w-[22px] h-[22px] rounded-full flex items-center justify-center text-white" style={{ background: ios.red }}><Glyph d="M12 7v6M12 17v.01" size={13} stroke={3.2} /></span>
-                    )}
-                  </span>
-                }
-                title={s.name}
-                titleColor={s.status === 'failed' ? '#FF8A80' : undefined}
-                trailing={<span className="text-[13px] tabular-nums">{fmtDuration(s.durationMs)}</span>}
-              />
-            ))}
-          </Group>
-          <SectionFooter>
-            <LinkButton onClick={() => setShowHow((v) => !v)}>{showHow ? 'Hide How It Was Done' : 'Show How It Was Done'}</LinkButton>
-            {!showHow && ' · the commands behind each step, explained'}
-          </SectionFooter>
-        </section>
-      )}
-
-      {steps.length === 0 && !showHow && (
-        <section>
-          <Group>
-            <Row onClick={() => setShowHow(true)} title="How It Was Done" subtitle="The commands behind this, explained" chevron />
-          </Group>
-        </section>
-      )}
-
-      {showHow && (
-        <section>
-          <SectionHeader>How It Was Done</SectionHeader>
-          {!learn.loaded ? (
-            <Group>
-              <Row title={<span style={{ color: ios.secondary }}>Reading the record…</span>} />
-            </Group>
-          ) : (
-            <div className="space-y-3">
-              {steps.map((s) => {
-                const cmds = learn.steps.get(s.index) || [];
-                return (
-                  <Group key={s.index}>
-                    <div className="px-4 py-3 space-y-3">
-                      <div className="text-[14px] font-semibold text-white">
-                        {s.index}. {s.name}
-                      </div>
-                      {cmds.length ? (
-                        cmds.map((c, i) => <CommandItem key={i} c={c} hideTitle={cmds.length === 1} />)
+              <React.Fragment key={s.index}>
+                <Row
+                  leading={
+                    <span className="w-[29px] flex justify-center">
+                      {s.status === 'running' ? (
+                        <StatusTile status="running" size={22} />
+                      ) : s.status === 'success' ? (
+                        <span className="w-[22px] h-[22px] rounded-full flex items-center justify-center text-white" style={{ background: ios.green }}><Glyph d="m6 12.5 4 4 8-9" size={13} stroke={3} /></span>
                       ) : (
-                        <p className="text-[13px]" style={{ color: ios.tertiary }}>
-                          No commands for this step: it happened inside Manifexus (like keeping its own backup copy) or only checked things.
-                        </p>
+                        <span className="w-[22px] h-[22px] rounded-full flex items-center justify-center text-white" style={{ background: ios.red }}><Glyph d="M12 7v6M12 17v.01" size={13} stroke={3.2} /></span>
                       )}
-                    </div>
-                  </Group>
-                );
-              })}
-              {learn.loose.length > 0 && (
-                <Group>
-                  <div className="px-4 py-3 space-y-3">
-                    {learn.loose.map((c, i) => (
-                      <CommandItem key={i} c={c} />
-                    ))}
-                  </div>
-                </Group>
-              )}
-              {!steps.length && !learn.loose.length && (
-                <Group>
-                  <Row title={<span style={{ color: ios.secondary }}>Nothing was changed here, so there are no commands to show.</span>} />
-                </Group>
-              )}
-            </div>
+                    </span>
+                  }
+                  title={s.name}
+                  titleColor={s.status === 'failed' ? '#FF8A80' : undefined}
+                  trailing={<span className="text-[13px] tabular-nums">{fmtDuration(s.durationMs)}</span>}
+                />
+                {showHow && <StepCommands commands={learn.steps.get(s.index) || []} />}
+              </React.Fragment>
+            ))}
+            {showHow && learn.loose.length > 0 && (
+              <div className={`px-4 ${steps.length ? 'pt-1' : 'pt-3.5'} pb-3.5 space-y-3`}>
+                {learn.loose.map((c, i) => (
+                  <CommandItem key={i} c={c} />
+                ))}
+              </div>
+            )}
+          </Group>
+          {showHow && (
+            <SectionFooter>
+              {!learn.loaded
+                ? 'Reading the record…'
+                : learn.steps.size || learn.loose.length
+                  ? 'The commands you’d type in your server’s terminal to do the same yourself. Steps without one happened inside Manifexus or only checked things.'
+                  : 'Nothing here needed a command: it happened inside Manifexus or only checked things.'}
+            </SectionFooter>
           )}
-          <SectionFooter>
-            “Equivalent command” means Manifexus did it directly (through Docker, or by writing the file itself); typing the command in your server’s terminal does the same thing.
-          </SectionFooter>
         </section>
       )}
 
@@ -1039,7 +1003,7 @@ const CommandsView: React.FC<{ onOpenActivity: (id: string) => void }> = ({ onOp
                     </span>
                   </button>
                   {ch.commands.map((c, i) => (
-                    <CommandItem key={i} c={c} collapsible />
+                    <CommandItem key={i} c={c} />
                   ))}
                 </div>
               </Group>

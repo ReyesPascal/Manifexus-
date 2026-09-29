@@ -420,6 +420,9 @@ export const Sheet: React.FC<{
     if (!open) return;
     const id = Symbol('sheet');
     openSheets.push(id);
+    // While a sheet is up, the dashboard behind it stops animating (see index.css): fewer repaints,
+    // and no garbled patches when the computer is short on graphics memory (e.g. while the AI loads)
+    document.documentElement.classList.add('sheet-open');
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && openSheets[openSheets.length - 1] === id) closeRef.current();
     };
@@ -428,6 +431,7 @@ export const Sheet: React.FC<{
       window.removeEventListener('keydown', onKey);
       const i = openSheets.indexOf(id);
       if (i >= 0) openSheets.splice(i, 1);
+      if (!openSheets.length) document.documentElement.classList.remove('sheet-open');
     };
   }, [open]);
   if (!open) return null;

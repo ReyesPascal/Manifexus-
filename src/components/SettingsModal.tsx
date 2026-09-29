@@ -238,8 +238,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </Group>
           </div>
           <SectionFooter>
-            Simple keeps screens clean. Advanced is for people who like to see how things work: commands are shown everywhere. Either way, every
-            activity can show How It Was Done, and Activity → Commands lists every command behind recent changes.
+            Simple keeps screens clean. Advanced is for people who like to see how things work: every step shows its command, explained. Either
+            way, Show Commands in any activity reveals them, and Activity → Commands lists them all.
           </SectionFooter>
         </section>
 

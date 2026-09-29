@@ -58,6 +58,9 @@ const DOCKER_SUB: Record<string, string> = {
   pause: 'freeze the app',
   unpause: 'unfreeze the app',
   kill: 'stop the app immediately',
+  stats: 'show how much processor and memory the app is using',
+  images: 'list the images on this server',
+  exec: 'run a command inside the app',
 };
 
 const COMPOSE_SUB: Record<string, string> = {
@@ -82,6 +85,11 @@ const FLAGS: Record<string, string> = {
   '--name': 'the name to give it',
   '-p': 'keep file owners and permissions',
   '-R': 'for everything inside the folder too',
+  '--no-stream': 'show it once instead of updating live',
+  '--tail': 'only the last lines (the number after it)',
+  '--quiet': 'only report problems',
+  '-q': 'only report problems',
+  '--follow': 'keep showing new lines as they come (Ctrl+C stops)',
 };
 
 export function explain(cmd: string): Explain[] {
@@ -94,14 +102,14 @@ export function explain(cmd: string): Explain[] {
     else if (c === 'docker' && rest[0] === 'compose') {
       out.push({ part: 'docker compose', meaning: 'work with the stack described by docker-compose.yml in this folder' });
       const sub = rest[1];
-      if (sub) out.push({ part: sub, meaning: COMPOSE_SUB[sub] || sub });
+      if (sub && COMPOSE_SUB[sub]) out.push({ part: sub, meaning: COMPOSE_SUB[sub] });
       for (const a of rest.slice(2)) {
         if (FLAGS[a]) out.push({ part: a, meaning: FLAGS[a] });
         else if (!a.startsWith('-')) out.push({ part: a, meaning: 'only this app from the file' });
       }
     } else if (c === 'docker') {
       const sub = rest[0];
-      out.push({ part: `docker ${sub || ''}`.trim(), meaning: DOCKER_SUB[sub] || 'a Docker command' });
+      if (DOCKER_SUB[sub]) out.push({ part: `docker ${sub}`, meaning: DOCKER_SUB[sub] });
       for (const a of rest.slice(1)) if (FLAGS[a]) out.push({ part: a, meaning: FLAGS[a] });
       if (sub === 'volume' && rest[1] === 'rm') out.push({ part: 'volume rm', meaning: 'delete a volume and everything stored in it' });
     } else if (c === 'tar') {
@@ -122,7 +130,10 @@ export function explain(cmd: string): Explain[] {
     else if (c === 'chmod') out.push({ part: 'chmod', meaning: 'change who may read or write the files' });
     else if (c === 'test' || c === '[') out.push({ part: c, meaning: 'check whether something exists' });
     else if (c === 'sudo') out.push({ part: 'sudo', meaning: 'run as the administrator (it may ask for your password)' });
-    else out.push({ part: c, meaning: 'a command on your server' });
+    else if (c === 'echo') out.push({ part: `echo ${rest.join(' ')}`.trim(), meaning: rest.join(' ') === 'OK' ? 'print OK, so you know everything before it worked' : 'print a message' });
+    else if (c === 'cat') out.push({ part: 'cat', meaning: 'show what’s in the file' });
+    else if (c === 'ls') out.push({ part: 'ls', meaning: 'list what’s in the folder' });
+    // Anything else: no made-up meaning
   }
   return out;
 }

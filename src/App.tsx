@@ -575,7 +575,7 @@ export default function App() {
     <div className="min-h-screen bg-[#07090e] text-slate-100 flex flex-col font-sans selection:bg-cyan-500/30 selection:text-cyan-200">
 
       {/* Main Dashboard Canvas */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 lg:px-6 py-6">
+      <main data-dashboard className="flex-1 max-w-7xl w-full mx-auto px-4 lg:px-6 py-6">
         {/* Directive 1: Hero Layout & Structural Protection for Manifexus */}
         <ManifexusHeroHeader
           container={manifexusHeroContainer}

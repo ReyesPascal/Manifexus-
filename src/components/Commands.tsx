@@ -3,8 +3,8 @@ import { ios } from './ui/ios';
 
 /**
  * The command behind a step, for people who want to learn how it's done: the command itself with
- * Copy, and a plain explanation of each part, which also says so when Manifexus did it by talking to
- * Docker directly rather than running that exact command.
+ * Copy, and each part in plain words right under it (plus a note when Manifexus did it by talking to
+ * Docker directly rather than running that exact command).
  */
 
 export interface Explain {
@@ -46,81 +46,102 @@ async function copy(text: string): Promise<boolean> {
   }
 }
 
-/** One command in a dark code block with Copy; the explanation shows under it */
-export const CommandBlock: React.FC<{ command: string; equivalent?: boolean; explain?: Explain[]; failed?: boolean; compact?: boolean; collapsible?: boolean }> = ({
+const EQUIVALENT_NOTE = 'Manifexus did this by asking Docker directly. Typing it does the same thing.';
+
+/** The word or two being explained, short enough to sit beside its meaning ("nano", "docker restart") */
+function shortPart(part: string): string {
+  if (part.length <= 22) return part;
+  const words = part.split(/\s+/);
+  return words[0] === 'docker' || words[0] === 'sudo' ? words.slice(0, 2).join(' ') : words[0];
+}
+
+/**
+ * One command and what it means, together in a single card: the command with Copy on top, and
+ * right under it, each part in plain words. Nothing to open or tap to understand it.
+ */
+export const CommandBlock: React.FC<{ command: string; equivalent?: boolean; explain?: Explain[]; failed?: boolean; compact?: boolean }> = ({
   command,
   equivalent,
-  explain,
+  explain = [],
   failed,
   compact,
-  collapsible,
 }) => {
   const [copied, setCopied] = useState(false);
-  const [open, setOpen] = useState(!collapsible);
-  // When Manifexus did it by asking Docker directly, say so once, inside the explanation
-  if (equivalent && explain && !explain.some((e) => !e.part)) explain = [...explain, { part: '', meaning: 'Manifexus asked Docker directly; typing this does the same thing.' }];
-  else if (equivalent && !explain) explain = [{ part: '', meaning: 'Manifexus asked Docker directly; typing this does the same thing.' }];
+  const parts = explain.filter((e) => e.part && e.meaning);
+  const notes = explain.filter((e) => !e.part && e.meaning).map((e) => e.meaning);
+  if (equivalent && !notes.length) notes.push(EQUIVALENT_NOTE);
+  const showMeaning = !compact && (parts.length > 0 || notes.length > 0);
   return (
-    <div className="min-w-0">
-      <div className="rounded-[10px] overflow-hidden" style={{ background: 'rgba(0,0,0,0.42)', boxShadow: '0 0 0 0.5px rgba(255,255,255,0.08)' }}>
-        <div className="flex items-start gap-2 pl-3 pr-1.5 py-2">
-          <span className="font-mono text-[12.5px] leading-[19px] select-none" style={{ color: failed ? ios.red : ios.green }}>
-            $
-          </span>
-          <code className="flex-1 min-w-0 font-mono text-[12.5px] leading-[19px] whitespace-pre-wrap break-all" style={{ color: 'rgba(235,235,245,0.92)' }}>
-            {command}
-          </code>
-          <button
-            type="button"
-            onClick={async () => {
-              if (await copy(command)) {
-                setCopied(true);
-                setTimeout(() => setCopied(false), 1400);
-              }
-            }}
-            className="flex-shrink-0 h-[24px] px-2 rounded-[6px] text-[12px] font-medium hover:bg-white/[0.08] focus-visible:outline-2 focus-visible:outline-[#0A84FF]"
-            style={{ color: copied ? ios.green : ios.blue }}
-            aria-label={`Copy ${command}`}
-          >
-            {copied ? 'Copied' : 'Copy'}
-          </button>
-        </div>
-      </div>
-      {explain && explain.length > 0 && !compact && collapsible && (
-        <button type="button" onClick={() => setOpen((o) => !o)} className="mt-1 pl-1 text-[12px] font-medium hover:opacity-80" style={{ color: ios.blue }} aria-expanded={open}>
-          {open ? 'Hide explanation' : 'What does this mean?'}
+    <div className="min-w-0 rounded-[12px] overflow-hidden" style={{ background: 'rgba(0,0,0,0.34)', boxShadow: '0 0 0 0.5px rgba(255,255,255,0.08)' }}>
+      <div className="flex items-start gap-2 pl-3 pr-1.5 py-2">
+        <span className="font-mono text-[12.5px] leading-[20px] select-none" style={{ color: failed ? ios.red : ios.green }} aria-hidden>
+          $
+        </span>
+        <code className="flex-1 min-w-0 font-mono text-[12.5px] leading-[20px] whitespace-pre-wrap break-all" style={{ color: 'rgba(235,235,245,0.94)' }}>
+          {command}
+        </code>
+        <button
+          type="button"
+          onClick={async () => {
+            if (await copy(command)) {
+              setCopied(true);
+              setTimeout(() => setCopied(false), 1400);
+            }
+          }}
+          className="flex-shrink-0 h-[24px] px-2 rounded-[6px] text-[12px] font-medium hover:bg-white/[0.08] focus-visible:outline-2 focus-visible:outline-[#0A84FF]"
+          style={{ color: copied ? ios.green : ios.blue }}
+          aria-label={`Copy ${command}`}
+        >
+          {copied ? 'Copied' : 'Copy'}
         </button>
-      )}
-      {explain && explain.length > 0 && !compact && open && (
-        <dl className="mt-1.5 space-y-0.5 pl-1">
-          {explain.map((e, i) => (
-            <div key={i} className="flex gap-2 text-[12.5px] leading-[18px]">
-              {e.part && (
-                <dt className="font-mono flex-shrink-0" style={{ color: 'rgba(235,235,245,0.85)' }}>
-                  {e.part}
-                </dt>
-              )}
-              <dd style={{ color: e.part ? ios.secondary : ios.tertiary }}>{e.part ? `— ${e.meaning}` : e.meaning}</dd>
-            </div>
+      </div>
+      {showMeaning && (
+        <div className="px-3 pt-2 pb-2.5 space-y-1.5" style={{ background: 'rgba(255,255,255,0.035)', borderTop: '0.5px solid rgba(255,255,255,0.07)' }}>
+          {parts.length > 0 && (
+            <dl className="grid gap-x-3 gap-y-1 text-[12.5px] leading-[18px]" style={{ gridTemplateColumns: 'max-content minmax(0, 1fr)' }}>
+              {parts.map((e, i) => (
+                <React.Fragment key={i}>
+                  <dt className="font-mono max-w-[38vw] sm:max-w-[200px] truncate" style={{ color: '#9CC8FF' }} title={e.part}>
+                    {shortPart(e.part)}
+                  </dt>
+                  <dd style={{ color: ios.secondary }}>{e.meaning.charAt(0).toUpperCase() + e.meaning.slice(1)}</dd>
+                </React.Fragment>
+              ))}
+            </dl>
+          )}
+          {notes.map((n, i) => (
+            <p key={i} className="text-[12px] leading-[17px]" style={{ color: ios.tertiary }}>
+              {n}
+            </p>
           ))}
-        </dl>
+        </div>
       )}
     </div>
   );
 };
 
-/** A titled command: "Stopped lidarr" above its command block (no title when the step already says it) */
-export const CommandItem: React.FC<{ c: LearnCommand; compact?: boolean; collapsible?: boolean; hideTitle?: boolean }> = ({ c, compact, collapsible, hideTitle }) => (
+/** A titled command: "Stopped lidarr" above its command card (no title when the step already says it) */
+export const CommandItem: React.FC<{ c: LearnCommand; compact?: boolean; hideTitle?: boolean }> = ({ c, compact, hideTitle }) => (
   <div className="space-y-1.5">
     {!(hideTitle && c.ok) && (
       <div className="flex items-center gap-1.5 text-[13px]" style={{ color: c.ok ? ios.secondary : ios.red }}>
-        <span>{c.ok ? '✓' : '✕'}</span>
+        <span aria-hidden>{c.ok ? '✓' : '✕'}</span>
         <span className="truncate">{c.title}</span>
       </div>
     )}
-    <CommandBlock command={c.command} equivalent={c.equivalent} explain={c.explain} failed={!c.ok} compact={compact} collapsible={collapsible} />
+    <CommandBlock command={c.command} equivalent={c.equivalent} explain={c.explain} failed={!c.ok} compact={compact} />
   </div>
 );
+
+/** A step's commands, indented under the step's row in a list */
+export const StepCommands: React.FC<{ commands: LearnCommand[] }> = ({ commands }) =>
+  commands.length ? (
+    <div className="pl-[52px] pr-4 pb-3.5 space-y-3">
+      {commands.map((c, i) => (
+        <CommandItem key={i} c={c} hideTitle={commands.length === 1} />
+      ))}
+    </div>
+  ) : null;
 
 /**
  * Commands for a running (or finished) activity, fetched as it goes. Returns the steps, keyed by

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { usePrefs } from '../prefs';
-import { CommandItem, useLearnSteps } from './Commands';
+import { StepCommands, useLearnSteps } from './Commands';
 import { Button, Group, IconTile, LinkButton, Row, SectionFooter, ios } from './ui/ios';
 import { copyText } from './ActivitySheet';
 
@@ -200,7 +200,9 @@ export const ProgressView: React.FC<{
   /** Called a moment after success (to close the screen); refreshes the dashboard first */
   onDone?: () => void;
   onClose?: () => void;
-}> = ({ run, runningTitle, doneMessage, onDone, onClose }) => {
+  /** Called as soon as it succeeds, for screens that show their own buttons afterwards (no auto-close) */
+  onFinished?: () => void;
+}> = ({ run, runningTitle, doneMessage, onDone, onClose, onFinished }) => {
   const [copy, setCopy] = useState<'idle' | 'busy' | 'done' | 'failed'>('idle');
   const { showCommands } = usePrefs();
   const learning = useLearnSteps(showCommands ? run.activityId : undefined, run.status === 'running' || run.status === 'idle');
@@ -211,9 +213,14 @@ export const ProgressView: React.FC<{
     if (run.status === 'done' || run.status === 'failed' || run.status === 'rolled_back') {
       window.dispatchEvent(new CustomEvent('manifexus:refresh_fleet'));
     }
+    if (run.status === 'done' && onFinished) {
+      onFinished();
+      return;
+    }
     if (run.status !== 'done' || !onDone || showCommands) return;
     const t = setTimeout(onDone, 2200);
     return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [run.status, onDone, showCommands]);
 
   const running = run.status === 'running' || run.status === 'idle';
@@ -274,7 +281,7 @@ export const ProgressView: React.FC<{
         >
           {subtitle}
         </p>
-        {run.status === 'done' && onDone && !showCommands && (
+        {run.status === 'done' && onDone && !onFinished && !showCommands && (
           <p className="mt-3 text-[12px]" style={{ color: ios.tertiary }}>
             Closing…
           </p>
@@ -319,13 +326,7 @@ export const ProgressView: React.FC<{
                 }
                 trailing={s.status === 'success' || s.status === 'failed' ? <span className="text-[13px] tabular-nums">{fmt(s.durationMs)}</span> : undefined}
               />
-              {showCommands && (learning.get(s.index)?.length || 0) > 0 && (
-                <div className="pl-[52px] pr-4 pb-3 space-y-3">
-                  {learning.get(s.index)!.map((c, i) => (
-                    <CommandItem key={i} c={c} collapsible hideTitle={learning.get(s.index)!.length === 1} />
-                  ))}
-                </div>
-              )}
+              {showCommands && <StepCommands commands={learning.get(s.index) || []} />}
               </React.Fragment>
             ))}
           </Group>
@@ -336,6 +337,14 @@ export const ProgressView: React.FC<{
             </SectionFooter>
           )}
         </section>
+      )}
+      {run.status === 'done' && onDone && !onFinished && showCommands && (
+        // Commands are shown, so it doesn't close by itself: Done stays in reach at the bottom
+        <div className="sticky bottom-0 -mx-4 sm:-mx-5 px-4 sm:px-5 pt-6 pb-1 flex justify-end" style={{ background: `linear-gradient(to bottom, transparent, ${ios.sheet} 45%)` }}>
+          <Button onClick={onDone} className="w-full sm:w-auto sm:min-w-[150px]">
+            Done
+          </Button>
+        </div>
       )}
     </div>
   );
