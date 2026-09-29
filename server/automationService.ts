@@ -575,6 +575,23 @@ export async function executeStreamingPipeline(
           await forceRemoveContainer(m.asideName);
         }
       }
+      if (!isDemo) {
+        // A stack whose last app moved out stays on the dashboard (empty): only Delete Stack removes a stack
+        const { registerCreatedStack } = await import('./stackService');
+        for (const g of editedSources) {
+          const left = resultFiles.find((f) => f.path === g.composePath)?.content || '';
+          let remaining = 0;
+          try {
+            remaining = Object.keys(yaml.parse(left)?.services || {}).length;
+          } catch {
+            remaining = 1;
+          }
+          if (remaining === 0) {
+            registerCreatedStack({ project: g.project, workingDir: g.workingDir, configFiles: g.composePath, serviceCount: 0, source: 'provisioned' });
+            log(`${g.project} is empty now and stays on your dashboard.`, 6);
+          }
+        }
+      }
       log('Done. You can restore to before this move from Restore.', 6);
     });
 

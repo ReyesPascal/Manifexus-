@@ -2,6 +2,18 @@
   "_about": "What's new in each version of Manifexus, newest first. Shown in Updates. Write for people, not developers: short, plain sentences about what they can now do. The newest entry's version is what gets built and tagged; older entries can give the \"commit\" they were released from.",
   "releases": [
     {
+      "version": "1.8",
+      "date": "2026-09-29",
+      "headline": "Your stacks fit together neatly, and a stack stays until you delete it.",
+      "new": [],
+      "improved": [
+        "Stacks fit together like tiles. Every app card is the same size everywhere, each stack is exactly as wide as its apps, and bigger stacks go first with smaller ones filling the space beside them, so there are no holes in the middle. When a stack gains or loses an app, or the window changes size, everything is re-fitted. A lone small stack stays small instead of stretching across the page."
+      ],
+      "fixed": [
+        "Moving the last app out of a stack no longer makes the stack disappear. It stays on your dashboard, empty and with an icon that fits its name, until you delete it."
+      ]
+    },
+    {
       "version": "1.7",
       "date": "2026-09-29",
       "headline": "You decide when Manifexus may change your server, plus stack icons, a friendlier New Stack and Server Cleanup.",

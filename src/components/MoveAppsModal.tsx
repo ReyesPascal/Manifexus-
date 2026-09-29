@@ -665,7 +665,7 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
   const summaryFooter = (() => {
     const parts: string[] = [`${selectedApps.length === 1 ? 'It restarts' : 'They restart'} once and keep${selectedApps.length === 1 ? 's' : ''} ${selectedApps.length === 1 ? 'its' : 'their'} data where it is.`];
     if (destination?.kind === 'new') parts.push(`A new folder is created at ${destDir}.`);
-    if (emptiedStacks.length) parts.push(`${listJoin(emptiedStacks)} will be empty afterward.`);
+    if (emptiedStacks.length) parts.push(`${listJoin(emptiedStacks)} will be empty afterward and ${emptiedStacks.length === 1 ? 'stays' : 'stay'} on your dashboard until you delete ${emptiedStacks.length === 1 ? 'it' : 'them'}.`);
     return parts.join(' ');
   })();
 

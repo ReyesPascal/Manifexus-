@@ -227,12 +227,12 @@ export const Shelf: React.FC<{
   menu?: MenuItem[];
   /** Keep it open even if folded before (e.g. an app in it has a problem) */
   forceOpen?: boolean;
-  /** Columns it spans in the ShelfGrid (1 to 3) */
+  /** How many app columns it asks for in the ShelfGrid (its app count) */
   span?: number;
   /** Rename it on the dashboard; `original` is its real name (the folder's), shown as the placeholder */
   rename?: { original: string; onSave: (name: string) => void };
   children: React.ReactNode;
-}> = ({ id, title, icon, status, action, menu, forceOpen, span = 3, rename, children }) => {
+}> = ({ id, title, icon, status, action, menu, forceOpen, rename, children }) => {
   const [renaming, setRenaming] = useState(false);
   const [folded, setFolded] = useState(() => readFolded().has(id));
   const open = forceOpen || !folded;
@@ -245,7 +245,7 @@ export const Shelf: React.FC<{
   };
   const bodyId = `shelf-${id.replace(/[^a-z0-9_-]/gi, '_')}`;
   return (
-    <section className={`rounded-[22px] min-w-0 ${SPAN_CLASS[span] ?? SPAN_CLASS[3]}`} style={{ ...panelStyle, fontFamily: ios.font }} aria-label={title}>
+    <section className={`rounded-[22px] min-w-0 ${open ? 'flex-1' : ''}`} style={{ ...panelStyle, fontFamily: ios.font }} aria-label={title}>
       <header className="group/head flex items-center gap-3 pl-4 pr-3 sm:pl-5 sm:pr-4 py-3.5">
         {/* Tapping the icon, name or status folds the stack; the ✎ beside the name renames it */}
         <div className="group flex-1 min-w-0 flex items-center gap-3 cursor-pointer" onClick={renaming ? undefined : toggle}>
@@ -330,24 +330,105 @@ export const Shelf: React.FC<{
 };
 
 /**
- * Panels sit side by side and take only the width their apps need: a stack with one app is one
- * column wide, two apps two columns, three or more the whole row. Gaps left by a wide panel are
- * filled by the small ones after it, so the page stays dense and everything is visible at a glance.
+ * Stacks fit together like tiles, and every app card is the same size everywhere:
+ *
+ * - The number of columns comes from the real width, so a card is never narrower than MIN_COL.
+ * - Each stack is exactly as wide as its apps (a one-app stack is one card wide; more apps than
+ *   columns wrap onto more lines inside the stack).
+ * - Bigger stacks are placed first and smaller ones fill the space beside them (first-fit), so rows
+ *   come out full. When stacks grow or shrink, everything is re-fitted.
+ * - A row that's nearly full is widened a little to close the gap (at most MAX_STRETCH); otherwise it
+ *   keeps its natural size, so a lone small stack never turns into a giant card.
+ * - Stacks in a row share one height.
  */
-export const ShelfGrid: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4 items-start [grid-auto-flow:row_dense]">{children}</div>
-);
+const MIN_COL = 320; // narrowest app card column, px (a one-app stack's name, + and ⋯ still fit)
+const GAP = 16;
+const MAX_STRETCH = 1.5;
 
-/** How many columns a panel with this many apps spans (1 to 3) */
-export const shelfSpan = (apps: number) => Math.max(1, Math.min(3, apps));
+/** Columns (app cards across) for the panel a TileGrid is in; set by ShelfGrid */
+const CellCols = React.createContext<number | null>(null);
 
-const SPAN_CLASS: Record<number, string> = { 1: '', 2: 'md:col-span-2', 3: 'md:col-span-2 lg:col-span-3' };
+type Cell = { i: number; w: number };
+
+function planRows(apps: number[], C: number, last: boolean[]): Cell[][] {
+  // Biggest first; equal sizes keep their order; "Not in a Stack" always comes last
+  const order = apps
+    .map((n, i) => ({ i, n, w: Math.max(1, Math.min(C, n)) }))
+    // By app count (the same order on a phone as on a big screen)
+    .sort((a, b) => Number(last[a.i]) - Number(last[b.i]) || b.n - a.n || a.i - b.i)
+    .map(({ i, w }) => ({ i, w }));
+  const rows: { cells: Cell[]; left: number }[] = [];
+  for (const it of order) {
+    const row = rows.find((r) => r.left >= it.w);
+    if (row) {
+      row.cells.push(it);
+      row.left -= it.w;
+    } else rows.push({ cells: [it], left: C - it.w });
+  }
+  return rows.map((r) => r.cells);
+}
+
+export const ShelfGrid: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const ref = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(() => (typeof window !== 'undefined' ? Math.min(window.innerWidth - 32, 1232) : 1232));
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([e]) => {
+      const w = Math.round(e.contentRect.width);
+      setWidth((cur) => (cur === w ? cur : w));
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const items = React.Children.toArray(children).filter(React.isValidElement) as React.ReactElement<{ span?: number; id?: string }>[];
+  const C = Math.max(1, Math.floor((width + GAP) / (MIN_COL + GAP)));
+  const rows = planRows(
+    items.map((c) => Math.max(0, c.props.span ?? 1)),
+    C,
+    items.map((c) => c.props.id === 'stack:none')
+  );
+  const colPx = (width - GAP * (C - 1)) / C;
+  return (
+    <div ref={ref} className="flex flex-col gap-3 sm:gap-4">
+      {rows.map((row, r) => {
+        const used = row.reduce((sum, c) => sum + c.w, 0);
+        const stretch = used < C && C / used <= MAX_STRETCH;
+        return (
+          <div key={r} className="flex gap-3 sm:gap-4 items-stretch">
+            {row.map(({ i, w }) => (
+              <div
+                key={items[i].key ?? i}
+                className="flex flex-col min-w-0"
+                // Natural size: w card columns (and the gaps between them); stretched rows share the full width
+                style={stretch || used === C ? { flex: `${w} 1 0px` } : { flex: `0 0 ${w * colPx + (w - 1) * GAP}px` }}
+              >
+                <CellCols.Provider value={w}>{items[i]}</CellCols.Provider>
+              </div>
+            ))}
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
+/** How many app columns a panel with this many apps asks for (the grid decides how many fit) */
+export const shelfSpan = (apps: number) => Math.max(0, Math.min(8, apps));
+
 const COLS_CLASS: Record<number, string> = { 1: '', 2: 'md:grid-cols-2', 3: 'md:grid-cols-2 lg:grid-cols-3' };
 
-/** The grid of app cards inside a panel, as many columns as the panel spans */
-export const TileGrid: React.FC<{ span?: number; children: React.ReactNode }> = ({ span = 3, children }) => (
-  <div className={`grid grid-cols-1 ${COLS_CLASS[span] ?? COLS_CLASS[3]} gap-2.5 sm:gap-3`}>{children}</div>
-);
+/** The grid of app cards inside a panel: as many columns as its place in the ShelfGrid gives it */
+export const TileGrid: React.FC<{ span?: number; children: React.ReactNode }> = ({ span = 3, children }) => {
+  const cols = React.useContext(CellCols);
+  if (cols)
+    return (
+      <div className="grid gap-2.5 sm:gap-3" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
+        {children}
+      </div>
+    );
+  return <div className={`grid grid-cols-1 ${COLS_CLASS[span] ?? COLS_CLASS[3]} gap-2.5 sm:gap-3`}>{children}</div>;
+};
 
 /** A calm one-line message inside a panel (an empty stack or group) */
 export const ShelfNote: React.FC<{ children: React.ReactNode }> = ({ children }) => (
