@@ -20,6 +20,7 @@
  *                   it puts the previous version back and records a rollback
  * The browser follows along and reloads once the new version answers.
  */
+import { localVersion, localReleases, remoteReleases, releasesSince, Release } from './releaseNotes';
 import fs from 'fs';
 import http from 'http';
 import path from 'path';
@@ -54,8 +55,10 @@ export interface BuildInfo {
   revision?: string;
   /** ISO build time */
   created?: string;
-  /** Human label, e.g. "Build 782fa84" */
+  /** Human label, e.g. "Version 1.1" (or "Build 782fa84" for builds without release notes) */
   label: string;
+  /** "1.1", from the build's release notes */
+  version?: string;
 }
 
 export interface ReleaseNote {
@@ -95,13 +98,15 @@ export interface SoftwareUpdateState {
   installMode?: 'compose' | 'standalone';
   current: BuildInfo & { imageId?: string };
   status: 'up_to_date' | 'available' | 'unknown';
-  latest?: BuildInfo & { digest: string; sizeBytes?: number; notes: ReleaseNote[]; totalCommits?: number };
+  latest?: BuildInfo & { digest: string; sizeBytes?: number; notes: ReleaseNote[]; totalCommits?: number; releases?: Release[] };
   lastCheckedAt?: string;
   checkError?: string;
   checking: boolean;
   installing?: UpdateProgress;
   lastOutcome?: UpdateOutcome;
   settings: UpdateSettings;
+  /** This version's own release notes */
+  currentRelease?: Release;
 }
 
 export interface SelfInfo {
@@ -157,10 +162,10 @@ let installListeners: ((p: UpdateProgress) => void)[] = [];
 
 const shortSha = (s?: string) => (s ? s.replace(/^sha256:/, '').slice(0, 7) : undefined);
 
-function buildInfoFromLabels(labels: Record<string, string> | undefined): BuildInfo {
+function buildInfoFromLabels(labels: Record<string, string> | undefined, version?: string): BuildInfo {
   const revision = shortSha(labels?.['org.opencontainers.image.revision']);
   const created = labels?.['org.opencontainers.image.created'];
-  return { revision, created, label: revision ? `Build ${revision}` : 'Development build' };
+  return { revision, created, version, label: version ? `Version ${version}` : revision ? `Build ${revision}` : 'Development build' };
 }
 
 export async function getSelf(): Promise<SelfInfo | null> {
@@ -356,7 +361,7 @@ export async function getSoftwareUpdateState(): Promise<SoftwareUpdateState> {
     self = null;
   }
   const unsupportedReason = await supportCheck(self);
-  const current = { ...buildInfoFromLabels(self?.image?.Config?.Labels), imageId: self?.imageId };
+  const current = { ...buildInfoFromLabels(self?.image?.Config?.Labels, localVersion()), imageId: self?.imageId };
   const runningDigests: string[] = self?.image?.RepoDigests || [];
   const latest = persisted.latest;
   let status: SoftwareUpdateState['status'] = 'unknown';
@@ -373,6 +378,7 @@ export async function getSoftwareUpdateState(): Promise<SoftwareUpdateState> {
     status,
     latest: status === 'available' ? latest : undefined,
     lastCheckedAt: persisted.lastCheckedAt,
+    currentRelease: localReleases()[0],
     checkError: persisted.checkError,
     checking,
     installing,
@@ -391,10 +397,14 @@ export async function checkForUpdate(): Promise<SoftwareUpdateState> {
     } else {
       const remote = await fetchRemote(self.imageRef);
       const currentLabels = self.image?.Config?.Labels || {};
-      const latestBuild = buildInfoFromLabels(remote.labels);
       const running = (self.image?.RepoDigests || []).some((d: string) => d.endsWith(remote.digest));
+      const source = remote.labels?.['org.opencontainers.image.source'] || currentLabels['org.opencontainers.image.source'];
+      // Friendly notes from the offered build's release-notes.json (commit titles are the fallback)
+      const theirs = running ? null : await remoteReleases(source, remote.labels?.['org.opencontainers.image.revision']);
+      const latestBuild = buildInfoFromLabels(remote.labels, running ? localVersion() : theirs?.[0]?.version);
+      const releases = theirs ? releasesSince(theirs, localVersion()) : [];
       const notes =
-        running || !latestBuild.revision
+        running || !latestBuild.revision || releases.length
           ? { notes: [] as ReleaseNote[] }
           : await fetchReleaseNotes(
               remote.labels?.['org.opencontainers.image.source'] || currentLabels['org.opencontainers.image.source'],
@@ -407,6 +417,7 @@ export async function checkForUpdate(): Promise<SoftwareUpdateState> {
         sizeBytes: remote.sizeBytes,
         notes: notes.notes,
         totalCommits: notes.total,
+        releases,
       };
       layerSizesCache = remote.layerSizes;
       persisted.checkError = undefined;
@@ -608,8 +619,9 @@ result() {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function startRestartHelper(self: SelfInfo, pulled: any): Promise<string> {
   const job = `upd_${Date.now().toString(36)}`;
-  const fromLabel = buildInfoFromLabels(self.image?.Config?.Labels).label;
-  const toLabel = buildInfoFromLabels(pulled.Config?.Labels).label;
+  const fromLabel = buildInfoFromLabels(self.image?.Config?.Labels, localVersion()).label;
+  const toRevision = shortSha(pulled.Config?.Labels?.['org.opencontainers.image.revision']);
+  const toLabel = buildInfoFromLabels(pulled.Config?.Labels, persisted.latest?.revision === toRevision ? persisted.latest?.version : undefined).label;
   fs.mkdirSync(DATA_DIR, { recursive: true });
   fs.writeFileSync(
     JOB_FILE,

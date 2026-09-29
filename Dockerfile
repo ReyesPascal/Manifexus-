@@ -13,11 +13,6 @@ COPY . .
 # Build Vite client and bundle server into dist/server.cjs
 RUN npm run build
 
-# Built-in AI engine: take Ollama from its official multi-arch image, keeping only the CPU engine
-# (graphics-card libraries are gigabytes). Models are downloaded later, on request, into /data/ai.
-FROM ollama/ollama:0.34.4 AS ollama
-RUN rm -rf /usr/lib/ollama/cuda_* /usr/lib/ollama/rocm* /usr/lib/ollama/vulkan* /usr/lib/ollama/mlx* 2>/dev/null; ls -la /usr/lib/ollama || true
-
 # Production runtime stage (glibc Node 22 ensures total compatibility across amd64 and arm64)
 FROM node:22-bookworm-slim AS runner
 
@@ -27,6 +22,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     libgomp1 \
+    zstd \
     curl \
     gnupg \
     && install -m 0755 -d /etc/apt/keyrings \
@@ -46,12 +42,32 @@ ENV HOST_ROOT=/host
 # Create persistent storage directories
 RUN mkdir -p /data /app/backups
 
-# The built-in AI engine
-COPY --from=ollama /usr/bin/ollama /usr/bin/ollama
-COPY --from=ollama /usr/lib/ollama /usr/lib/ollama
+# Built-in AI engine (Ollama), CPU-only: graphics-card libraries are gigabytes, so they're skipped.
+# Downloaded from Ollama's GitHub release. If that fails for any reason, the build still succeeds
+# without the engine: Manifexus then says "Update Manifexus to use the built-in AI" and nothing
+# else is affected. Models are downloaded later, on request, into /data/ai.
+ARG TARGETARCH
+ARG OLLAMA_VERSION=0.34.4
+RUN set -u; \
+    if curl -fsSL --retry 3 --retry-delay 5 -o /tmp/ollama.tar.zst \
+         "https://github.com/ollama/ollama/releases/download/v${OLLAMA_VERSION}/ollama-linux-${TARGETARCH}.tar.zst" \
+       && mkdir -p /tmp/ollama \
+       && tar --use-compress-program=unzstd -xf /tmp/ollama.tar.zst -C /tmp/ollama --wildcards \
+            --exclude='lib/ollama/cuda_*' --exclude='lib/ollama/rocm*' --exclude='lib/ollama/vulkan*' --exclude='lib/ollama/mlx*' \
+       && install -m 0755 /tmp/ollama/bin/ollama /usr/bin/ollama \
+       && mkdir -p /usr/lib/ollama && cp -a /tmp/ollama/lib/ollama/. /usr/lib/ollama/ \
+       && /usr/bin/ollama --help > /dev/null; then \
+      echo "Built-in AI engine ${OLLAMA_VERSION} included ($(du -sh /usr/lib/ollama | cut -f1) of libraries)"; \
+    else \
+      echo "WARNING: built-in AI engine could not be included in this build; continuing without it"; \
+      rm -rf /usr/bin/ollama /usr/lib/ollama; \
+    fi; \
+    rm -rf /tmp/ollama /tmp/ollama.tar.zst
 
 # Copy production artifacts from builder
 COPY --from=builder /app/package.json ./
+# What's new in each version (shown in Updates; also tells Manifexus its own version)
+COPY --from=builder /app/release-notes.json ./
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/node_modules ./node_modules
 

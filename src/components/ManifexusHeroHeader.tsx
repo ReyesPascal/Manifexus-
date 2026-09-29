@@ -129,8 +129,9 @@ export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
 }) => {
   const port = container?.ports?.[0]?.publicPort || 3334;
   const socketOn = !!systemStatus?.dockerConnected;
-  // The server labels builds "Build <revision>" or "Development build"; show just the revision
-  const build = !versionLabel ? undefined : versionLabel.startsWith('Build ') ? versionLabel.slice(6) : 'dev';
+  // The server labels builds "Version 1.1", "Build <revision>" or "Development build"; show just the number
+  const isVersion = Boolean(versionLabel?.startsWith('Version '));
+  const build = !versionLabel ? undefined : isVersion ? versionLabel!.slice(8) : versionLabel.startsWith('Build ') ? versionLabel.slice(6) : 'dev';
   const iconCls = 'w-[15px] h-[15px]';
 
   return (
@@ -266,7 +267,7 @@ export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
         >
           <div className="flex flex-wrap items-center gap-2">
             <Chip
-              label="Build"
+              label={isVersion ? 'Version' : 'Build'}
               tone={updateAvailable ? 'blue' : 'default'}
               tip={
                 updateAvailable

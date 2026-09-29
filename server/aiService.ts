@@ -291,7 +291,16 @@ export function installModel(model: string): Download {
       record('info', 'system', `AI model ${model} is ready`, { model });
     } catch (e) {
       d.status = ac.signal.aborted ? 'cancelled' : 'failed';
-      d.message = ac.signal.aborted ? 'Cancelled' : (e as Error).message;
+      const raw = (e as Error).message || '';
+      d.message = ac.signal.aborted
+        ? 'Cancelled'
+        : /timeout|dial tcp|ENOTFOUND|EAI_AGAIN|ECONNREFUSED|no such host|network is unreachable|fetch failed/i.test(raw)
+          ? 'Couldn’t reach the model library (registry.ollama.ai). Check that your server can reach the internet, then try again.'
+          : /no space left/i.test(raw)
+            ? 'Not enough disk space for this model.'
+            : /file does not exist|not found/i.test(raw)
+              ? 'That model isn’t in the library anymore.'
+              : raw;
       if (!ac.signal.aborted) record('warn', 'system', `Couldn’t download AI model ${model}`, { model, error: d.message });
     } finally {
       aborts.delete(model);

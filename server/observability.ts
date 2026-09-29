@@ -3,6 +3,7 @@
  * request tracker (every user action becomes an Activity), and diagnostic exports
  * (a JSON bundle and a Markdown report written for troubleshooting, e.g. by an AI assistant).
  */
+import { localVersion } from './releaseNotes';
 import http from 'http';
 import os from 'os';
 import type { NextFunction, Request, Response } from 'express';
@@ -54,7 +55,7 @@ export async function environmentSnapshot(force = false): Promise<Record<string,
   const value = {
     capturedAt: new Date().toISOString(),
     manifexus: {
-      build: revision ? `Build ${String(revision).slice(0, 7)}` : 'Development build',
+      build: localVersion() ? `Version ${localVersion()}${revision ? ` (${String(revision).slice(0, 7)})` : ''}` : revision ? `Build ${String(revision).slice(0, 7)}` : 'Development build',
       revision,
       builtAt: labels['org.opencontainers.image.created'],
       source: labels['org.opencontainers.image.source'],

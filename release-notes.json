@@ -1,0 +1,45 @@
+{
+  "_about": "What's new in each version of Manifexus, newest first. Shown in Updates. Write for people, not developers: short, plain sentences about what they can now do.",
+  "releases": [
+    {
+      "version": "1.1",
+      "date": "2026-09-28",
+      "headline": "Meet Ask Manifexus: a private AI, built in, that can look into problems and fix them with your OK.",
+      "new": [
+        "Ask Manifexus. Tap Ask in the header and ask anything about your apps: why something stopped, what changed, what's using the most memory.",
+        "It runs on your own server. It's free and private, and nothing leaves your network.",
+        "Picked for your server. Manifexus checks your memory, processor and graphics card, and recommends AI models that fit without slowing your apps down.",
+        "Fix with AI. One tap from the To Fix list in Diagnostics, and it works out what's wrong.",
+        "You're always in control. Every change is shown to you first, with a before and after of every file. It's backed up, and you can undo it from Restore.",
+        "Choose how much it may do on its own: Look Only, Ask Before Changes, Fix Routine Things or Expert."
+      ],
+      "improved": [
+        "Updates now show version numbers and notes like these, instead of build codes.",
+        "Activity has a new Fixes filter."
+      ],
+      "fixed": [
+        "On phones, the dashboard no longer shifts sideways by a few pixels.",
+        "If an AI model can't download, you get a clear reason and a Try Again button."
+      ]
+    },
+    {
+      "version": "1.0",
+      "date": "2026-09-27",
+      "headline": "The first full release: move, restore and understand your Docker apps, all in one place.",
+      "new": [
+        "Restore. Go back to before any move or delete. Every change keeps a backup, and restores can be undone too.",
+        "Activity. A complete record of everything Manifexus does, with the exact reason when something fails.",
+        "Diagnostics. Health checks in plain words, with a To Fix list that stays until each issue is fixed.",
+        "App Details. Every app's health, resources, storage, network and what it has printed, in one place.",
+        "Software updates that restore the previous version automatically if the new one doesn't start."
+      ],
+      "improved": [
+        "One clean, consistent design throughout, with every screen the same size.",
+        "Settings save as you change them."
+      ],
+      "fixed": [
+        "A leftover app entry in one stack can no longer break moving apps into it."
+      ]
+    }
+  ]
+}

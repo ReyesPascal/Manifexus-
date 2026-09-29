@@ -130,6 +130,13 @@ git remote add origin https://github.com/ReyesPascal/Manifexus-.git
 git push -u origin main
 ```
 
+### Releasing a new version
+
+1. Add the version to the top of `release-notes.json`: a one-sentence headline and short, plain **New / Improved / Fixed** lines. This is what people read in Manifexus → Updates, so write it for them, not for developers.
+2. Commit, then tag the commit with the same number: `git tag v1.2.0 && git push origin main --tags`.
+
+Every tag is published as its own image (`ghcr.io/reyespascal/manifexus:1.2.0`), so any past version stays available.
+
 When pushed, the included GitHub Actions workflow (`.github/workflows/docker-publish.yml`) will automatically build and publish the multi-arch container image to GitHub Container Registry (`ghcr.io/reyespascal/manifexus:latest`).
 
 ---

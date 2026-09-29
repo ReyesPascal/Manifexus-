@@ -401,6 +401,7 @@ export const AssistantSheet: React.FC<{
 
   const byId = useMemo(() => new Map((status?.catalog || []).map((m) => [m.id, m])), [status]);
   const dl = (id: string) => status?.downloads.find((d) => d.model === id && d.status === 'downloading');
+  const failedDl = (id: string) => status?.downloads.find((d) => d.model === id && d.status === 'failed');
 
   // ---------------------------------------------------------------- views
   let title = 'Ask Manifexus';
@@ -426,6 +427,7 @@ export const AssistantSheet: React.FC<{
 
     const modelRow = (m: CatalogEntry, extra?: { label: string; sub: string }) => {
       const d = dl(m.id);
+      const failed = !d && !m.installed ? failedDl(m.id) : undefined;
       return (
         <Row
           key={m.id + (extra?.label || '')}
@@ -447,6 +449,10 @@ export const AssistantSheet: React.FC<{
                 <span className="block tabular-nums">
                   {d.total ? `${fmtGB(d.completed)} of ${fmtGB(d.total)}` : d.message || 'Starting…'}
                 </span>
+              </span>
+            ) : failed ? (
+              <span className="block" style={{ color: ios.orange }}>
+                {failed.message || 'The download didn’t finish.'}
               </span>
             ) : (
               <span className="block">
@@ -473,7 +479,7 @@ export const AssistantSheet: React.FC<{
                 className="h-[28px] px-3.5 rounded-full text-[14px] font-semibold disabled:opacity-35"
                 style={{ background: 'rgba(10,132,255,0.18)', color: ios.blue }}
               >
-                Get
+                {failed ? 'Try Again' : 'Get'}
               </button>
             )
           }

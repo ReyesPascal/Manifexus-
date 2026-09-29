@@ -22,14 +22,73 @@ export interface SoftwareUpdateState {
   installMode?: 'compose' | 'standalone';
   current: BuildInfo & { imageId?: string };
   status: 'up_to_date' | 'available' | 'unknown';
-  latest?: BuildInfo & { digest: string; sizeBytes?: number; notes: { sha: string; title: string; date?: string }[]; totalCommits?: number };
+  latest?: BuildInfo & { digest: string; sizeBytes?: number; notes: { sha: string; title: string; date?: string }[]; totalCommits?: number; releases?: Release[] };
   lastCheckedAt?: string;
   checkError?: string;
   checking: boolean;
   installing?: UpdateProgress;
   lastOutcome?: { status: 'success' | 'rolled_back' | 'failed'; from?: string; to?: string; message: string; finishedAt: string };
   settings: { autoCheck: boolean; autoInstall: boolean };
+  /** This version's own release notes */
+  currentRelease?: Release;
 }
+
+/** A version's notes, written for people (mirrors server/releaseNotes.ts) */
+export interface Release {
+  version: string;
+  date: string;
+  headline: string;
+  new?: string[];
+  improved?: string[];
+  fixed?: string[];
+}
+
+const NOTE_KINDS: { key: 'new' | 'improved' | 'fixed'; label: string; color: string; d: string }[] = [
+  { key: 'new', label: 'New', color: '#BF5AF2', d: 'M12 3c.4 3.6 1.8 5.9 4.1 7 1.2.6 2.7.9 4.4 1.1v1.5c-1.7.2-3.2.5-4.4 1.1-2.3 1.1-3.7 3.4-4.1 7h-1c-.4-3.6-1.8-5.9-4.1-7-1.2-.6-2.7-.9-4.4-1.1v-1.5c1.7-.2 3.2-.5 4.4-1.1 2.3-1.1 3.7-3.4 4.1-7h1Z' },
+  { key: 'improved', label: 'Improved', color: '#0A84FF', d: 'M12 19V5M5.5 11.5 12 5l6.5 6.5' },
+  { key: 'fixed', label: 'Fixed', color: '#30D158', d: 'm5 12.5 4.5 4.5L19 7.5' },
+];
+
+/** First sentence bold, the rest quiet: "Ask Manifexus. Tap Ask…" */
+const NoteText: React.FC<{ text: string }> = ({ text }) => {
+  const m = /^(.+?[.!?])\s+(.+)$/.exec(text);
+  if (!m || m[1].length > 60) return <span>{text}</span>;
+  return (
+    <span>
+      <span className="font-semibold text-white">{m[1]}</span> <span style={{ color: 'rgba(235,235,245,0.7)' }}>{m[2]}</span>
+    </span>
+  );
+};
+
+/** What's New for one version, App Store style: a headline, then New / Improved / Fixed */
+export const ReleaseCard: React.FC<{ r: Release; title?: string }> = ({ r, title }) => (
+  <section>
+    <SectionHeader>{title || `What’s New in ${r.version}`}</SectionHeader>
+    <Group>
+      <div className="px-4 pt-3.5 pb-4 space-y-4">
+        <p className="text-[15px] leading-[21px] font-medium text-white">{r.headline}</p>
+        {NOTE_KINDS.filter((k) => r[k.key]?.length).map((k) => (
+          <div key={k.key}>
+            <div className="flex items-center gap-1.5 text-[12px] font-semibold uppercase tracking-wide" style={{ color: k.color }}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill={k.key === 'new' ? k.color : 'none'} stroke={k.key === 'new' ? 'none' : k.color} strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d={k.d} />
+              </svg>
+              {k.label}
+            </div>
+            <ul className="mt-1.5 space-y-1.5">
+              {r[k.key]!.map((t, i) => (
+                <li key={i} className="flex gap-2.5 text-[14px] leading-[20px]">
+                  <span className="mt-[8px] w-[5px] h-[5px] rounded-full flex-shrink-0" style={{ background: k.color }} />
+                  <NoteText text={t} />
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </div>
+    </Group>
+  </section>
+);
 
 /** The Manifexus app icon: a rounded tile with the hub-and-nodes mark. */
 export const ManifexusAppIcon: React.FC<{ size?: number }> = ({ size = 64 }) => (
@@ -440,7 +499,23 @@ export const SoftwareUpdateSheet: React.FC<SoftwareUpdateSheetProps> = ({ open, 
         </section>
       )}
 
-      {available && (
+      {available && s.latest!.releases && s.latest!.releases.length > 0 && (
+        <>
+          {s.latest!.releases.map((r, i) => (
+            <ReleaseCard key={r.version} r={r} title={i === 0 ? `What’s New in ${r.version} · ${formatDate(`${r.date}T12:00:00`)}` : `Also New Since Yours: ${r.version}`} />
+          ))}
+          <SectionFooter>
+            {[
+              s.latest!.sizeBytes ? `${formatBytes(s.latest!.sizeBytes)} download.` : '',
+              'Manifexus restarts for a few seconds; your apps keep running. If the new version doesn’t start, the current one is restored automatically.',
+            ]
+              .filter(Boolean)
+              .join(' ')}
+          </SectionFooter>
+        </>
+      )}
+
+      {available && !(s.latest!.releases && s.latest!.releases.length > 0) && (
         <section>
           <SectionHeader>
             {s.latest!.label}
@@ -464,6 +539,8 @@ export const SoftwareUpdateSheet: React.FC<SoftwareUpdateSheetProps> = ({ open, 
           </SectionFooter>
         </section>
       )}
+
+      {!available && s.currentRelease && <ReleaseCard r={s.currentRelease} title={`What’s New in ${s.currentRelease.version}`} />}
 
       {s.supported && (
         <section>
