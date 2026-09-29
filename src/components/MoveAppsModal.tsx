@@ -39,6 +39,8 @@ interface MoveAppsModalProps {
   isOpen: boolean;
   onClose: () => void;
   containers: DeepContainerMetadata[];
+  /** Databases and caches, by id, mapped to the app they belong to: they move with it and aren't listed */
+  linkedTo?: Map<string, string>;
   emptyStacks?: EmptyComposeStack[];
   /** Folder new stacks go in by default (reported by the server) */
   defaultStacksDir?: string;
@@ -96,7 +98,7 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? o
 const listJoin = (items: string[]) =>
   items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
 
-const appName = (a: DeepContainerMetadata) => (a.customName || a.cleanName || '').replace(/^\//, '');
+const appName = (a: DeepContainerMetadata) => (a.customName || a.friendlyName || a.cleanName || '').replace(/^\//, '');
 
 const ShieldGlyph: React.FC<{ off?: boolean }> = ({ off }) => (
   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -121,6 +123,7 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
   isOpen,
   onClose,
   containers,
+  linkedTo,
   emptyStacks = [],
   defaultStacksDir,
   initialDestination,
@@ -154,7 +157,12 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
   // ---------------------------------------------------------------------------
   // Derived data
   // ---------------------------------------------------------------------------
-  const apps = useMemo(() => containers.filter((c) => !isManifexusContainer(c)), [containers]);
+  const apps = useMemo(() => containers.filter((c) => !isManifexusContainer(c) && !linkedTo?.has(c.id)), [containers, linkedTo]);
+  // What actually moves: the chosen apps plus their databases and caches
+  const withLinked = useCallback(
+    (ids: string[]) => [...ids, ...Array.from(linkedTo || []).filter(([, parent]) => ids.includes(parent)).map(([id]) => id)],
+    [linkedTo]
+  );
   const appById = useMemo(() => new Map(apps.map((a) => [a.id, a])), [apps]);
 
   const stacks = useMemo<StackInfo[]>(() => {
@@ -281,7 +289,7 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        sourceContainerIds: selected,
+        sourceContainerIds: withLinked(selected),
         targetStackName: destName,
         targetDirectory: destDir,
         mode: destination.kind === 'existing' ? 'existing-stack' : 'new-stack',
@@ -367,7 +375,7 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
     if (!plan) return;
     setPage('progress');
     void move.start('/api/stacks/execute-merge-stream', {
-      sourceContainerIds: selected,
+      sourceContainerIds: withLinked(selected),
       targetStackName: plan.targetStackName,
       targetDirectory: plan.targetDirectory,
       yamlContent: plan.generatedComposeYaml,
@@ -857,7 +865,7 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
     </section>
   );
 
-  const movingNames = selectedApps.map((a) => a.compose?.service || a.cleanName);
+  const movingNames = selectedApps.map(appName);
   const movingLabel = movingNames.length <= 2 ? movingNames.join(' and ') : `${movingNames.length} apps`;
   const progressPage = (
     <ProgressView

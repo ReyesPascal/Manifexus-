@@ -170,6 +170,7 @@ function stackNames(r: MergeHistoryRecord): string[] {
 }
 
 function appNames(r: MergeHistoryRecord): string[] {
+  if (r.appLabels?.length) return r.appLabels;
   const moved = (r.movedServices || []).flatMap((m) => m.services);
   const standalone = (r.standaloneApps || []).map((a) => a.name);
   if (moved.length || standalone.length) return Array.from(new Set([...moved, ...standalone]));

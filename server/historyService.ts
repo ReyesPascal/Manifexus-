@@ -57,6 +57,8 @@ export interface MergeHistoryRecord {
   recreatedApps?: string[];
   /** Moves: apps that were standalone (docker run) containers, with everything needed to recreate them */
   standaloneApps?: { name: string; spec: Record<string, unknown> }[];
+  /** The apps' names as the dashboard shows them ("nextcloud"), without their databases */
+  appLabels?: string[];
   /** The Activity record of the change (full log) */
   activityId?: string;
   /** Keep this backup forever (never removed by the keep-for setting) */

@@ -708,6 +708,8 @@ export function parseRawContainer(inspectData: any): DeepContainerMetadata {
     compose,
     networks,
     ipAddress,
+    // Every network address, so Manifexus can reach the app on whichever network it shares
+    ipAddresses: Object.values(inspectData.NetworkSettings?.Networks || {}).map((n) => (n as { IPAddress?: string }).IPAddress || '').filter(Boolean),
     restartPolicy: inspectData.HostConfig?.RestartPolicy?.Name || 'no',
     iconUrl: resolveAppIcon(cleanName, image),
   };

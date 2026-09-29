@@ -29,6 +29,8 @@ const PROBE_FAILED_EVERY = 3 * 60 * 1000;
 const PROJECT_EVERY = 24 * HOUR;
 const RELEASE_EVERY = 6 * HOUR;
 const ICON_RETRY = 24 * HOUR;
+/** Raised when the icon search gets better, so apps without a good icon are looked up again */
+const ICON_VERSION = 3;
 
 interface PortProbe {
   web: boolean;
@@ -59,6 +61,10 @@ interface IconInfo {
   source?: string;
   /** The app's web page had been checked when this lookup ran */
   hadProbes?: boolean;
+  /** Which version of the search found it (an older, less thorough search is run again) */
+  v?: number;
+  /** The app's GitHub project was known when this lookup ran */
+  hadProject?: boolean;
   at: number;
 }
 
@@ -188,8 +194,9 @@ function pageIcons(html: string, base: string): string[] {
 }
 
 async function probePort(c: DeepContainerMetadata, privatePort: number, publicPort: number): Promise<PortProbe> {
+  const ips = Array.from(new Set([c.ipAddress, ...(c.ipAddresses || [])].filter(Boolean)));
   const bases = [
-    ...(c.ipAddress ? [`http://${c.ipAddress}:${privatePort}`] : []),
+    ...ips.map((ip) => `http://${ip}:${privatePort}`),
     ...hostCandidates.map((h) => `http://${h}:${publicPort}`),
   ];
   for (const base of bases) {
@@ -524,6 +531,42 @@ async function tryIcon(url: string): Promise<{ body: Buffer; ext: string } | und
 
 const iconKey = (c: DeepContainerMetadata) => (imageSlug(c.image) || c.cleanName).replace(/[^a-z0-9-]/gi, '_');
 
+/** A project's logo from GitHub: the first real picture in its README, or a logo file where projects usually keep one */
+async function projectLogo(repo: string): Promise<{ got: { body: Buffer; ext: string }; url: string } | undefined> {
+  const raw = (p: string) => `https://raw.githubusercontent.com/${repo}/HEAD/${p.replace(/^\.?\//, '')}`;
+  const candidates: string[] = [];
+  try {
+    const r = await get(raw('README.md'), { timeoutMs: 8000, maxBytes: 200 * 1024 });
+    if (r.status === 200) {
+      const head = r.body.toString('utf8').split('\n').slice(0, 40).join('\n');
+      const srcs = [...head.matchAll(/<img[^>]+src=["']([^"']+)["']/gi), ...head.matchAll(/!\[[^\]]*\]\(([^)\s]+)/g)].map((m) => m[1]);
+      for (const src of srcs) {
+        if (/shields\.io|badge|user-attachments|screenshot|preview|demo|\.gif(\?|$)/i.test(src)) continue;
+        if (/^https?:\/\//i.test(src)) {
+          if (/raw\.githubusercontent\.com|github\.com\/[^/]+\/[^/]+\/(raw|blob)\//i.test(src)) candidates.push(src.replace('/blob/', '/raw/'));
+        } else candidates.push(raw(src));
+      }
+    }
+  } catch {
+    // no README
+  }
+  for (const f of ['logo.svg', 'logo.png', 'icon.svg', 'icon.png', 'assets/logo.svg', 'assets/logo.png', 'assets/icon.png', 'docs/logo.png', 'docs/logo.svg', '.github/logo.png', 'public/logo.svg', 'public/logo.png', 'public/icon.svg', 'ui/public/pwa-icon.svg', 'frontend/public/logo.svg', 'static/logo.png'])
+    candidates.push(raw(f));
+  for (const url of Array.from(new Set(candidates)).slice(0, 20)) {
+    const got = await tryIcon(url);
+    if (got && got.ext !== 'ico') return { got, url };
+  }
+  return undefined;
+}
+
+/** The largest picture in an .ico file (0 in the header means 256) */
+function icoWidth(b: Buffer): number {
+  const n = b.length >= 6 ? b.readUInt16LE(4) : 0;
+  let max = 0;
+  for (let i = 0; i < n && 6 + i * 16 < b.length; i++) max = Math.max(max, b[6 + i * 16] || 256);
+  return max;
+}
+
 async function findIcon(c: DeepContainerMetadata): Promise<IconInfo> {
   const key = iconKey(c);
   const store = (got: { body: Buffer; ext: string }, source: string): IconInfo => {
@@ -531,31 +574,40 @@ async function findIcon(c: DeepContainerMetadata): Promise<IconInfo> {
     const file = `${key}.${got.ext}`;
     for (const f of fs.readdirSync(ICON_DIR)) if (f.startsWith(`${key}.`) && f !== file) fs.rmSync(path.join(ICON_DIR, f), { force: true });
     fs.writeFileSync(path.join(ICON_DIR, file), got.body);
-    return { file, source, at: Date.now() };
+    return { file, source, at: Date.now(), v: ICON_VERSION };
   };
-  // 1. The community icon sets, by name
+  // 1. The app's own icon: the one its page shows in the browser tab. When the page offers a bigger
+  //    version (apple-touch-icon, an SVG), that's used so it stays sharp. The standard icon files are
+  //    tried too, for pages that aren't plain HTML (a redirect, a JSON home page).
+  const bases = c.ports.map((p) => state.probes[probeKey(c, p.privatePort)]).filter((p) => p?.reached && p.base);
+  let small: { got: { body: Buffer; ext: string }; url: string } | undefined;
+  for (const p of bases) {
+    const urls = [...(p!.icons || []), ...['/apple-touch-icon.png', '/apple-touch-icon-180x180.png', '/favicon.svg', '/icon.svg', '/logo.svg', '/logo.png', '/favicon.png', '/favicon.ico'].map((f) => p!.base + f)];
+    for (const url of Array.from(new Set(urls))) {
+      const got = await tryIcon(url);
+      if (!got) continue;
+      // A tiny favicon (16 or 32 px) would look blurry on the card: keep it only if nothing sharper turns up
+      if (got.ext === 'ico' && icoWidth(got.body) < 48) {
+        if (!small) small = { got, url };
+        continue;
+      }
+      return store(got, url);
+    }
+  }
+  // 2. The community icon sets, by name
   for (const slug of iconSlugs(c)) {
     for (const make of ICON_SETS) {
       const got = await tryIcon(make(slug));
       if (got) return store(got, make(slug));
     }
   }
-  // 2. The icon the app's own web page uses (skipping tiny favicons unless nothing else is found)
-  const probes = c.ports.map((p) => state.probes[probeKey(c, p.privatePort)]).filter((p) => p?.web && p.icons?.length);
-  let small: { got: { body: Buffer; ext: string }; url: string } | undefined;
-  for (const p of probes) {
-    for (const url of p!.icons!) {
-      const got = await tryIcon(url);
-      if (!got) continue;
-      if (got.ext === 'ico' && !small) {
-        small = { got, url };
-        continue;
-      }
-      return store(got, url);
-    }
-  }
-  // 3. The project's GitHub organization picture, when the organization is the app (jellyfin/jellyfin)
+  // 3. The project's own logo: the picture at the top of its README, or a logo file in the usual places
   const repo = projectInfo(c)?.repo;
+  if (repo) {
+    const logo = await projectLogo(repo);
+    if (logo) return store(logo.got, logo.url);
+  }
+  // 4. The project's GitHub organization picture, when the organization is the app (jellyfin/jellyfin)
   if (repo) {
     const [owner, name] = repo.split('/');
     const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -564,8 +616,9 @@ async function findIcon(c: DeepContainerMetadata): Promise<IconInfo> {
       if (got) return store(got, `https://github.com/${owner}`);
     }
   }
+  // 5. The small tab icon after all
   if (small) return store(small.got, small.url);
-  return { at: Date.now(), hadProbes: probes.length > 0 || c.ports.some((p) => state.probes[probeKey(c, p.privatePort)]) };
+  return { at: Date.now(), v: ICON_VERSION, hadProject: Boolean(repo), hadProbes: c.ports.some((p) => state.probes[probeKey(c, p.privatePort)]) };
 }
 
 const iconing = new Set<string>();
@@ -575,10 +628,15 @@ export function refreshIcons(containers: DeepContainerMetadata[]) {
     const k = iconKey(c);
     const prev = state.icons[k];
     if (iconing.has(k)) continue;
-    if (prev?.file && fs.existsSync(path.join(ICON_DIR, prev.file))) continue;
+    // Keep a found icon, unless an older search found it (the app's own icon now comes first)
+    if (prev?.file && fs.existsSync(path.join(ICON_DIR, prev.file)) && prev.v === ICON_VERSION) continue;
+    // Wait for the app's web page to be checked first, so its own icon gets its chance
+    const waiting = c.state === 'running' && c.ports.some((p) => p.type === 'tcp' && p.publicPort) && !c.ports.some((p) => state.probes[probeKey(c, p.privatePort)]);
+    if (waiting && (!prev || prev.v !== ICON_VERSION)) continue;
     // Nothing found yet: look again once the web page has been checked, then once a day
     const probed = c.ports.some((p) => state.probes[probeKey(c, p.privatePort)]);
-    if (prev && !(probed && !prev.hadProbes) && Date.now() - prev.at < ICON_RETRY) continue;
+    const knownProject = Boolean(projectInfo(c)?.repo);
+    if (prev && !prev.file && prev.v === ICON_VERSION && !(probed && !prev.hadProbes) && !(knownProject && !prev.hadProject) && Date.now() - prev.at < ICON_RETRY) continue;
     iconing.add(k);
     jobs.push(async () => {
       try {
@@ -636,3 +694,7 @@ export function friendlyName(c: DeepContainerMetadata, title?: string): string {
   if (/^(app|web|server|main|frontend|backend|ui|application)$/i.test(service) && slug) return slug;
   return service || c.cleanName;
 }
+
+/** Databases, caches and similar parts that serve another app */
+export const isHelperImage = (image: string) =>
+  /(^|\/)(mariadb|mysql|postgres(ql)?|postgis|pgvecto-rs|timescaledb|redis|valkey|keydb|dragonfly|mongo(db)?|memcached|elasticsearch|opensearch|clamav|rabbitmq|influxdb|cassandra|etcd|minio|couchdb|nats|mosquitto)([:@-]|$)/i.test((image || '').split('@')[0]);

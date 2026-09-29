@@ -20,7 +20,7 @@ interface PortEntry {
   localOnly: boolean;
 }
 
-const appName = (a: DeepContainerMetadata) => (a.customName || a.cleanName || '').replace(/^\//, '');
+const appName = (a: DeepContainerMetadata) => (a.customName || a.friendlyName || a.cleanName || '').replace(/^\//, '');
 
 const ROLE_TEXT: Record<string, string> = {
   p2p: 'Peer traffic',

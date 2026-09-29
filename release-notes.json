@@ -2,9 +2,9 @@
   "_about": "What's new in each version of Manifexus, newest first. Shown in Updates. Write for people, not developers: short, plain sentences about what they can now do. The newest entry's version is what gets built and tagged; older entries can give the \"commit\" they were released from.",
   "releases": [
     {
-      "version": "1.1",
-      "date": "2026-09-28",
-      "headline": "Fix problems in one tap: automatically, step by step yourself, or with a private AI built into Manifexus.",
+      "version": "1.5",
+      "date": "2026-09-29",
+      "headline": "A fresh, calmer dashboard, and problems fixed in one tap: automatically, step by step yourself, or with a private AI.",
       "new": [
         "A fresh, calmer dashboard. Every stack is one clean panel with its apps inside, showing at a glance whether everything is running. Tap a stack's name to fold it away.",
         "Stack actions. Each stack's ⋯ menu can Start, Restart or Stop all its apps, edit its compose file, or open the new Stack Details screen.",
@@ -16,14 +16,7 @@
         "Fix This. Every problem in Diagnostics' To Fix list now has three ways to fix it: Fix Automatically, Fix It Myself or Fix with AI.",
         "Fix Automatically. For problems Manifexus knows the answer to (a settings path without its leading /, an app listed in two stacks, an app that's stopped or unhealthy) it prepares the change itself, no AI needed. You see it first, and it's backed up and saved in Restore.",
         "Fix It Myself. Step-by-step instructions for every problem, with the exact commands to copy and buttons for the Manifexus screens that do each step. When you're done, Check Again confirms it's fixed.",
-        "Fix with AI. For everything else, a private AI built into Manifexus looks into the problem and proposes a fix. It runs on your own server: free, private, and nothing leaves your network.",
-        "Picked for your server. Manifexus checks your memory, processor and graphics card, and recommends AI models that fit without slowing your apps down.",
-        "Downloads that don't give up. If the connection drops, the AI download picks up where it stopped, even after a restart. Every download is checked before it's used.",
-        "You're always in control. Every change is shown to you first, with a before and after of every file. It's backed up, and you can undo it from Restore.",
-        "Choose how much the AI may do on its own: Look Only, Ask Before Changes, Fix Routine Things or Expert.",
-        "Learn how it's done. Turn on Show Commands (or choose Advanced in Settings) to see the command behind every step, with what each part means right beside it, no extra taps.",
-        "Do It Myself. Every fix can be done by hand instead, one step at a time, with the terminal a tap away.",
-        "Activity → Commands. A learning log of every command behind your recent changes, and Show Commands on every activity puts them right under each step."
+        "Fix with AI. For everything else, a private AI built into Manifexus looks into the problem and proposes a fix. It runs on your own server: free, private, and nothing leaves your network."
       ],
       "improved": [
         "Running, Stopped, Stacks and Ports now live in the header. Tap Running or Stopped to show only those apps, or Ports to see which app uses each port.",
@@ -46,7 +39,6 @@
         "Much faster fixes. Manifexus looks up the obvious things (the file or app in question) before the AI starts, and small file changes are written as a one-line edit instead of the whole file, so a fix like a wrong setting takes one AI round instead of several.",
         "Choose Automatically (in Settings → Built-in AI, on by default). Each problem gets the right model and amount of thinking: simple ones stay quick, tricky ones go to the fixer and think it through, and if the quick helper gets stuck the fixer takes over. The fixer only runs when there's enough free memory at that moment.",
         "The AI's explanations appear all at once when they're ready, nicely formatted: numbered steps, code blocks with a Copy button, tables and highlighted names and paths.",
-        "Updates now show version numbers and notes like these, instead of build codes.",
         "Activity has new Fixes and Fix with AI filters."
       ],
       "fixed": [
@@ -58,11 +50,35 @@
         "The progress line no longer claims the AI has finished reading when it hasn't. Past the time estimate, it says so and keeps a moving bar.",
         "The AI's look at recent Activity shows the real error messages instead of \"[object Object]\".",
         "Removing an AI model no longer shows \"Unexpected end of JSON input\" when it actually worked, and tapping Remove on a model that's already gone isn't an error.",
-        "AI fixes no longer stay \"In progress\" in Activity forever. Each ends as done, failed (with the reason) or stopped.",
+        "AI fixes no longer stay \"In progress\" in Activity forever. Each ends as done, failed (with the reason) or stopped."
+      ]
+    },
+    {
+      "version": "1.1",
+      "date": "2026-09-28",
+      "headline": "Meet Ask Manifexus: a private AI, built in, that can look into problems and fix them with your OK.",
+      "new": [
+        "Ask Manifexus. Tap Ask in the header and ask anything about your apps: why something stopped, what changed, what's using the most memory.",
+        "It runs on your own server. It's free and private, and nothing leaves your network.",
+        "Picked for your server. Manifexus checks your memory, processor and graphics card, and recommends AI models that fit without slowing your apps down.",
+        "Downloads that don't give up. If the connection drops, the AI download picks up where it stopped, even after a restart. Every download is checked before it's used.",
+        "Fix with AI. One tap from the To Fix list in Diagnostics, and it works out what's wrong.",
+        "You're always in control. Every change is shown to you first, with a before and after of every file. It's backed up, and you can undo it from Restore.",
+        "Choose how much it may do on its own: Look Only, Ask Before Changes, Fix Routine Things or Expert.",
+        "Learn how it's done. Turn on Show Commands (or choose Advanced in Settings) to see the command behind every step, with a plain explanation of each part.",
+        "Do It Myself. Every AI fix can be done by hand instead, one step at a time, with the terminal a tap away.",
+        "Activity → Commands. A learning log of every command behind your recent changes, and How It Was Done on every activity."
+      ],
+      "improved": [
+        "Updates now show version numbers and notes like these, instead of build codes.",
+        "Activity has a new Fixes filter."
+      ],
+      "fixed": [
         "On phones, the dashboard no longer shifts sideways by a few pixels.",
         "If an AI model can't download, you get a clear reason and a Try Again button.",
         "Updating Manifexus keeps your settings, history, backups and AI models, even if no data folder was set up. Diagnostics now tells you if one is missing."
-      ]
+      ],
+      "commit": "89e6bdb"
     },
     {
       "version": "1.0",

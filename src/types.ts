@@ -47,6 +47,7 @@ export interface DeepContainerMetadata {
   compose: ComposeMetadata;
   networks: string[];
   ipAddress?: string;
+  ipAddresses?: string[];
   restartPolicy?: string;
   iconUrl?: string;
   /** Where the icon came from (an icon set, the app's own page, GitHub) */

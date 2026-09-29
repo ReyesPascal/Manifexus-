@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { DeepContainerMetadata, UserGroup } from '../types';
 import { MenuButton, MenuItem } from './ui/ios';
-import { helperKind, helperProduct } from '../appHelpers';
+import { helperKind } from '../appHelpers';
 
 interface AppCardProps {
   container: DeepContainerMetadata;
@@ -30,9 +30,24 @@ const STATE: Record<string, { label: string; color: string }> = {
 
 /** The app's icon, or its initials on a tinted tile when there's no icon */
 export const AppIcon: React.FC<{ container: DeepContainerMetadata; size?: number }> = ({ container, size = 48 }) => {
-  const [failed, setFailed] = useState<string>();
+  const [failed, setFailed] = useState<string[]>([]);
   const name = container.customName || container.friendlyName || container.cleanName;
-  const url = container.iconUrl && failed !== container.iconUrl ? container.iconUrl : undefined;
+  // Where to look, best first: the icon Manifexus saved, then the app's own icon files, fetched by
+  // this browser straight from the app's web page (the same icon its browser tab shows)
+  const candidates = useMemo(() => {
+    const list: string[] = [];
+    // An icon Manifexus found (or you chose) comes first
+    if (container.iconUrl && container.iconSource) list.push(container.iconUrl);
+    // Otherwise the app's own icon, as its browser tab shows it
+    if (container.webPort && typeof window !== 'undefined') {
+      const base = container.customUrl ? container.customUrl.replace(/\/+$/, '') : `http://${window.location.hostname}:${container.webPort}`;
+      for (const f of ['/apple-touch-icon.png', '/apple-touch-icon-180x180.png', '/favicon.svg', '/favicon.ico']) list.push(base + f);
+    }
+    // Then a guess from the icon sets
+    if (container.iconUrl && !container.iconSource) list.push(container.iconUrl);
+    return list;
+  }, [container.iconUrl, container.iconSource, container.webPort, container.customUrl]);
+  const url = candidates.find((u) => !failed.includes(u));
   const initials = name
     .replace(/[-_]+/g, ' ')
     .split(' ')
@@ -56,7 +71,7 @@ export const AppIcon: React.FC<{ container: DeepContainerMetadata; size?: number
       }}
     >
       {url ? (
-        <img src={url} alt="" onError={() => setFailed(url)} referrerPolicy="no-referrer" className="object-contain" style={{ width: size * 0.72, height: size * 0.72 }} />
+        <img src={url} alt="" onError={() => setFailed((f) => [...f, url])} onLoad={(e) => (e.currentTarget.naturalWidth < 8 ? setFailed((f) => [...f, url]) : undefined)} referrerPolicy="no-referrer" className="object-contain" style={{ width: size * 0.72, height: size * 0.72 }} />
       ) : (
         <span className="font-semibold text-white/90" style={{ fontSize: size * 0.36, letterSpacing: '0.02em' }}>
           {initials || '?'}
@@ -65,14 +80,6 @@ export const AppIcon: React.FC<{ container: DeepContainerMetadata; size?: number
     </div>
   );
 };
-
-const DbGlyph = () => (
-  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" aria-hidden>
-    <ellipse cx="12" cy="5.5" rx="7.5" ry="2.8" />
-    <path d="M4.5 5.5v13c0 1.5 3.4 2.8 7.5 2.8s7.5-1.3 7.5-2.8v-13" />
-    <path d="M4.5 12c0 1.5 3.4 2.8 7.5 2.8s7.5-1.3 7.5-2.8" />
-  </svg>
-);
 
 const OpenGlyph = () => (
   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -123,8 +130,6 @@ export const AppCard: React.FC<AppCardProps> = ({ container, inStack, helpers = 
   const act = async (a: 'start' | 'stop' | 'restart') => {
     setActing(a);
     try {
-      // Starting the app starts its database and cache first
-      if (a === 'start' || a === 'restart') await Promise.all(downHelpers.map((h) => onAction(h.id, 'start')));
       await onAction(container.id, a);
     } finally {
       setActing(undefined);
@@ -181,17 +186,6 @@ export const AppCard: React.FC<AppCardProps> = ({ container, inStack, helpers = 
         <div className={running ? '' : 'opacity-60 grayscale-[35%]'}>
           <AppIcon container={container} size={48} />
         </div>
-        {helpers.length > 0 && (
-          <span
-            className="absolute left-[32px] top-[30px] w-[22px] h-[22px] rounded-full flex items-center justify-center"
-            style={{ background: '#2c2c2e', boxShadow: '0 0 0 2.5px #1b1b1e', color: downHelpers.length ? '#FF9F0A' : 'rgba(235,235,245,0.75)' }}
-            title={helpers.map((h) => `${helperKind(h)} linked: ${helperProduct(h)} (${h.state === 'running' ? 'running' : 'stopped'})`).join('\n')}
-            role="img"
-            aria-label={helpers.map((h) => `${helperKind(h)} linked, ${h.state === 'running' ? 'running' : 'stopped'}`).join('. ')}
-          >
-            <DbGlyph />
-          </span>
-        )}
         <div className="flex-1 min-w-0">
           <h3 className="text-[16px] leading-[21px] font-semibold text-white truncate" title={name}>
             {name}

@@ -1,3 +1,4 @@
+import { friendlyName, isHelperImage } from './appIdentity';
 import fs from 'fs';
 import path from 'path';
 import { exec } from 'child_process';
@@ -291,7 +292,8 @@ export async function executeStreamingPipeline(
     emit({ type: 'step_update', mergeId, stepIndex, stepId, stepName, status, durationMs, timestamp: new Date().toISOString() });
   };
 
-  const movingNames = movingContainers.map((c) => c.compose?.service || c.cleanName);
+  // As the dashboard names them ("nextcloud"), leaving out their databases and caches
+  const movingNames = Array.from(new Set(movingContainers.filter((c) => !isHelperImage(c.image) || movingContainers.every((x) => isHelperImage(x.image))).map((c) => friendlyName(c))));
   setActivityTitle(
     `Move ${movingNames.length <= 3 ? movingNames.join(', ').replace(/, ([^,]*)$/, ' and $1') : `${movingNames.length} apps`} into ${req.targetStackName}`
   );
@@ -438,7 +440,10 @@ export async function executeStreamingPipeline(
       record.type = 'MERGE';
       record.activityId = currentActivityId();
       record.standaloneApps = standaloneApps;
-      record.summary = `Moved ${movingContainers.map((c) => c.cleanName).join(', ')} into "${req.targetStackName}"`;
+      // Name the apps as the dashboard does, leaving out their databases and caches
+      const mains = movingContainers.filter((c) => !isHelperImage(c.image) || movingContainers.every((x) => isHelperImage(x.image)));
+      record.appLabels = Array.from(new Set(mains.map((c) => friendlyName(c))));
+      record.summary = `Moved ${record.appLabels.join(', ')} into "${req.targetStackName}"`;
       record.movedServices = Array.from(sourceGroups.values()).map((g) => ({
         project: g.project,
         workingDir: g.workingDir,

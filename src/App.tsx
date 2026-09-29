@@ -284,12 +284,15 @@ export default function App() {
     containerId: string,
     action: 'start' | 'stop' | 'restart'
   ) => {
+    const call = (id: string, a: 'start' | 'stop' | 'restart') =>
+      fetch(`/api/containers/${id}/action`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: a }) });
     try {
-      const res = await fetch(`/api/containers/${containerId}/action`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action }),
-      });
+      // An app and its database or cache are one: they start, stop and restart together.
+      // Linked parts start before the app, and stop after it.
+      const linked = helpersOf.get(containerId) || [];
+      if (action !== 'stop') await Promise.all(linked.map((h) => call(h.id, action === 'restart' && h.state !== 'running' ? 'start' : action)));
+      const res = await call(containerId, action);
+      if (action === 'stop') await Promise.all(linked.map((h) => call(h.id, 'stop')));
       // Refresh either way: a failed action can still have changed the app's state.
       // Failures are recorded in Activity, which lights up its badge.
       await fetchData(true);
@@ -1059,6 +1062,7 @@ export default function App() {
         isOpen={isMergeModalOpen}
         onClose={() => setIsMergeModalOpen(false)}
         containers={containers}
+        linkedTo={helperOf}
         emptyStacks={emptyStacks}
         defaultStacksDir={defaultStacksDir}
         initialDestination={moveInitialDestination}

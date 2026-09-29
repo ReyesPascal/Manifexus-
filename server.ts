@@ -328,6 +328,8 @@ async function startServer() {
 
   // Addresses that reach published ports from inside Manifexus: its network gateways and the host address
   let hostsAt = 0;
+  // The address people open Manifexus with (e.g. 192.168.1.20): the server's apps answer there too
+  let seenHost = '';
   const identityHosts = async () => {
     if (Date.now() - hostsAt < 10 * 60 * 1000) return;
     hostsAt = Date.now();
@@ -335,7 +337,7 @@ async function startServer() {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const nets = Object.values((self?.inspect as any)?.NetworkSettings?.Networks || {}) as { Gateway?: string }[];
     const host = getConfig().hostAddress;
-    setHostCandidates([...nets.map((n) => n.Gateway || ''), 'host.docker.internal', host && host !== 'localhost' ? host : '', '127.0.0.1']);
+    setHostCandidates([...nets.map((n) => n.Gateway || ''), '172.17.0.1', 'host.docker.internal', host && host !== 'localhost' ? host : '', seenHost, '127.0.0.1']);
   };
 
   // App icons found by Manifexus (saved in /data/apps/icons)
@@ -391,6 +393,11 @@ async function startServer() {
         };
       });
 
+      const h = String(req.hostname || '');
+      if (h && h !== 'localhost' && h !== '127.0.0.1' && h !== seenHost) {
+        seenHost = h;
+        hostsAt = 0;
+      }
       // Look up web pages, project pages and icons in the background; they show on the next refresh
       void identityHosts().then(() => refreshIdentity(containers.filter((c) => !isManifexusContainer(c))));
 
