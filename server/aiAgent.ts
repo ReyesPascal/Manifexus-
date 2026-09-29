@@ -671,6 +671,10 @@ async function runModel(o: { model: string; convo: Msg[]; tools?: ToolDef[]; thi
   const readTokens = Math.max(1, newChars / (sp.charsPerToken || 3.6));
   const loadSecs = loaded ? 0 : sp.loadSecs || 8;
   const readSecs = readTokens / sp.prefill;
+  // Writing counts too: what this model usually writes in a round here (a lookup request, a change,
+  // or an answer), which it only hands over once complete. Thinking adds its thoughts.
+  const writeTokens = o.think ? sp.outThinking || 350 : sp.out || 90;
+  const writeSecs = writeTokens / sp.gen;
   const step = ui.step(`${name} · ${thinkLabel(o.think)}`, 'model', o.purpose);
 
   const t0 = Date.now();
@@ -685,6 +689,7 @@ async function runModel(o: { model: string; convo: Msg[]; tools?: ToolDef[]; thi
     const now = Date.now();
     const el = (now - t0) / 1000;
     const readBy = loadSecs + readSecs;
+    const doneBy = readBy + writeSecs;
     if (thought && !text && now - last < 3000) {
       const w = words(thought.length / (sp.charsPerToken || 3.6));
       return ui.phase({ label: 'Thinking it through', detail: `${w === 1 ? '1 word' : `${nice(w)} words`} of thinking so far · about ${Math.max(1, Math.round(sp.gen * 0.75))} words a second on your server` });
@@ -702,22 +707,31 @@ async function runModel(o: { model: string; convo: Msg[]; tools?: ToolDef[]; thi
     }
     if (el < loadSecs) {
       const size = catalogModel(o.model)?.downloadBytes;
-      return ui.phase({ label: `Loading ${name} into memory`, detail: `${size ? `${(size / 1e9).toFixed(1)} GB from disk. ` : ''}Only the first answer in a while waits for this.`, progress: el / readBy, eta: readBy - el });
+      return ui.phase({ label: `Loading ${name} into memory`, detail: `${size ? `${(size / 1e9).toFixed(1)} GB from disk. ` : ''}Only the first answer in a while waits for this.`, progress: el / doneBy, eta: doneBy - el });
     }
     const what = `${wordsText(readTokens)}${continuing ? ' that are new to it (it remembers the rest)' : ', including its instructions'}`;
+    const measured = sp.samples ? '' : ' (estimated)';
     if (el < readBy) {
       return ui.phase({
         label: o.purpose,
-        detail: `${what} · about ${nice(Math.round(sp.prefill * 0.75))} words a second on your server${sp.samples ? '' : ' (estimated)'}`,
-        progress: Math.min(0.97, el / readBy),
-        eta: Math.max(1, readBy - el),
+        detail: `Reading ${what} · about ${nice(Math.round(sp.prefill * 0.75))} words a second on your server${measured}`,
+        progress: Math.min(0.97, el / doneBy),
+        eta: Math.max(1, doneBy - el),
+      });
+    }
+    if (el < doneBy) {
+      return ui.phase({
+        label: o.think ? 'Thinking it through' : 'Writing its next step',
+        detail: `${o.think ? 'Thinking, then writing' : 'Writing'} a lookup, a change or the answer · about ${Math.max(1, Math.round(sp.gen * 0.75))} words a second on your server${measured}. It shows once it’s complete.`,
+        progress: Math.min(0.97, el / doneBy),
+        eta: Math.max(1, doneBy - el),
       });
     }
     // Past the estimate with nothing back yet. The engine reports nothing until it has words to show
     // or its next step is complete, so say honestly that it could be either, and keep the bar moving.
     return ui.phase({
       label: 'Still working on it',
-      detail: `Taking longer than the ${secsText(readBy)} estimate (${secsText(el - readBy)} over). It’s still reading ${what}, or already writing its next step; the engine only reports once that’s done.`,
+      detail: `Taking longer than the ${secsText(doneBy)} estimate (${secsText(el - doneBy)} over). It’s still reading ${what}, or writing its next step; the engine only reports once that’s done. The estimate improves with every answer.`,
       progress: -1,
     });
   };
@@ -749,7 +763,7 @@ async function runModel(o: { model: string; convo: Msg[]; tools?: ToolDef[]; thi
   } finally {
     clearInterval(timer);
   }
-  recordSpeed(o.model, stats, { promptChars, expectedNewChars: newChars, fresh: !continuing });
+  recordSpeed(o.model, stats, { promptChars, expectedNewChars: newChars, fresh: !continuing, thinking: Boolean(o.think) });
   lastCall = { model: o.model, text: promptText(o.tools, [...o.convo, { role: 'assistant', content: text, ...(calls.length ? { tool_calls: calls } : {}) }]), at: Date.now() };
   const read = stats.prompt_eval_count || readTokens;
   // Where the words went, so it's clear what makes a question slow to read

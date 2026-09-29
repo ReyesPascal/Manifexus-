@@ -18,6 +18,11 @@
         "Activity → Commands. A learning log of every command behind your recent changes, and How It Was Done on every activity."
       ],
       "improved": [
+        "Smarter AI recommendations for every server. Setup measures your server's memory speed in a second or two, combines it with its processor, graphics card and free memory, and recommends the smartest model that answers in a reasonable time there, with the reason and the expected answer time. Usually that's one model: a second is only suggested when it would be clearly faster.",
+        "Estimates that learn your server. Every answer measures how fast the model really reads and writes on your server, and corrects the estimates for the other models too, so recommendations and progress times get more accurate the more you use it.",
+        "Progress while the AI works now counts the whole step (loading, reading and writing), not just reading, so the time left is much closer to reality.",
+        "Removing every AI model starts setup again from the beginning, with fresh recommendations.",
+        "Faster reading of long questions, and less memory used while the AI works.",
         "The AI reads much less before answering, so answers start sooner: logs are boiled down to errors, warnings and the latest lines with repeats merged (a noisy 31,000-character log becomes a few lines), settings files show only the lines around the setting in question, Diagnostics only shows problems, and its own instructions are shorter. The fix for a broken setting now reads about 40% less.",
         "Each AI step shows what it read: its instructions, the conversation, and what it looked up.",
         "A new setup for Ask Manifexus. The first time you tap Ask or Fix with AI, a few short steps walk you through it: pick the AI models (picked for your server), what it may do, what it may look at, and how hard it thinks. The download starts as soon as you pick the models and keeps going while you choose the rest.",
@@ -33,6 +38,7 @@
         "Activity has a new Fixes filter."
       ],
       "fixed": [
+        "Undo Fix no longer says it failed when it actually put the file back.",
         "Ask Manifexus no longer fails with \"fetch failed\" after 5 minutes when an answer takes a long time on a slow processor. If the AI engine really stops answering, you get a plain explanation.",
         "Questions wait until setup is completely finished (every model downloaded, tested and the everyday model loaded into memory), so the right model can be chosen and nothing else slows the answer down.",
         "The progress line no longer claims the AI has finished reading when it hasn't. Past the time estimate, it says so and keeps a moving bar.",

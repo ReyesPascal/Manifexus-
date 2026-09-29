@@ -84,7 +84,7 @@ export interface Status {
   };
   specs: Specs;
   budgetBytes: number;
-  recommended: { quick?: string; fixer?: string; note?: string };
+  recommended: { quick?: string; fixer?: string; note?: string; single?: boolean; reasons?: Record<string, string> };
   catalog: CatalogEntry[];
   installed: { id: string; bytes: number }[];
   downloads: Download[];

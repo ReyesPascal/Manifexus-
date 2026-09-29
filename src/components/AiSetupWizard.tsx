@@ -177,8 +177,8 @@ export function setupWizard(p: Props): { title: string; subtitle?: string; body:
       <div className="space-y-7">
         <Dots page={page} />
         <Header
-          title="Pick the AI Models"
-          sub="Two work best: a quick helper for most things, and a fixer for tricky problems. These are picked for your server; the fixer only runs when there’s memory free."
+          title="Pick the AI Model"
+          sub="Picked for your server from its processor, memory speed, graphics card and free memory. Usually one model is best; a second only helps when it’s clearly faster."
         />
         <section>
           <SectionHeader>Your Server</SectionHeader>
@@ -193,13 +193,55 @@ export function setupWizard(p: Props): { title: string; subtitle?: string; body:
           </Group>
           <SectionFooter>{s.gpuUsable ? 'The AI can use your graphics card, so it answers quickly.' : `The AI runs on the processor and keeps up to ${fmtGB(status.budgetBytes)} of memory for itself, so your apps never run short.`}</SectionFooter>
         </section>
+        {(() => {
+          const r = status.recommended;
+          const ids = Array.from(new Set([r.quick, r.single ? undefined : r.fixer].filter(Boolean) as string[]));
+          if (!ids.length) return null;
+          const on = choice.quick === r.quick && (r.single ? !choice.fixer : choice.fixer === r.fixer);
+          return (
+            <section>
+              <SectionHeader>Recommended for Your Server</SectionHeader>
+              <Group>
+                {ids.map((id) => {
+                  const m = byId.get(id);
+                  if (!m) return null;
+                  return (
+                    <Row
+                      key={id}
+                      title={
+                        <span className="flex items-center gap-2 flex-wrap">
+                          {m.name}
+                          {!r.single && <Badge>{id === r.quick ? 'Quick questions' : 'Harder problems'}</Badge>}
+                        </span>
+                      }
+                      subtitle={
+                        <span className="block whitespace-normal">
+                          {r.reasons?.[id] || m.blurb}
+                          <span className="block mt-0.5 tabular-nums" style={{ color: ios.tertiary }}>
+                            {fmtGB(m.downloadBytes)} download · {fmtGB(m.memoryBytes)} of memory while answering
+                          </span>
+                        </span>
+                      }
+                    />
+                  );
+                })}
+                <Row
+                  onClick={on ? undefined : () => p.setChoice({ quick: r.quick, fixer: r.single ? '' : r.fixer })}
+                  title={<span style={{ color: on ? ios.green : ios.blue }}>{on ? 'Selected' : 'Use the Recommendation'}</span>}
+                  trailing={on ? <Checkmark /> : undefined}
+                />
+              </Group>
+              {r.note && <SectionFooter>{r.note}</SectionFooter>}
+            </section>
+          );
+        })()}
         <section>
-          <SectionHeader>Quick Helper</SectionHeader>
+          <SectionHeader>Or Choose: Quick Helper</SectionHeader>
           <Group>{status.catalog.filter((m) => m.role === 'quick').map((m) => pick('quick', m))}</Group>
           <SectionFooter>Does most of the work: questions, lookups and simple fixes.</SectionFooter>
         </section>
         <section>
-          <SectionHeader>Fixer</SectionHeader>
+          <SectionHeader>Second Model for Harder Problems (Optional)</SectionHeader>
           <Group>
             {fixers.map((m) => pick('fixer', m))}
             <Row
@@ -207,7 +249,7 @@ export function setupWizard(p: Props): { title: string; subtitle?: string; body:
               ariaChecked={!choice.fixer}
               onClick={() => p.setChoice({ ...choice, fixer: '' })}
               title="None"
-              subtitle="The quick helper does everything. Smaller download, weaker on tricky problems."
+              subtitle="One model does everything: no switching between models while it works. Best unless the second is much smarter and you don’t mind it being slower."
               trailing={<span className="w-[15px] flex justify-center">{!choice.fixer && <Checkmark />}</span>}
             />
           </Group>

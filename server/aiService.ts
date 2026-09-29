@@ -12,6 +12,7 @@ import { spawn, ChildProcess } from 'child_process';
 import { getSystemSpecs, SystemSpecs } from './systemSpecs';
 import { record } from './activityLog';
 import { installEngine, engineInstallState, ENGINE_VERSION } from './aiEngineInstaller';
+import { memoryBench, benchNow } from './hwBench';
 
 const DATA_DIR = process.env.DATA_DIR && fs.existsSync(process.env.DATA_DIR) ? process.env.DATA_DIR : fs.existsSync('/data') ? '/data' : path.join(process.cwd(), 'data');
 export const AI_DIR = path.join(DATA_DIR, 'ai');
@@ -114,17 +115,30 @@ export interface CatalogModel {
   thinking: 'onoff' | 'levels';
   /** How good it is at finding causes and planning fixes, 1 (basic) to 5 (best), for choosing per request */
   smarts: number;
+  /** Model family: how well the AI engine runs it on a processor differs by family (see FAMILY_CPU) */
+  family: 'qwen35' | 'gptoss';
 }
+
+/**
+ * How each family runs on a processor (no graphics card) in the engine, compared with what its size
+ * suggests. Qwen 3.5 mixes in a newer kind of layer the engine doesn't speed up on processors yet:
+ * measured on a 4-core laptop (i7-8665U) it read at about a third and wrote at about half the
+ * expected speed, and it can't reuse what it read in the previous round.
+ */
+const FAMILY_CPU: Record<CatalogModel['family'], { prefill: number; gen: number; prefixCache: boolean }> = {
+  qwen35: { prefill: 0.3, gen: 0.7, prefixCache: false },
+  gptoss: { prefill: 1, gen: 1, prefixCache: true },
+};
 
 const GB = 1e9;
 export const CATALOG: CatalogModel[] = [
-  { id: 'qwen3.5:2b', name: 'Qwen 3.5 Mini', role: 'quick', blurb: 'For small servers. Explains errors and summarizes logs.', downloadBytes: 2.7 * GB, memoryBytes: 3.6 * GB, activeBytes: 2.7 * GB, think: false, thinking: 'onoff', smarts: 1 },
-  { id: 'qwen3.5:4b', name: 'Qwen 3.5 Small', role: 'quick', blurb: 'Quick, clear explanations, lookups and simple fixes.', downloadBytes: 3.4 * GB, memoryBytes: 4.6 * GB, activeBytes: 3.4 * GB, think: false, thinking: 'onoff', smarts: 2 },
-  { id: 'qwen3.5:9b', name: 'Qwen 3.5', role: 'fixer', blurb: 'Solid at finding causes and planning fixes.', downloadBytes: 6.6 * GB, memoryBytes: 8.5 * GB, activeBytes: 6.6 * GB, think: false, thinking: 'onoff', smarts: 3 },
+  { id: 'qwen3.5:2b', name: 'Qwen 3.5 Mini', role: 'quick', blurb: 'For small servers. Explains errors and summarizes logs.', downloadBytes: 2.7 * GB, memoryBytes: 3.6 * GB, activeBytes: 2.7 * GB, think: false, thinking: 'onoff', smarts: 1, family: 'qwen35' },
+  { id: 'qwen3.5:4b', name: 'Qwen 3.5 Small', role: 'quick', blurb: 'Quick, clear explanations, lookups and simple fixes.', downloadBytes: 3.4 * GB, memoryBytes: 4.6 * GB, activeBytes: 3.4 * GB, think: false, thinking: 'onoff', smarts: 2, family: 'qwen35' },
+  { id: 'qwen3.5:9b', name: 'Qwen 3.5', role: 'fixer', blurb: 'Solid at finding causes and planning fixes.', downloadBytes: 6.6 * GB, memoryBytes: 8.5 * GB, activeBytes: 6.6 * GB, think: false, thinking: 'onoff', smarts: 3, family: 'qwen35' },
   // 14 GB of weights plus a small working space (half its layers only look at recent words)
-  { id: 'gpt-oss:20b', name: 'GPT-OSS 20B', role: 'fixer', blurb: 'Strong reasoning and tool use; fast for its size.', downloadBytes: 14 * GB, memoryBytes: 15 * GB, activeBytes: 2.4 * GB, moe: true, think: 'low', thinking: 'levels', smarts: 4 },
-  { id: 'qwen3.5:35b-a3b', name: 'Qwen 3.5 Large', role: 'fixer', blurb: 'The smartest that still runs well without a graphics card.', downloadBytes: 24 * GB, memoryBytes: 27 * GB, activeBytes: 2.6 * GB, moe: true, think: false, thinking: 'onoff', smarts: 5 },
-  { id: 'qwen3.5:27b', name: 'Qwen 3.5 Pro', role: 'fixer', blurb: 'Very capable, but needs a graphics card to be quick.', downloadBytes: 17 * GB, memoryBytes: 20 * GB, activeBytes: 17 * GB, think: false, thinking: 'onoff', smarts: 5 },
+  { id: 'gpt-oss:20b', name: 'GPT-OSS 20B', role: 'fixer', blurb: 'Strong reasoning and tool use; fast for its size.', downloadBytes: 14 * GB, memoryBytes: 15 * GB, activeBytes: 2.4 * GB, moe: true, think: 'low', thinking: 'levels', smarts: 4, family: 'gptoss' },
+  { id: 'qwen3.5:35b-a3b', name: 'Qwen 3.5 Large', role: 'fixer', blurb: 'The smartest that still runs well without a graphics card.', downloadBytes: 24 * GB, memoryBytes: 27 * GB, activeBytes: 2.6 * GB, moe: true, think: false, thinking: 'onoff', smarts: 5, family: 'qwen35' },
+  { id: 'qwen3.5:27b', name: 'Qwen 3.5 Pro', role: 'fixer', blurb: 'Very capable, but needs a graphics card to be quick.', downloadBytes: 17 * GB, memoryBytes: 20 * GB, activeBytes: 17 * GB, think: false, thinking: 'onoff', smarts: 5, family: 'qwen35' },
 ];
 
 /** Every request uses the same working space, so switching thinking or effort never reloads a model */
@@ -156,6 +170,9 @@ export interface Speed {
   charsPerToken?: number;
   /** The engine re-reads the whole conversation each turn (no reuse of what it read before) */
   noPrefixCache?: boolean;
+  /** Word pieces it usually writes in one round, without and with thinking */
+  out?: number;
+  outThinking?: number;
   samples: number;
   at?: string;
 }
@@ -172,22 +189,65 @@ function speedStore(): Record<string, Speed> {
   return speeds!;
 }
 
-/** What the hardware suggests before anything has been measured */
-export function predictedSpeed(m: CatalogModel, specs: SystemSpecs): Speed {
-  // Hyper-threads barely help: count real cores. Laptop and desktop CPUs stream roughly 5 GB/s of
-  // memory per core in practice, and writing each word means reading the active part of the model once.
+/**
+ * What this machine's hardware suggests, before any family or engine adjustment: the cores, their
+ * vector units, the measured memory speed and the graphics card.
+ */
+function hardwareSpeed(m: CatalogModel, specs: SystemSpecs): { prefill: number; gen: number } {
   const cores = specs.cpu.physicalCores || Math.max(1, Math.round(specs.cpu.cores / 2));
   const simd = specs.cpu.avx512 ? 1.3 : specs.cpu.avx2 ? 1 : 0.45;
   const activeGB = m.activeBytes / GB;
-  const bandwidth = Math.min(60, 5 * cores);
-  let gen = (bandwidth / activeGB) * (m.moe ? 0.75 : 1);
-  // Reading is compute-bound: about 50 tokens/s per core for a 1B-parameter model (4-bit ≈ 0.6 GB per 1B)
+  const bandwidth = benchNow()?.bandwidthGBs || Math.min(60, 5 * cores);
+  let gen = ((0.6 * bandwidth) / activeGB) * (m.moe ? 0.75 : 1);
   let prefill = ((cores * 50 * simd) / (activeGB / 0.6)) * (m.moe ? 0.8 : 1);
   if (specs.gpuUsable) {
     gen *= 6;
     prefill *= 15;
   }
-  return { prefill: Math.max(2, prefill), gen: Math.max(0.5, gen), loadSecs: m.downloadBytes / (1.2 * GB) + 2, charsPerToken: 3.6, samples: 0 };
+  return { prefill, gen };
+}
+
+/**
+ * How this machine really compares with its hardware prediction, learned from every model measured
+ * here: per family (how the engine runs that kind of model on this machine) and overall (the machine
+ * itself). The built-in family figures are only a starting guess until something is measured.
+ */
+function calibration(specs: SystemSpecs): { family: Partial<Record<CatalogModel['family'], { prefill?: number; gen?: number }>>; machine: { prefill?: number; gen?: number } } {
+  const fam: Record<string, { prefill: number[]; gen: number[] }> = {};
+  const all = { prefill: [] as number[], gen: [] as number[] };
+  for (const [id, got] of Object.entries(speedStore())) {
+    const m = catalogModel(id);
+    if (!m || !got.samples) continue;
+    const hw = hardwareSpeed(m, specs);
+    const prior = specs.gpuUsable ? { prefill: 1, gen: 1 } : FAMILY_CPU[m.family];
+    const f = (fam[m.family] ||= { prefill: [], gen: [] });
+    if (got.prefill) {
+      f.prefill.push(got.prefill / hw.prefill);
+      all.prefill.push(got.prefill / hw.prefill / prior.prefill);
+    }
+    if (got.gen) {
+      f.gen.push(got.gen / hw.gen);
+      all.gen.push(got.gen / hw.gen / prior.gen);
+    }
+  }
+  const gmean = (xs: number[]) => (xs.length ? Math.exp(xs.reduce((n, x) => n + Math.log(x), 0) / xs.length) : undefined);
+  const family: Partial<Record<CatalogModel['family'], { prefill?: number; gen?: number }>> = {};
+  for (const [k, v] of Object.entries(fam)) family[k as CatalogModel['family']] = { prefill: gmean(v.prefill), gen: gmean(v.gen) };
+  // One family's measurement says only a little about other families (the difference may be the family,
+  // not the machine): other families move halfway, in log terms, toward what was measured
+  const damp = (x?: number) => (x === undefined ? undefined : Math.sqrt(x));
+  return { family, machine: { prefill: damp(gmean(all.prefill)), gen: damp(gmean(all.gen)) } };
+}
+
+/** What to expect before this model has been measured here: hardware × (measured family, or its usual figure × this machine) */
+export function predictedSpeed(m: CatalogModel, specs: SystemSpecs): Speed {
+  const hw = hardwareSpeed(m, specs);
+  const cal = calibration(specs);
+  const prior = specs.gpuUsable ? { prefill: 1, gen: 1, prefixCache: true } : FAMILY_CPU[m.family];
+  const fam = cal.family[m.family];
+  const prefill = hw.prefill * (fam?.prefill ?? prior.prefill * (cal.machine.prefill ?? 1));
+  const gen = hw.gen * (fam?.gen ?? prior.gen * (cal.machine.gen ?? 1));
+  return { prefill: Math.max(2, prefill), gen: Math.max(0.5, gen), loadSecs: m.downloadBytes / (1.2 * GB) + 2, charsPerToken: 3.6, noPrefixCache: !prior.prefixCache, samples: 0 };
 }
 
 /** The measured speed if there is one, else the prediction */
@@ -196,7 +256,7 @@ export function speedOf(model: string, specs: SystemSpecs): Speed {
   const guess = m ? predictedSpeed(m, specs) : { prefill: 20, gen: 5, loadSecs: 8, charsPerToken: 3.6, samples: 0 };
   const got = speedStore()[model];
   if (!got?.samples) return guess;
-  return { ...guess, ...got, prefill: got.prefill || guess.prefill, gen: got.gen || guess.gen };
+  return { ...guess, ...got, prefill: got.prefill || guess.prefill, gen: got.gen || guess.gen, noPrefixCache: got.noPrefixCache ?? guess.noPrefixCache };
 }
 
 export interface EngineStats {
@@ -208,12 +268,18 @@ export interface EngineStats {
 }
 
 /** Learn from an answer's timings (durations are in nanoseconds) */
-export function recordSpeed(model: string, st: EngineStats, info: { promptChars: number; expectedNewChars: number; fresh: boolean; measureOnly?: boolean }) {
+export function recordSpeed(model: string, st: EngineStats, info: { promptChars: number; expectedNewChars: number; fresh: boolean; measureOnly?: boolean; thinking?: boolean }) {
   const all = speedStore();
   const cur: Speed = all[model] || { prefill: 0, gen: 0, samples: 0 };
   const ema = (old: number, v: number) => (old ? old * 0.6 + v * 0.4 : v);
   const pc = st.prompt_eval_count || 0;
-  if (pc >= 64 && st.prompt_eval_duration) cur.prefill = ema(cur.prefill, pc / (st.prompt_eval_duration / 1e9));
+  // Only reads of a real size: a short test is mostly fixed overhead and would make reading look slow
+  if (pc >= 300 && st.prompt_eval_duration) cur.prefill = ema(cur.prefill, pc / (st.prompt_eval_duration / 1e9));
+  // How much it writes in a round of a real question (for the time estimates while it works)
+  if (!info.measureOnly && st.eval_count) {
+    if (info.thinking) cur.outThinking = ema(cur.outThinking || 0, st.eval_count);
+    else cur.out = ema(cur.out || 0, st.eval_count);
+  }
   if ((st.eval_count || 0) >= 16 && st.eval_duration) cur.gen = ema(cur.gen, st.eval_count! / (st.eval_duration / 1e9));
   if (st.load_duration && st.load_duration > 1e9) cur.loadSecs = ema(cur.loadSecs || 0, st.load_duration / 1e9);
   // A fresh read of everything tells us how long a token is in characters (not from plain test text)
@@ -235,12 +301,18 @@ export function recordSpeed(model: string, st: EngineStats, info: { promptChars:
 }
 
 /** Rough seconds for a typical reply on this machine (reading the question and what it looked up, writing a paragraph) */
+/**
+ * Rough seconds for a typical answer on this machine: reading about 1,500 word pieces (instructions,
+ * question, what it looked up) and writing about 220, plus the short thinking some models always do.
+ */
 export function estimateSeconds(m: CatalogModel, specs: SystemSpecs): number {
   const sp = speedOf(m.id, specs);
-  const reading = 1800 / sp.prefill;
-  const writing = (200 + (m.thinking === 'levels' ? 80 : 0)) / sp.gen;
+  const reading = 1500 / sp.prefill;
+  const writing = (220 + (m.thinking === 'levels' ? 80 : 0)) / sp.gen;
   return Math.round(reading + writing);
 }
+
+const aboutText = (s: number) => (s < 90 ? `about ${Math.max(5, Math.round(s / 5) * 5)} seconds` : `about ${(s / 60).toFixed(s < 600 ? 1 : 0).replace(/\.0$/, '')} minutes`);
 
 /** Whether a model can run right now without squeezing your apps (or it's already in memory) */
 export async function fitsNow(model: string): Promise<{ ok: boolean; why?: string }> {
@@ -269,14 +341,60 @@ export function fitOf(m: CatalogModel, specs: SystemSpecs): { fit: Fit; why?: st
   return { fit: 'fits' };
 }
 
-/** The best quick helper and fixer for this server */
-export function recommend(specs: SystemSpecs): { quick?: string; fixer?: string; note?: string } {
-  const ok = (m: CatalogModel) => fitOf(m, specs).fit === 'fits';
-  const quick = ['qwen3.5:4b', 'qwen3.5:2b'].map(catalogModel).find((m) => m && ok(m));
-  const fixerOrder = specs.gpuUsable ? ['qwen3.5:27b', 'qwen3.5:35b-a3b', 'gpt-oss:20b', 'qwen3.5:9b'] : ['qwen3.5:35b-a3b', 'gpt-oss:20b', 'qwen3.5:9b'];
-  const fixer = fixerOrder.map(catalogModel).find((m) => m && ok(m));
-  if (!quick) return { note: 'This server doesn’t have enough free memory or disk for the built-in AI right now.' };
-  return { quick: quick.id, fixer: fixer?.id || quick.id, note: fixer ? undefined : 'Only a small model fits, so it will be one model for everything.' };
+export interface Recommendation {
+  /** The quick helper and fixer to set up (the same model when one is enough) */
+  quick?: string;
+  fixer?: string;
+  /** One model for everything */
+  single: boolean;
+  /** Why, in plain words, for each recommended model */
+  reasons: Record<string, string>;
+  note?: string;
+}
+
+/**
+ * What this server should run. The smartest model that answers in a reasonable time here, measured or
+ * predicted (memory speed, cores, graphics card, and how each model family really runs on them). Just
+ * that one, unless a smaller model would be at least twice as fast: then that one takes quick
+ * questions and the smart one the hard problems. Two models otherwise only cost disk space, and
+ * switching between them mid-question means loading and re-reading everything.
+ */
+export function recommend(specs: SystemSpecs): Recommendation {
+  let cands = CATALOG.filter((m) => fitOf(m, specs).fit === 'fits');
+  // Nothing fits comfortably: the smallest that fits at all, with a warning, rather than nothing
+  let tight = false;
+  if (!cands.length) {
+    const t0 = CATALOG.filter((m) => fitOf(m, specs).fit === 'tight').sort((a, b) => a.memoryBytes - b.memoryBytes)[0];
+    if (!t0) return { single: true, reasons: {}, note: 'This server doesn’t have enough memory or disk space for the built-in AI.' };
+    cands = [t0];
+    tight = true;
+  }
+  const t = (m: CatalogModel) => estimateSeconds(m, specs);
+  const fastest = cands.reduce((a, b) => (t(b) < t(a) ? b : a));
+  // Reasonable: within a third of the fastest, or under two minutes anyway
+  const usable = cands.filter((m) => t(m) <= Math.max(120, t(fastest) * 1.35));
+  const primary = usable.reduce((a, b) => (b.smarts > a.smarts || (b.smarts === a.smarts && t(b) < t(a)) ? b : a));
+  const quicker = cands.filter((m) => m.id !== primary.id && m.smarts >= 2 && t(m) <= t(primary) * 0.5).sort((a, b) => t(a) - t(b))[0];
+  const reasons: Record<string, string> = {};
+  const slower = cands.filter((m) => m.smarts > primary.smarts).sort((a, b) => b.smarts - a.smarts)[0];
+  reasons[primary.id] = `The smartest model that answers in ${aboutText(t(primary))} on your server.${slower ? ` ${slower.name} is smarter but would take ${aboutText(t(slower))}.` : ''}`;
+  if (quicker) {
+    reasons[quicker.id] = `Answers quick questions in ${aboutText(t(quicker))}, ${Math.round(t(primary) / t(quicker))}× faster; ${primary.name} takes the harder ones.`;
+    return { quick: quicker.id, fixer: primary.id, single: false, reasons };
+  }
+  const smaller = cands.filter((m) => m.smarts < primary.smarts).sort((a, b) => t(a) - t(b))[0];
+  if (tight) reasons[primary.id] = `The only one that fits: while it’s answering it uses ${(primary.memoryBytes / GB).toFixed(1)} GB, leaving your apps less memory than usual. It lets go of it a few minutes after each answer.`;
+  return {
+    quick: primary.id,
+    fixer: primary.id,
+    single: true,
+    reasons,
+    note: smaller
+      ? t(smaller) >= t(primary) * 0.8
+        ? `One model is enough: smaller ones aren’t faster on your server (${smaller.name}: ${aboutText(t(smaller))}) and are weaker at finding causes.`
+        : `One model is enough: a smaller one would only be a little faster on your server (${smaller.name}: ${aboutText(t(smaller))}) and is weaker at finding causes.`
+      : undefined,
+  };
 }
 
 // ----------------------------------------------------------------------------
@@ -353,6 +471,9 @@ export async function ensureEngine(): Promise<void> {
         OLLAMA_KEEP_ALIVE: '5m', // free the memory for your apps a few minutes after the last question
         OLLAMA_MAX_LOADED_MODELS: '1',
         OLLAMA_NUM_PARALLEL: '1',
+        // Faster reading of long questions, and half the memory for what it has read (no effect on quality worth noticing)
+        OLLAMA_FLASH_ATTENTION: '1',
+        OLLAMA_KV_CACHE_TYPE: 'q8_0',
         HOME: AI_DIR,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -884,6 +1005,12 @@ export async function removeModel(model: string): Promise<void> {
   const patch: Partial<AiSettings> = {};
   if (s.quickModel === model) patch.quickModel = undefined;
   if (s.fixerModel === model) patch.fixerModel = undefined;
+  // The last one gone: start over, so the next setup recommends afresh for this server
+  if (!(await installedModels()).some((m) => m.id !== model)) {
+    Object.assign(patch, { quickModel: undefined, fixerModel: undefined, setupAt: undefined });
+    bundle = undefined;
+    downloads.clear();
+  }
   if (Object.keys(patch).length) saveAiSettings(patch);
   record('info', 'system', `Removed AI model ${model}`, { model });
 }
@@ -901,6 +1028,8 @@ export async function modelFor(role: 'quick' | 'fixer'): Promise<string | undefi
 
 export async function aiStatus() {
   const specs = await getSystemSpecs();
+  // Measure memory speed once (a second or two) before the first recommendation
+  await memoryBench(AI_DIR, specs.cpu.physicalCores).catch(() => undefined);
   const included = engineIncluded();
   let running = false;
   if (included) running = await ping();

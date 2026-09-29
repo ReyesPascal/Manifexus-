@@ -297,6 +297,12 @@ const InstallSteps: React.FC<{ steps: DownloadStep[] }> = ({ steps }) => (
 // Sheet
 // ----------------------------------------------------------------------------
 
+/** The setup's starting choice: what was chosen before, else this server's recommendation (one model when one is enough) */
+const freshChoice = (s: Status) =>
+  s.settings.quickModel
+    ? { quick: s.settings.quickModel, fixer: s.settings.fixerModel && s.settings.fixerModel !== s.settings.quickModel ? s.settings.fixerModel : '' }
+    : { quick: s.recommended.quick, fixer: s.recommended.single || s.recommended.fixer === s.recommended.quick ? '' : s.recommended.fixer || '' };
+
 export const AssistantSheet: React.FC<{
   open: boolean;
   onClose: () => void;
@@ -364,7 +370,7 @@ export const AssistantSheet: React.FC<{
       // First time: the setup flow. If its download is still going, pick up on its last page.
       const settingUp = s && (!s.ready || (!s.settings.setupAt && s.downloads.some((d) => ACTIVE_DL.includes(d.status))));
       if (settingUp) {
-        setChoice({ quick: s.settings.quickModel || s.recommended.quick, fixer: s.settings.fixerModel ?? s.recommended.fixer ?? '' });
+        setChoice(freshChoice(s));
         setSetupPage(s.downloads.some((d) => ACTIVE_DL.includes(d.status)) ? 5 : 0);
         setStack(['wizard']);
       } else if (initialView) setStack(s?.ready || initialView === 'settings' ? ['chat', initialView] : ['setup']);
@@ -381,6 +387,21 @@ export const AssistantSheet: React.FC<{
     const t = setInterval(load, 1000);
     return () => clearInterval(t);
   }, [open, downloading, load]);
+
+  // Moving between screens: fresh status, so models removed elsewhere are noticed
+  useEffect(() => {
+    if (open && view !== 'wizard') load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view]);
+
+  // Every model removed (here or elsewhere): straight back to a fresh setup
+  useEffect(() => {
+    if (!open || !status || status.ready || status.installed.length || downloading || view === 'wizard') return;
+    setChoice(freshChoice(status));
+    setSetupPage(0);
+    setStack(['wizard']);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, status?.ready, status?.installed.length, downloading, view]);
 
   // A download finished: the chat becomes available
   const prevReady = useRef(false);
