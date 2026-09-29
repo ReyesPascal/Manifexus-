@@ -375,7 +375,7 @@ export const AssistantSheet: React.FC<{
 
   // Keep download progress fresh while anything is downloading
   const engineBusy = ['checking', 'downloading', 'verifying', 'unpacking'].includes(status?.engine.install?.status || '');
-  const downloading = status?.downloads.some((d) => ACTIVE_DL.includes(d.status)) || engineBusy;
+  const downloading = status?.downloads.some((d) => ACTIVE_DL.includes(d.status)) || engineBusy || Boolean(status?.setupBusy);
   useEffect(() => {
     if (!open || !downloading) return;
     const t = setInterval(load, 1000);
@@ -1306,7 +1306,7 @@ export const AssistantSheet: React.FC<{
             }
           }}
           rows={1}
-          placeholder={status.ready ? 'Ask about your apps, or what to fix…' : 'Set up the built-in AI first'}
+          placeholder={status.ready ? 'Ask about your apps, or what to fix…' : status.setupBusy ? `Finishing setup: ${status.setupBusy}…` : 'Set up the built-in AI first'}
           disabled={!status.ready}
           aria-label="Ask Manifexus"
           className="flex-1 min-h-[38px] max-h-[140px] resize-none rounded-[19px] px-4 py-[8px] text-[15px] leading-[21px] text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0A84FF] placeholder:text-[rgba(235,235,245,0.4)] disabled:opacity-50"

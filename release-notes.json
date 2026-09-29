@@ -18,6 +18,8 @@
         "Activity → Commands. A learning log of every command behind your recent changes, and How It Was Done on every activity."
       ],
       "improved": [
+        "The AI reads much less before answering, so answers start sooner: logs are boiled down to errors, warnings and the latest lines with repeats merged (a noisy 31,000-character log becomes a few lines), settings files show only the lines around the setting in question, Diagnostics only shows problems, and its own instructions are shorter. The fix for a broken setting now reads about 40% less.",
+        "Each AI step shows what it read: its instructions, the conversation, and what it looked up.",
         "A new setup for Ask Manifexus. The first time you tap Ask or Fix with AI, a few short steps walk you through it: pick the AI models (picked for your server), what it may do, what it may look at, and how hard it thinks. The download starts as soon as you pick the models and keeps going while you choose the rest.",
         "New: choose what the AI may look at. App logs, files on your server, Activity and Restore, and server details can each be turned off (also in AI Settings). Passwords, tokens and keys are always hidden from it.",
         "The recommended models download as one pipeline with one progress view: disk space is checked for all of them first, they download one after another (smallest first), and each is checked, loaded into memory and given a test answer while the next one downloads, so everything is ready sooner.",
@@ -31,6 +33,10 @@
         "Activity has a new Fixes filter."
       ],
       "fixed": [
+        "Ask Manifexus no longer fails with \"fetch failed\" after 5 minutes when an answer takes a long time on a slow processor. If the AI engine really stops answering, you get a plain explanation.",
+        "Questions wait until setup is completely finished (every model downloaded, tested and the everyday model loaded into memory), so the right model can be chosen and nothing else slows the answer down.",
+        "The progress line no longer claims the AI has finished reading when it hasn't. Past the time estimate, it says so and keeps a moving bar.",
+        "The AI's look at recent Activity shows the real error messages instead of \"[object Object]\".",
         "Removing an AI model no longer shows \"Unexpected end of JSON input\" when it actually worked, and tapping Remove on a model that's already gone isn't an error.",
         "Questions to Ask Manifexus no longer stay \"In progress\" in Activity forever. Each one is listed as \"Ask Manifexus: …\" and ends as done, failed (with the reason) or stopped. There's a new AI Questions filter.",
         "On phones, the dashboard no longer shifts sideways by a few pixels.",

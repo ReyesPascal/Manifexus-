@@ -361,7 +361,7 @@ export function setupWizard(p: Props): { title: string; subtitle?: string; body:
               ? active
                 ? 'The quick helper is ready, so you can start now. The fixer finishes in the background.'
                 : 'Everything is downloaded and tested on your server.'
-              : 'It’s downloading and testing the models on your server. You can close this: it keeps going, and your settings are saved.'
+              : 'It’s downloading, testing and loading the models on your server, so every question can use the right one. You can close this: it keeps going, and your settings are saved.'
           }
         />
         {p.pipeline}
@@ -380,10 +380,10 @@ export function setupWizard(p: Props): { title: string; subtitle?: string; body:
     footer = (
       <div className="flex items-center justify-between gap-3">
         <span className="text-[12.5px] tabular-nums min-w-0 truncate" style={{ color: ios.secondary }}>
-          {!ready ? bg || 'Getting it ready…' : ''}
+          {!ready ? status.setupBusy || bg || 'Getting it ready…' : ''}
         </span>
         <Button disabled={!ready} onClick={p.finish} className="sm:min-w-[200px] flex-shrink-0">
-          {!ready ? 'Waiting for the Download' : p.firstQuestion ? 'Start on My Question' : 'Start Asking'}
+          {!ready ? 'Finishing Setup…' : p.firstQuestion ? 'Start on My Question' : 'Start Asking'}
         </Button>
       </div>
     );

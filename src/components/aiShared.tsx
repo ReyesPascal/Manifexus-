@@ -92,6 +92,8 @@ export interface Status {
   /** The recommended models being set up together */
   bundle?: { models: string[]; neededBytes: number; freeBytes: number };
   ready: boolean;
+  /** What setup is still doing (questions wait for it), e.g. "GPT-OSS 20B: test answer" */
+  setupBusy?: string;
 }
 
 export const fmtGB = (b: number) => (b >= 1e9 ? `${(b / 1e9).toFixed(b >= 10e9 ? 0 : 1)} GB` : `${Math.max(1, Math.round(b / 1e6))} MB`);
@@ -107,9 +109,14 @@ export const FREEDOM: { value: Freedom; title: string; sub: string }[] = [
 
 export const fmtLeft = (s: number) => (s >= 90 ? `${Math.round(s / 60)} min` : `${Math.max(1, Math.round(s))} s`);
 
+/** A progress bar; a negative value means "can't tell how far": a segment keeps sliding across */
 export const Bar: React.FC<{ value: number }> = ({ value }) => (
-  <div className="h-[4px] rounded-full overflow-hidden" style={{ background: 'rgba(118,118,128,0.3)' }}>
-    <div className="h-full rounded-full transition-[width] duration-500" style={{ width: `${Math.max(2, Math.min(100, value * 100))}%`, background: ios.blue }} />
+  <div className="relative h-[4px] rounded-full overflow-hidden" style={{ background: 'rgba(118,118,128,0.3)' }}>
+    {value < 0 ? (
+      <div className="absolute inset-y-0 w-2/5 rounded-full motion-safe:animate-[ios-indeterminate_1.4s_ease-in-out_infinite]" style={{ background: ios.blue }} />
+    ) : (
+      <div className="h-full rounded-full transition-[width] duration-500" style={{ width: `${Math.max(2, Math.min(100, value * 100))}%`, background: ios.blue }} />
+    )}
   </div>
 );
 

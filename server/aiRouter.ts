@@ -6,6 +6,7 @@
  * that still get a good answer, and save the big model and deep thinking for problems that need them.
  */
 import type { SystemSpecs } from './systemSpecs';
+import { quotedNames } from './aiDigest';
 import { AiSettings, CatalogModel, catalogModel, fitsNow, modelFor, speedOf } from './aiService';
 
 export type Task = 'question' | 'fix' | 'change' | 'check';
@@ -141,7 +142,9 @@ export async function planRoute(
 
   // Look up the obvious things now, all at once, instead of one AI round each
   const lookups: Lookup[] = [];
-  for (const p of files) lookups.push({ name: 'read_file', args: { path: p } });
+  // A setting the issue names ("stacksDir"): read only the lines around it, not the whole file
+  const names = quotedNames(args.focus || q);
+  for (const p of files) lookups.push({ name: 'read_file', args: names.length ? { path: p, around: names.join(', ') } : { path: p } });
   for (const a of appsNamed) {
     lookups.push({ name: 'app_details', args: { app: a } });
     if (task === 'fix' || LOG_WORDS.test(q)) lookups.push({ name: 'app_logs', args: { app: a, lines: 80 } });

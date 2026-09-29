@@ -16,10 +16,11 @@ import { listRestorePoints } from './restoreService';
 import { getRegisteredCreatedStacks } from './stackService';
 import { resolveBackupDir, saveMergeHistoryRecord, MergeHistoryRecord } from './historyService';
 import { getSystemSpecs } from './systemSpecs';
-import { getAiSettings, modelFor, ollama, ollamaStream, catalogModel, Freedom, NUM_CTX, speedOf, recordSpeed, EngineStats, fitsNow, AiAccess, AiSettings } from './aiService';
+import { getAiSettings, modelFor, ollama, ollamaStream, catalogModel, Freedom, NUM_CTX, speedOf, recordSpeed, EngineStats, fitsNow, AiAccess, AiSettings, setupInProgress } from './aiService';
 import { planRoute, thinkFor, thinkLabel, taskLabel, effortLabel, Think } from './aiRouter';
 import type { DeepContainerMetadata } from '../src/types';
 import { explain, Explain } from './commandLog';
+import { compactLogs, fileExcerpt } from './aiDigest';
 
 const sq = (s: string) => (/^[A-Za-z0-9_./:@%+=,-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
 
@@ -157,22 +158,24 @@ export function restoreSecrets(before: string, after: string): string | null {
 type ToolDef = { type: 'function'; function: { name: string; description: string; parameters: Record<string, unknown> } };
 const tool = (name: string, description: string, properties: Record<string, unknown> = {}, required: string[] = []): ToolDef => ({
   type: 'function',
-  function: { name, description, parameters: { type: 'object', properties, required } },
+  // No empty "required" lists: every character of these is read before every answer
+  function: { name, description, parameters: { type: 'object', properties, ...(required.length ? { required } : {}) } },
 });
 const str = (description: string) => ({ type: 'string', description });
 
+// Kept short: every word here is read by the AI before every answer
 const READ_TOOLS: ToolDef[] = [
-  tool('list_apps', 'Every app (container): name, stack, state, image, ports.'),
-  tool('app_details', 'Health checks, exit code, restarts, memory/CPU, folders, settings (secrets hidden), networks and recent events for one app.', { app: str('App name') }, ['app']),
-  tool('app_logs', 'The last lines an app printed.', { app: str('App name'), lines: { type: 'number', description: 'How many lines, up to 500' } }, ['app']),
-  tool('list_stacks', 'Every stack with its folder and compose file path.'),
-  tool('read_file', 'Read a text file on the server (compose files, .env, configs). Secrets are hidden.', { path: str('Full path on the server') }, ['path']),
-  tool('list_folder', 'List what is in a folder on the server, with owners and permissions.', { path: str('Full path on the server') }, ['path']),
-  tool('diagnostics', 'Manifexus health checks and current issues.'),
-  tool('activity', 'Recent changes and what happened (moves, restores, updates, failures).', { only_problems: { type: 'boolean', description: 'Only failed or rolled back ones' } }),
-  tool('restore_points', 'Backups that can be restored, newest first.'),
-  tool('server_specs', 'CPU, memory, graphics card and disk space of the server.'),
-  tool('docker_overview', 'Networks, volumes, and which host ports are in use by which app.'),
+  tool('list_apps', 'Apps: stack, state, image, ports.'),
+  tool('app_details', 'One app: health, exit code, restarts, memory/CPU, folders, settings, networks, events.', { app: str('App name') }, ['app']),
+  tool('app_logs', 'An app’s recent output: errors, warnings and latest lines; repeats merged.', { app: str('App name') }, ['app']),
+  tool('list_stacks', 'Stacks with folder and compose file.'),
+  tool('read_file', 'Read a file on the server. Secrets hidden.', { path: str('Full path'), around: str('Optional: only the lines near this text') }, ['path']),
+  tool('list_folder', 'Folder contents with owners and permissions.', { path: str('Full path') }, ['path']),
+  tool('diagnostics', 'Manifexus health checks with problems.'),
+  tool('activity', 'Recent changes and results.', { only_problems: { type: 'boolean', description: 'Only failures' } }),
+  tool('restore_points', 'Backups that can be restored.'),
+  tool('server_specs', 'CPU, memory, graphics, disk.'),
+  tool('docker_overview', 'Networks, volumes, host ports in use.'),
 ];
 
 /** Which lookups each kind of access allows (apps, stacks and Diagnostics are always allowed) */
@@ -193,27 +196,26 @@ function changeTool(freedom: Freedom, access: AiAccess): ToolDef {
   const types = ['restart', 'start', 'stop', ...(access.files ? ['edit_file', 'write_file'] : []), 'compose_up', 'remove_container', ...(freedom === 'expert' ? ['run_command'] : [])];
   return tool(
     'propose_changes',
-    'Propose changes for the person to review. Nothing happens until they approve. edit_file replaces the exact text `find` in a file with `replace` (best for small changes). write_file writes the COMPLETE content of a new or rewritten file. ' +
-      'compose_up starts or recreates services of a stack from its compose file. remove_container removes a container but keeps its volumes and folders.' +
-      (freedom === 'expert' ? ' run_command runs one shell command on the server; use only when nothing else can do it.' : ''),
+    'Changes for the person to review; nothing happens until they approve. edit_file: replace exact text `find` with `replace`. write_file: whole new file. compose_up: (re)create a stack’s services. remove_container keeps volumes.' +
+      (freedom === 'expert' ? ' run_command: one shell command, only if nothing else works.' : ''),
     {
-      title: str('Short plain title, e.g. "Remove the extra kavita from music-stack"'),
-      explanation: str('Plain words: what is wrong, why, and what these changes do. No jargon.'),
+      title: str('Short plain title'),
+      explanation: str('Plain words: what is wrong and what this does'),
       actions: {
         type: 'array',
         items: {
           type: 'object',
           properties: {
             type: { type: 'string', enum: types },
-            app: str('App name (restart, start, stop, remove_container)'),
-            stack: str('Stack name (compose_up)'),
-            services: { type: 'array', items: { type: 'string' }, description: 'Services to start (compose_up); omit for all' },
-            path: str('File path (edit_file, write_file)'),
-            find: str('Exact current text to replace, copied from the file, with enough around it to be unique (edit_file)'),
-            replace: str('What it becomes (edit_file)'),
-            content: str('Complete new file content (write_file)'),
-            command: str('Shell command (run_command)'),
-            reason: str('Why this step, in plain words'),
+            app: str('App'),
+            stack: str('Stack'),
+            services: { type: 'array', items: { type: 'string' }, description: 'Services; omit for all' },
+            path: str('File path'),
+            find: str('Exact current text, unique in the file'),
+            replace: str('New text'),
+            content: str('Whole new file'),
+            command: str('Shell command'),
+            reason: str('Why, in plain words'),
           },
           required: ['type', 'reason'],
         },
@@ -264,9 +266,9 @@ async function runTool(name: string, args: Record<string, unknown>): Promise<{ l
     case 'app_logs': {
       const c = await findApp(a('app'));
       if (!c) return { label: `Looked for ${a('app')}`, result: `No app named "${a('app')}".` };
-      const n = Math.min(500, Math.max(20, Number(args.lines) || 150));
-      const out = await appLogs(c.id, n);
-      return { label: `Read ${c.cleanName}’s logs`, result: clip(redactText(out.text || out.error || '(no output)'), 9000) };
+      // Read plenty, then boil it down: errors, warnings and the latest lines, repeats merged
+      const out = await appLogs(c.id, 400);
+      return { label: `Read ${c.cleanName}’s logs`, result: out.text ? compactLogs(redactText(out.text), 3000) : out.error || '(no output)' };
     }
     case 'list_stacks': {
       const list = await stacks();
@@ -276,7 +278,10 @@ async function runTool(name: string, args: Record<string, unknown>): Promise<{ l
       const p = a('path');
       if (!p.startsWith('/')) return { label: 'Tried to read a file', result: 'Give a full path starting with /.' };
       const text = await readHostFile(p).catch(() => null);
-      return { label: `Read ${p}`, result: text === null ? `${p} doesn’t exist or can’t be read.` : clip(redactText(text), 12000) };
+      if (text === null) return { label: `Read ${p}`, result: `${p} doesn’t exist or can’t be read.` };
+      // Only the part that matters, when it says what it's after (e.g. one setting in a long file)
+      const part = fileExcerpt(redactText(text), a('around') ? a('around').split(/\s*,\s*/) : []);
+      return { label: part.partial ? `Read the relevant part of ${p}` : `Read ${p}`, result: clip(part.text, 12000) };
     }
     case 'list_folder': {
       const p = a('path');
@@ -287,14 +292,24 @@ async function runTool(name: string, args: Record<string, unknown>): Promise<{ l
     }
     case 'diagnostics': {
       const d = await systemDiagnostics();
-      return { label: 'Ran Diagnostics', result: d.checks.map((c) => `[${c.level}] ${c.title}: ${c.detail}`).join('\n') };
+      // Only what needs attention; the rest is just counted
+      const bad = d.checks.filter((c) => c.level !== 'ok');
+      const good = d.checks.length - bad.length;
+      return { label: 'Ran Diagnostics', result: [...bad.map((c) => `[${c.level}] ${c.title}: ${c.detail}`), `${good} other check${good === 1 ? '' : 's'} OK.`].join('\n') };
     }
     case 'activity': {
       const onlyProblems = Boolean(args.only_problems);
-      const list = listActivities({ statuses: onlyProblems ? ['failed', 'rolled_back', 'interrupted'] : undefined, limit: 15 }).activities;
+      // Its own questions to the AI aren't worth reading back
+      const list = listActivities({ statuses: onlyProblems ? ['failed', 'rolled_back', 'interrupted'] : undefined, limit: 20 }).activities.filter((x) => x.type !== 'ask').slice(0, 10);
       return {
         label: onlyProblems ? 'Looked at recent problems' : 'Looked at recent activity',
-        result: list.map((x) => `${x.startedAt} · ${x.title} · ${x.status}${x.error ? ` · error: ${redactText(String(x.error)).slice(0, 400)}` : ''}`).join('\n') || 'Nothing recorded.',
+        result:
+          list
+            .map((x) => {
+              const err = x.error ? (typeof x.error === 'string' ? x.error : (x.error as { message?: string }).message || '') : '';
+              return `${x.startedAt.slice(0, 16).replace('T', ' ')} · ${x.title} · ${x.status}${err ? ` · ${redactText(err).slice(0, 240)}` : ''}`;
+            })
+            .join('\n') || 'Nothing recorded.',
       };
     }
     case 'restore_points': {
@@ -506,42 +521,43 @@ type Msg = any;
 function systemPrompt(freedom: Freedom, access?: AiAccess): string {
   const off = access ? (Object.keys(ACCESS_WORDS) as (keyof AiAccess)[]).filter((k) => !access[k]).map((k) => ACCESS_WORDS[k]) : [];
   return [
-    'You are the assistant built into Manifexus, a dashboard for the Docker apps on this person’s home server.',
-    'Your tools can look at apps, stacks, files, logs, Activity, Restore, Diagnostics and the server. Look before you answer; never guess names, paths or causes. Some things may already be looked up for you: use them, don’t look them up again.',
-    'Work fast: call tools without announcing them, and ask for several at once when you can.',
+    'You are the assistant in Manifexus, a dashboard for the Docker apps on a home server. Look with your tools before answering; never guess names, paths or causes. Use what was already looked up; don’t fetch it again. Call tools without announcing them, several at once when you can.',
     freedom === 'look'
-      ? 'You can only look and advise: explain what is wrong and what could be done, but you cannot change anything.'
-      : 'When something should change, call propose_changes with every step and a plain explanation. Nothing happens until the person approves; they see a before/after of every file, and Manifexus backs everything up first so it can be undone.',
-    'For a small change to a file, use edit_file with the exact current text and its replacement; it is much quicker than write_file, which is only for new files or complete rewrites. Prefer the smallest safe fix. Never delete volumes or data folders.',
-    'If you are not sure what is wrong, say so, and say what you would check next.',
+      ? 'You can only look and advise, not change anything.'
+      : 'To change something, call propose_changes (the person reviews it; it is backed up and can be undone). For a small file change use edit_file. Smallest safe fix; never delete volumes or data folders.',
+    'If unsure, say so and what you would check next.',
     off.length ? `The person has not allowed you to look at ${off.join(', ')}. If you need them, say what you would look at and that they can allow it in AI Settings.` : '',
-    [
-      'How to write your answer (the person may never have used a terminal):',
-      '- Start with one short sentence that gives the answer or the cause, with the key point in **bold**.',
-      '- Then only what helps: a short paragraph, or numbered steps.',
-      '- Put names, paths, settings and values in `code`, and file contents or commands in fenced code blocks.',
-      '- Plain words; explain any term you must use. No greetings, no filler, no repeating the question. Under 150 words unless they ask for detail.',
-    ].join('\n'),
+    'Answer for someone who may never have used a terminal: first one sentence with the answer or cause, key point in **bold**; then only what helps (a short paragraph or numbered steps). Names, paths and values in `code`, commands and file contents in code blocks. Plain words, no filler, under 150 words unless asked.',
   ]
     .filter(Boolean)
     .join('\n\n');
 }
 
 function userTurn(question: string, snapshot: string, focus?: string): string {
-  return [question, '---', 'Context from Manifexus (not typed by the person):', `Apps right now:\n${snapshot}`, focus ? `The person is looking at this:\n${focus}` : ''].filter(Boolean).join('\n\n');
+  return [question, '---', `(From Manifexus, not typed by the person) Apps: ${snapshot}`, focus ? `They're looking at: ${focus}` : ''].filter(Boolean).join('\n');
 }
 
-const toolsFor = (s: AiSettings) => {
-  const read = READ_TOOLS.filter((t) => allowedTool(t.function.name, s.access));
-  return s.freedom === 'look' ? read : [...read, changeTool(s.freedom, s.access)];
+/** The tools for a request: the change form (the longest part) only when it's a fix or a change */
+const FIX_SKIPS = ['restore_points', 'server_specs'];
+const toolsFor = (s: AiSettings, canChange = true) => {
+  // Fixes rarely need the backup list or the server's specs; questions keep every lookup
+  const read = READ_TOOLS.filter((t) => allowedTool(t.function.name, s.access) && !(canChange && FIX_SKIPS.includes(t.function.name)));
+  return s.freedom === 'look' || !canChange ? read : [...read, changeTool(s.freedom, s.access)];
 };
 
 const ACCESS_WORDS: Record<keyof AiAccess, string> = { logs: 'app logs', files: 'files on the server', history: 'Activity and Restore', server: 'details of the server itself' };
 
 async function snapshotText(list?: DeepContainerMetadata[]): Promise<string> {
   const all = list || (await apps().catch(() => []));
-  const lines = all.slice(0, 60).map((c) => `- ${c.cleanName} (${c.compose?.project || 'standalone'}): ${c.state}`);
-  return lines.join('\n') || '(no apps found)';
+  if (!all.length) return '(no apps found)';
+  // One line per stack; only apps that aren't running get their state spelled out
+  const byStack = new Map<string, string[]>();
+  for (const c of all.slice(0, 80)) {
+    const k = c.compose?.project || 'standalone';
+    byStack.set(k, [...(byStack.get(k) || []), c.state === 'running' ? c.cleanName : `${c.cleanName} (${c.state})`]);
+  }
+  const stopped = all.filter((c) => c.state !== 'running').length;
+  return `${all.length} apps, ${stopped ? `${stopped} not running` : 'all running'}. ${Array.from(byStack, ([k, v]) => `${k}: ${v.join(', ')}`).join(' · ')}`;
 }
 
 /** What a tool is doing right now, for the progress line ("Reading sonarr’s logs…") */
@@ -688,17 +704,22 @@ async function runModel(o: { model: string; convo: Msg[]; tools?: ToolDef[]; thi
       const size = catalogModel(o.model)?.downloadBytes;
       return ui.phase({ label: `Loading ${name} into memory`, detail: `${size ? `${(size / 1e9).toFixed(1)} GB from disk. ` : ''}Only the first answer in a while waits for this.`, progress: el / readBy, eta: readBy - el });
     }
-    if (el < readBy * 1.15) {
+    const what = `${wordsText(readTokens)}${continuing ? ' that are new to it (it remembers the rest)' : ', including its instructions'}`;
+    if (el < readBy) {
       return ui.phase({
-        label: `Reading ${wordsText(readTokens)}`,
-        detail: `${continuing ? 'Only what’s new: it remembers the rest. ' : ''}About ${nice(Math.round(sp.prefill * 0.75))} words a second on your server${sp.samples ? '' : ' (estimated)'}`,
-        progress: Math.min(0.96, el / readBy),
+        label: o.purpose,
+        detail: `${what} · about ${nice(Math.round(sp.prefill * 0.75))} words a second on your server${sp.samples ? '' : ' (estimated)'}`,
+        progress: Math.min(0.97, el / readBy),
         eta: Math.max(1, readBy - el),
       });
     }
-    // Past the reading estimate and nothing shown yet: the engine is either still reading or writing
-    // a lookup or a change, which it only hands over when complete
-    return ui.phase({ label: 'Deciding what to do next', detail: `Read about ${wordsText(readTokens)} · ${secsText(el - readBy)} writing its next step (a lookup, a change or the answer)` });
+    // Past the estimate with nothing back yet. The engine reports nothing until it has words to show
+    // or its next step is complete, so say honestly that it could be either, and keep the bar moving.
+    return ui.phase({
+      label: 'Still working on it',
+      detail: `Taking longer than the ${secsText(readBy)} estimate (${secsText(el - readBy)} over). It’s still reading ${what}, or already writing its next step; the engine only reports once that’s done.`,
+      progress: -1,
+    });
   };
   tick();
   const timer = setInterval(tick, 1000);
@@ -731,10 +752,18 @@ async function runModel(o: { model: string; convo: Msg[]; tools?: ToolDef[]; thi
   recordSpeed(o.model, stats, { promptChars, expectedNewChars: newChars, fresh: !continuing });
   lastCall = { model: o.model, text: promptText(o.tools, [...o.convo, { role: 'assistant', content: text, ...(calls.length ? { tool_calls: calls } : {}) }]), at: Date.now() };
   const read = stats.prompt_eval_count || readTokens;
+  // Where the words went, so it's clear what makes a question slow to read
+  const cpt = sp.charsPerToken || 3.6;
+  const w = (chars: number) => nice(words(chars / cpt));
+  const len = (m: Msg) => String(m.content || '').length + (m.tool_calls ? JSON.stringify(m.tool_calls).length : 0);
+  const instr = String(o.convo[0]?.content || '').length + (o.tools ? JSON.stringify(o.tools).length : 0);
+  const talk = o.convo.slice(1).filter((m: Msg) => m.role !== 'tool').reduce((n: number, m: Msg) => n + len(m), 0);
+  const found = o.convo.filter((m: Msg) => m.role === 'tool').reduce((n: number, m: Msg) => n + len(m), 0);
+  const breakdown = `Instructions ~${w(instr)} words · conversation ~${w(talk)} · looked up ~${w(found)}`;
   const parts = [`read ${wordsText(read)}`];
   if (thought) parts.push(`thought ${nice(words(thought.length / (sp.charsPerToken || 3.6)))}`);
   parts.push(`wrote ${nice(words(Math.max(0, (stats.eval_count || 0) - (thought ? thought.length / (sp.charsPerToken || 3.6) : 0))))}`);
-  step.done(`${name} ${parts.join(', ')}`, `${o.purpose} · ${thinkLabel(o.think)}`);
+  step.done(`${name} ${parts.join(', ')}`, `${o.purpose} · ${thinkLabel(o.think)} · ${breakdown}`);
   return { text, thought, calls, stats, cutShort };
 }
 
@@ -787,7 +816,27 @@ export async function chat(messages: ChatMessage[], opts: { focus?: string; role
   const specs = await getSystemSpecs();
   const ui = makeUi(emit);
   const question = String(messages[messages.length - 1]?.content || '').slice(0, 8000);
-  const history = messages.slice(0, -1).slice(-10).map((m) => ({ role: m.role, content: String(m.content).slice(0, 6000) }));
+  // Earlier messages, shortened: the latest question matters most, and every word is read again each round
+  const history = messages
+    .slice(0, -1)
+    .slice(-8)
+    .map((m) => {
+      const t = String(m.content);
+      const max = m.role === 'user' ? 1000 : 700;
+      return { role: m.role, content: t.length > max ? `${t.slice(0, max)}…` : t };
+    });
+
+  // Never start while setup is still running: the models to choose from wouldn't all be there yet,
+  // and the answer would share the processor with a download or a model being tested
+  if (setupInProgress()) {
+    const waiting = ui.step('Waiting for setup to finish', 'plan');
+    while (setupInProgress()) {
+      if (signal?.aborted) return;
+      ui.phase({ label: 'Waiting for setup to finish', detail: `${setupInProgress()}. Your question starts as soon as everything is ready.` });
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    waiting.done('Setup finished');
+  }
 
   const sorting = ui.step('Working out what you need', 'plan');
   ui.phase({ label: 'Working out what you need' });
@@ -824,7 +873,8 @@ export async function chat(messages: ChatMessage[], opts: { focus?: string; role
     )
   ).filter(Boolean) as { l: { name: string; args: Record<string, unknown> }; result: string }[];
 
-  const tools = toolsFor(settings);
+  // A plain question gets no change form; asking it to fix something afterwards is a new request that does
+  const tools = toolsFor(settings, route.task !== 'question');
   const base: Msg[] = [{ role: 'system', content: systemPrompt(freedom, settings.access) }, ...history, { role: 'user', content: userTurn(question, await snapshotText(list), opts.focus) }];
   // What was looked up, in the form the model expects (as if it had asked), for this model and any that takes over
   const evidence: Msg[] = looked.length

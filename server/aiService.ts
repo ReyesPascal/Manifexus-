@@ -5,6 +5,8 @@
  * and a fixer for looking into problems and planning changes.
  */
 import fs from 'fs';
+import http from 'http';
+import https from 'https';
 import path from 'path';
 import { spawn, ChildProcess } from 'child_process';
 import { getSystemSpecs, SystemSpecs } from './systemSpecs';
@@ -390,16 +392,50 @@ export function stopEngine() {
   proc?.kill('SIGTERM');
 }
 
+/**
+ * One request to the engine. Uses Node's http module rather than fetch: fetch gives up when a reply
+ * hasn't started within 5 minutes, and on a slow processor reading a long question (or waiting for a
+ * model to load) can legitimately take longer. Nothing here times out unless the caller asks.
+ */
+function engineRequest(p: string, body: unknown, method: string, signal?: AbortSignal): Promise<http.IncomingMessage> {
+  return new Promise((resolve, reject) => {
+    const url = new URL(`${BASE}${p}`);
+    const data = body === undefined ? undefined : JSON.stringify(body);
+    const req = (url.protocol === 'https:' ? https : http).request(
+      url,
+      { method, headers: data ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) } : undefined },
+      resolve
+    );
+    const onAbort = () => req.destroy(Object.assign(new Error('cancelled'), { name: 'AbortError' }));
+    if (signal) {
+      if (signal.aborted) return onAbort();
+      signal.addEventListener('abort', onAbort, { once: true });
+      req.on('close', () => signal.removeEventListener('abort', onAbort));
+    }
+    req.on('error', (e) => reject(signal?.aborted ? e : new Error(plainEngineError(e))));
+    if (data) req.write(data);
+    req.end();
+  });
+}
+
+/** Plain words for a dropped connection to the engine (instead of "fetch failed" or "socket hang up") */
+function plainEngineError(e: Error & { code?: string }): string {
+  if (/ECONNREFUSED|ECONNRESET|socket hang up|EPIPE/i.test(`${e.code || ''} ${e.message}`)) return 'The AI engine stopped answering (it may have restarted or run out of memory). Try again in a moment.';
+  return e.message || 'Couldn’t reach the AI engine.';
+}
+
+async function readAll(res: http.IncomingMessage): Promise<string> {
+  let text = '';
+  res.setEncoding('utf8');
+  for await (const chunk of res) text += chunk;
+  return text;
+}
+
 export async function ollama<T>(p: string, body?: unknown, method = body ? 'POST' : 'GET', timeoutMs?: number): Promise<T> {
   await ensureEngine();
-  const r = await fetch(`${BASE}${p}`, {
-    signal: timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined,
-    method,
-    headers: body ? { 'Content-Type': 'application/json' } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const text = await r.text().catch(() => '');
-  if (!r.ok) throw new Error(engineError(text) || `The AI engine answered ${r.status}.`);
+  const res = await engineRequest(p, body, method, timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined);
+  const text = await readAll(res).catch(() => '');
+  if ((res.statusCode || 0) >= 400) throw new Error(engineError(text) || `The AI engine answered ${res.statusCode}.`);
   // Some answers have no body at all (removing a model): that's success, not a broken reply
   if (!text.trim()) return {} as T;
   return JSON.parse(text) as T;
@@ -416,24 +452,28 @@ function engineError(text: string): string {
   return text.trim();
 }
 
-/** Streams newline-delimited JSON from the engine */
+/** Streams newline-delimited JSON from the engine, for as long as it takes */
 export async function* ollamaStream<T>(p: string, body: unknown, signal?: AbortSignal): AsyncGenerator<T> {
   await ensureEngine();
-  const r = await fetch(`${BASE}${p}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
-  if (!r.ok || !r.body) throw new Error(engineError(await r.text().catch(() => '')) || `The AI engine answered ${r.status}.`);
-  const reader = r.body.getReader();
-  const dec = new TextDecoder();
+  const res = await engineRequest(p, body, 'POST', signal);
+  if ((res.statusCode || 0) >= 400) throw new Error(engineError(await readAll(res).catch(() => '')) || `The AI engine answered ${res.statusCode}.`);
+  res.setEncoding('utf8');
   let buf = '';
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += dec.decode(value, { stream: true });
-    let nl: number;
-    while ((nl = buf.indexOf('\n')) >= 0) {
-      const line = buf.slice(0, nl).trim();
-      buf = buf.slice(nl + 1);
-      if (line) yield JSON.parse(line) as T;
+  try {
+    for await (const chunk of res) {
+      buf += chunk;
+      let nl: number;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (line) yield JSON.parse(line) as T;
+      }
     }
+  } catch (e) {
+    if (signal?.aborted) throw e;
+    throw new Error(plainEngineError(e as Error));
+  } finally {
+    res.destroy();
   }
   if (buf.trim()) yield JSON.parse(buf) as T;
 }
@@ -733,7 +773,9 @@ export function installModel(model: string): Download {
           }
           if (ch.done) stats = ch;
         }
-        recordSpeed(model, stats, { promptChars: TEST_PROMPT.length, expectedNewChars: TEST_PROMPT.length, fresh: true, measureOnly: true });
+        // Only a fair measurement when nothing else is downloading or being tested alongside it
+        const alone = !Array.from(downloads.values()).some((x) => x.model !== model && ['downloading', 'verifying'].includes(x.status));
+        if (alone) recordSpeed(model, stats, { promptChars: TEST_PROMPT.length, expectedNewChars: TEST_PROMPT.length, fresh: true, measureOnly: true });
         const sp = speedOf(model, specs);
         done('test', `Works. On your server it reads about ${Math.round(sp.prefill * 0.75)} words a second and writes about ${Math.max(1, Math.round(sp.gen * 0.75))}`);
       } finally {
@@ -759,16 +801,38 @@ export function installModel(model: string): Download {
 }
 
 /** After installing, have the quick helper in memory (not the model tested last) so the first question starts at once */
+let finishing: string | undefined;
 async function loadEverydayModel(justTested: string) {
   const s = getAiSettings();
   const everyday = s.auto === false ? s.fixerModel : s.quickModel;
   if (!everyday || everyday === justTested) return;
   if (!(await installedModels()).some((m) => m.id === everyday)) return;
+  finishing = `Loading ${catalogModel(everyday)?.name || everyday} into memory for your first question`;
   try {
     await ollama('/api/generate', { model: everyday, keep_alive: '5m', options: { num_ctx: NUM_CTX } }, 'POST', 10 * 60 * 1000);
   } catch {
     // it loads with the first question instead
+  } finally {
+    finishing = undefined;
   }
+}
+
+/**
+ * Setup still running: a recommended model (the bundle) being downloaded, checked, loaded or tested,
+ * or the everyday model being put back in memory. Questions wait for this, so the models they choose
+ * from are all there and nothing else is competing for the processor while they're answered.
+ */
+export function setupInProgress(): string | undefined {
+  if (finishing) return finishing;
+  for (const id of bundle?.models || []) {
+    const d = downloads.get(id);
+    if (!d || !settingUp(id)) continue;
+    const name = catalogModel(id)?.name || id;
+    const running = d.steps.find((x) => x.status === 'running');
+    if (d.status === 'queued') return `${name} is waiting to download`;
+    return running ? `${name}: ${running.label.toLowerCase()}` : `Setting up ${name}`;
+  }
+  return undefined;
 }
 
 /**
@@ -861,7 +925,9 @@ export async function aiStatus() {
     bundle,
     settings,
     // Ready once a model is downloaded *and* tested (the engine lists it as soon as its files arrive)
-    ready: installed.some((m) => !settingUp(m.id)),
+    // …and the whole setup has finished, so questions can choose between all the models
+    ready: installed.some((m) => !settingUp(m.id)) && !setupInProgress(),
+    setupBusy: setupInProgress(),
   };
 }
 
