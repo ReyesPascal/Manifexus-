@@ -41,7 +41,7 @@ import { MoveAppsModal } from './components/MoveAppsModal';
 import { DeleteStackDialog, DeleteStackTarget } from './components/DeleteStackDialog';
 import { HostAutomationModal } from './components/HostAutomationModal';
 import { ManifexusHeroHeader } from './components/ManifexusHeroHeader';
-import { LibraryBar, Shelf, FolderIcon, Health, TileGrid, ShelfNote, panelStyle, displayFont } from './components/Shelf';
+import { LibraryBar, Shelf, ShelfGrid, shelfSpan, FolderIcon, Health, TileGrid, ShelfNote, panelStyle, displayFont } from './components/Shelf';
 import type { MenuItem } from './components/ui/ios';
 import { ios } from './components/ui/ios';
 import { RestoreSheet } from './components/RestoreSheet';
@@ -811,16 +811,18 @@ export default function App() {
 
         {/* BY STACK */}
         {!isLoading && viewMode === 'compose' && (
-          <div className="space-y-4">
+          <ShelfGrid>
             {Object.entries(groupedByComposeStacks.stacksMap)
               .filter(([, d]) => d.containers.length > 0 || statusFilter === 'all')
               .map(([projectName, stackData]) => {
                 const apps = stackData.containers;
                 const composePath = stackData.configFiles?.split(',')[0] || (stackData.workingDir ? `${stackData.workingDir}/docker-compose.yml` : undefined);
                 const own = projectName.toLowerCase() === 'manifexus';
+                const span = shelfSpan(apps.length);
                 return (
                   <Shelf
                     key={projectName}
+                    span={span}
                     id={`stack:${projectName}`}
                     title={projectName}
                     icon={<FolderIcon apps={apps} />}
@@ -864,7 +866,7 @@ export default function App() {
                     ]}
                   >
                     {apps.length > 0 ? (
-                      <TileGrid>{apps.map((c) => card(c, true))}</TileGrid>
+                      <TileGrid span={span}>{apps.map((c) => card(c, true))}</TileGrid>
                     ) : (
                       <ShelfNote>
                         No apps yet.{' '}
@@ -881,6 +883,7 @@ export default function App() {
             {groupedByComposeStacks.standalone.length > 0 && (
               <Shelf
                 id="stack:none"
+                span={shelfSpan(groupedByComposeStacks.standalone.length)}
                 title="Not in a Stack"
                 icon={<FolderIcon apps={groupedByComposeStacks.standalone} />}
                 status={
@@ -902,10 +905,10 @@ export default function App() {
                   },
                 ]}
               >
-                <TileGrid>{groupedByComposeStacks.standalone.map((c) => card(c))}</TileGrid>
+                <TileGrid span={shelfSpan(groupedByComposeStacks.standalone.length)}>{groupedByComposeStacks.standalone.map((c) => card(c))}</TileGrid>
               </Shelf>
             )}
-          </div>
+          </ShelfGrid>
         )}
       </main>
 

@@ -150,8 +150,11 @@ export const Shelf: React.FC<{
   menu?: MenuItem[];
   /** Keep it open even if folded before (e.g. an app in it has a problem) */
   forceOpen?: boolean;
+  /** Columns it spans in the ShelfGrid (1 to 3); a one-column panel keeps its header compact */
+  span?: number;
   children: React.ReactNode;
-}> = ({ id, title, icon, status, action, menu, forceOpen, children }) => {
+}> = ({ id, title, icon, status, action, menu, forceOpen, span = 3, children }) => {
+  const narrow = span === 1;
   const [folded, setFolded] = useState(() => readFolded().has(id));
   const open = forceOpen || !folded;
   const toggle = () => {
@@ -163,7 +166,7 @@ export const Shelf: React.FC<{
   };
   const bodyId = `shelf-${id.replace(/[^a-z0-9_-]/gi, '_')}`;
   return (
-    <section className="rounded-[22px]" style={{ ...panelStyle, fontFamily: ios.font }} aria-label={title}>
+    <section className={`rounded-[22px] min-w-0 ${SPAN_CLASS[span] ?? SPAN_CLASS[3]}`} style={{ ...panelStyle, fontFamily: ios.font }} aria-label={title}>
       <header className="flex items-center gap-3 pl-4 pr-3 sm:pl-5 sm:pr-4 py-3.5">
         <button
           type="button"
@@ -194,12 +197,14 @@ export const Shelf: React.FC<{
           <button
             type="button"
             onClick={action.onClick}
-            title={action.title}
-            className="hidden sm:inline-flex flex-shrink-0 items-center gap-1.5 h-8 pl-2.5 pr-3.5 rounded-full text-[13px] font-medium transition-colors hover:brightness-125 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0A84FF]"
+            title={action.title || action.label}
+            aria-label={action.label}
+            // A narrow panel shows just the +, so the stack's name keeps the room
+            className={`hidden sm:inline-flex flex-shrink-0 items-center justify-center gap-1.5 h-8 rounded-full text-[13px] font-medium transition-colors hover:brightness-125 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0A84FF] ${narrow ? 'w-8' : 'pl-2.5 pr-3.5'}`}
             style={{ background: 'rgba(118,118,128,0.16)', boxShadow: 'inset 0 0 0 0.5px rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.9)' }}
           >
             <PlusGlyph size={13} />
-            {action.label}
+            {!narrow && action.label}
           </button>
         )}
         {menu && menu.length > 0 && (
@@ -227,9 +232,24 @@ function isPhone() {
   return typeof window !== 'undefined' && window.matchMedia?.('(max-width: 639px)').matches;
 }
 
-/** The grid of app cards inside a panel */
-export const TileGrid: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5 sm:gap-3">{children}</div>
+/**
+ * Panels sit side by side and take only the width their apps need: a stack with one app is one
+ * column wide, two apps two columns, three or more the whole row. Gaps left by a wide panel are
+ * filled by the small ones after it, so the page stays dense and everything is visible at a glance.
+ */
+export const ShelfGrid: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4 items-start [grid-auto-flow:row_dense]">{children}</div>
+);
+
+/** How many columns a panel with this many apps spans (1 to 3) */
+export const shelfSpan = (apps: number) => Math.max(1, Math.min(3, apps));
+
+const SPAN_CLASS: Record<number, string> = { 1: '', 2: 'md:col-span-2', 3: 'md:col-span-2 lg:col-span-3' };
+const COLS_CLASS: Record<number, string> = { 1: '', 2: 'md:grid-cols-2', 3: 'md:grid-cols-2 lg:grid-cols-3' };
+
+/** The grid of app cards inside a panel, as many columns as the panel spans */
+export const TileGrid: React.FC<{ span?: number; children: React.ReactNode }> = ({ span = 3, children }) => (
+  <div className={`grid grid-cols-1 ${COLS_CLASS[span] ?? COLS_CLASS[3]} gap-2.5 sm:gap-3`}>{children}</div>
 );
 
 /** A calm one-line message inside a panel (an empty stack or group) */
