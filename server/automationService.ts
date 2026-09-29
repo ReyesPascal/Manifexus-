@@ -1,5 +1,6 @@
 import { friendlyName, isHelperImage } from './appIdentity';
 import fs from 'fs';
+import { getConfig } from './storageService';
 import path from 'path';
 import { exec } from 'child_process';
 import util from 'util';
@@ -40,6 +41,8 @@ export interface AutomationPrivileges {
   hostRootPath: string;
   hasDockerCli: boolean;
   mode: 'sandboxed' | 'elevated';
+  /** Server Changes is turned on in Manifexus (off until someone turns it on) */
+  allowChanges: boolean;
   canAutoExecute: boolean;
   statusMessage: string;
   details: {
@@ -51,6 +54,15 @@ export interface AutomationPrivileges {
 }
 
 const DOCKER_SOCKET_PATH = process.env.DOCKER_SOCKET_PATH || '/var/run/docker.sock';
+
+/** Server Changes: off until the person turns it on in Manifexus */
+export function serverChangesAllowed(): boolean {
+  return getConfig().allowServerChanges === true;
+}
+
+/** The plain reason shown when something needs Server Changes */
+export const CHANGES_OFF_MESSAGE = 'Server Changes is off, so Manifexus can’t change this. Turn it on in Settings → Server Changes.';
+
 const HOST_ROOT = process.env.HOST_ROOT || '/host';
 
 // Helper to check if a file/dir is writable
@@ -95,19 +107,16 @@ export async function checkPrivilegeStatus(): Promise<AutomationPrivileges> {
     hasDockerCli = false;
   }
 
-  const canAutoExecute = isConnected && (socketWritable || hostFsMounted);
-  const mode: 'sandboxed' | 'elevated' = socketWritable && (hostFsMounted || hasDockerCli)
-    ? 'elevated'
-    : 'sandboxed';
+  // Changes are only ever made when the person has turned Server Changes on, and Docker allows it
+  const allowChanges = serverChangesAllowed();
+  const canAutoExecute = allowChanges && isConnected && socketWritable;
+  const mode: 'sandboxed' | 'elevated' = canAutoExecute ? 'elevated' : 'sandboxed';
 
-  let statusMessage = 'Manifexus is running in Sandboxed Read-Only mode.';
-  if (mode === 'elevated') {
-    statusMessage = 'Full Host Automation is active. Zero-touch compose editing & stack deployments enabled.';
-  } else if (socketWritable && !hostFsMounted) {
-    statusMessage = 'Docker socket is writable. Stack operations can be orchestrated via Docker Engine.';
-  } else {
-    statusMessage = 'Read-only socket detected (/var/run/docker.sock:ro). Host files are protected.';
-  }
+  const statusMessage = !socketWritable
+    ? 'Docker only lets Manifexus look.'
+    : allowChanges
+      ? 'Server Changes is on.'
+      : 'Server Changes is off.';
 
   return {
     isDockerConnected: isConnected,
@@ -116,6 +125,7 @@ export async function checkPrivilegeStatus(): Promise<AutomationPrivileges> {
     hostRootPath: resolvedHostRoot,
     hasDockerCli,
     mode,
+    allowChanges,
     canAutoExecute,
     statusMessage,
     details: {
@@ -733,21 +743,6 @@ export async function runHostDockerCompose(
   }
 
   return false;
-}
-
-// Elevate Script Generator
-export function generateElevateScript(hostHeader: string): string {
-  const protocol = hostHeader.includes('localhost') || hostHeader.includes('127.0.0.1') ? 'http' : 'http';
-  return `#!/usr/bin/env bash
-# =========================================================================
-# MANIFEXUS ZERO-TOUCH AUTOMATION ELEVATOR
-# =========================================================================
-set -e
-
-echo "Elevating Manifexus permissions for seamless stack management..."
-docker restart manifexus 2>/dev/null || echo "Restarting container..."
-echo "Done! Manifexus is running with elevated zero-touch privileges."
-`;
 }
 
 // Synchronous execution fallback for legacy API

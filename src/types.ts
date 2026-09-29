@@ -106,6 +106,8 @@ export interface ManifexusConfig {
   experienceMode?: 'simple' | 'advanced';
   /** Show the command behind each step. Unset = follow the mode (on in Advanced) */
   showCommands?: boolean;
+  /** Server Changes: off until turned on. Off, Manifexus only looks (and starts, stops or restarts apps) */
+  allowServerChanges?: boolean;
 }
 
 export interface EmptyComposeStack {
@@ -180,6 +182,8 @@ export interface AutomationPrivileges {
   hostRootPath: string;
   hasDockerCli: boolean;
   mode: 'sandboxed' | 'elevated';
+  /** Server Changes is turned on in Manifexus */
+  allowChanges: boolean;
   canAutoExecute: boolean;
   statusMessage: string;
   details: {

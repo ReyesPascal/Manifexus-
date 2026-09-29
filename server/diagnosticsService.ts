@@ -333,12 +333,12 @@ export async function systemDiagnostics() {
   if (priv) {
     checks.push(
       priv.mode === 'elevated'
-        ? { id: 'automation', level: 'ok', title: 'Full automation', detail: 'Manifexus can edit stack files on your server, so moves and restores run in one click.', link: 'settings' }
+        ? { id: 'automation', level: 'ok', title: 'Server Changes is on', detail: 'Manifexus can move apps, restore backups and fix problems on your server.', link: 'settings' }
         : {
             id: 'automation',
-            level: 'warn',
-            title: 'Limited automation',
-            detail: priv.isSocketWritable ? 'It can manage containers but can’t edit stack files. Moves and restores need full access.' : 'The Docker socket is read-only, so Manifexus can only look, not change anything.',
+            level: 'info',
+            title: 'Server Changes is off',
+            detail: priv.isSocketWritable ? 'Manifexus only looks (and starts, stops or restarts apps). Turn on Server Changes to move apps, restore and fix problems.' : 'Docker only lets Manifexus look, so it can’t change anything.',
             link: 'settings',
           }
     );

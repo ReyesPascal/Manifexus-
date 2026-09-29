@@ -185,24 +185,23 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
         {onOpenAutomationModal && (
           <section>
-            <SectionHeader>Automation</SectionHeader>
             <Group>
               <Row
                 onClick={onOpenAutomationModal}
-                title="Automation Privileges"
+                title="Server Changes"
                 trailing={
                   <span className="inline-flex items-center gap-1.5" style={{ color: isElevated ? ios.green : ios.secondary }}>
                     <span className="w-[7px] h-[7px] rounded-full" style={{ background: 'currentColor' }} />
-                    {isElevated ? 'Full' : 'Limited'}
+                    {privileges?.allowChanges ? 'On' : 'Off'}
                   </span>
                 }
                 chevron
               />
             </Group>
             <SectionFooter>
-              {isElevated
-                ? 'Manifexus can edit stack files on your server, so moves and restores run in one click.'
-                : 'Manifexus can see containers but can’t edit files on your server. Tap to give it full access.'}
+              {privileges?.allowChanges
+                ? 'Manifexus can move apps, restore backups and fix problems on your server.'
+                : 'Manifexus only shows your apps and starts, stops or restarts them.'}
             </SectionFooter>
           </section>
         )}

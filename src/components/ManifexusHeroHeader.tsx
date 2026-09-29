@@ -295,7 +295,7 @@ export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
             <ToolButton
               icon={<Settings className={iconCls} />}
               label="Settings"
-              tip="Host address, stack folder, refresh rate and automation privileges."
+              tip="Stacks folder, refresh rate, Server Changes and more."
               onClick={onOpenSettings}
               align="end"
             />

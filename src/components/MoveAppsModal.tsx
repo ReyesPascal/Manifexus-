@@ -366,7 +366,7 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
   }, [selectedApps, stackByName]);
 
   const portConflicts = plan?.portConflicts?.filter((c) => c.conflict) || [];
-  const canRun = Boolean(privileges?.isSocketWritable ?? true);
+  const canRun = privileges ? Boolean(privileges.allowChanges) : true;
 
   // ---------------------------------------------------------------------------
   // Actions
@@ -801,9 +801,9 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
                   <BangGlyph />
                 </IconTile>
               }
-              title="Docker access needed"
-              subtitle="Manifexus needs write access to Docker to move apps."
-              trailing={onOpenAutomationModal ? <LinkButton onClick={onOpenAutomationModal}>Set Up</LinkButton> : undefined}
+              title="Server Changes is off"
+              subtitle="Turn it on to move apps."
+              trailing={onOpenAutomationModal ? <LinkButton onClick={onOpenAutomationModal}>Turn On</LinkButton> : undefined}
             />
           </Group>
         </section>

@@ -12,7 +12,8 @@ services:
       - BACKUPS_DIR=/app/backups
       - DATA_DIR=/data
     volumes:
-      # Mount the Docker daemon socket (read-only for automatic container discovery, or rw for elevated automation)
+      # The Docker socket: how Manifexus sees and manages your apps. Changes to your server are off until
+      # you turn on Server Changes in Settings.
       - /var/run/docker.sock:/var/run/docker.sock
       # Mount persistent storage for custom groups, app overrides, and dashboard config
       - ./data:/data

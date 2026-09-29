@@ -36,7 +36,8 @@ import {
 import {
   checkPrivilegeStatus,
   executeAutomatedStackMerge,
-  generateElevateScript,
+  serverChangesAllowed,
+  CHANGES_OFF_MESSAGE,
   executeStreamingPipeline,
   resolveHostPathToContainer,
 } from './server/automationService';
@@ -73,6 +74,7 @@ import {
   recordStartup,
 } from './server/observability';
 import { setupTerminalWebSocket } from './server/terminalService';
+import { enableServerChanges, disableServerChanges } from './server/serverAccess';
 import {
   listRestorePoints,
   getRestorePoint,
@@ -155,6 +157,22 @@ async function startServer() {
       );
     };
   }
+
+  // Server Changes: while it's off, nothing that changes the server runs (moves, restores, fixes,
+  // new or deleted stacks, cleanup). Looking, and starting, stopping or restarting apps, always work.
+  const CHANGE_ROUTES: RegExp[] = [
+    /^\/api\/stacks\/(create|delete|execute-merge|execute-merge-stream)$/,
+    /^\/api\/restore\/[^/]+\/(run|copy)$/,
+    /^\/api\/ai\/plans\/[^/]+\/run$/,
+    /^\/api\/diagnostics\/autofix$/,
+    /^\/api\/cleanup\/run$/,
+  ];
+  app.use((req, res, next) => {
+    if (req.method !== 'GET' && CHANGE_ROUTES.some((r) => r.test(req.path)) && !serverChangesAllowed()) {
+      return res.status(403).json({ error: CHANGES_OFF_MESSAGE, code: 'changes_off' });
+    }
+    next();
+  });
 
   // API Routes FIRST
 
@@ -497,6 +515,8 @@ async function startServer() {
         }
         req.body.stacksDir = dir;
       }
+      // Server Changes is only switched with its own button (/api/system/changes), never by a settings save
+      delete req.body.allowServerChanges;
       const updated = saveConfig(req.body);
       res.json(updated);
     } catch (err) {
@@ -1135,13 +1155,18 @@ async function startServer() {
     }
   });
 
-  // Serve the 1-line elevation script to upgrade to Full Host Automation
-  app.get('/api/system/elevate.sh', (req, res) => {
-    const hostHeader = req.get('host') || 'localhost:3334';
-    const script = generateElevateScript(hostHeader);
-    res.setHeader('Content-Type', 'text/x-shellscript');
-    res.setHeader('Content-Disposition', 'inline; filename="elevate.sh"');
-    res.send(script);
+  // Turn Server Changes on (gets the server ready, step by step, streamed as lines of JSON) or off
+  app.post('/api/system/changes', async (req, res) => {
+    if (req.body?.allow !== true) {
+      disableServerChanges();
+      return res.json({ done: true, ok: true, privileges: await checkPrivilegeStatus() });
+    }
+    res.setHeader('Content-Type', 'application/x-ndjson');
+    res.setHeader('Cache-Control', 'no-store');
+    const send = (o: unknown) => res.write(JSON.stringify(o) + '\n');
+    const out = await enableServerChanges((step) => send({ step }));
+    send({ done: true, ok: out.ok, problem: out.problem, privileges: await checkPrivilegeStatus() });
+    res.end();
   });
 
   // Execute stack merge (either automated via elevated privileges or simulated in demo)
@@ -1195,7 +1220,7 @@ async function startServer() {
         success: true,
         isAutomated: false,
         mode: 'sandboxed',
-        message: `Plan generated. Because Manifexus is in Sandboxed Mode, run the quick 3-step commands or click "Elevate Automation Mode" to enable 1-click execution.`,
+        message: CHANGES_OFF_MESSAGE,
         targetStackName: stackName,
         targetDirectory: targetDir,
       });

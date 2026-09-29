@@ -9,6 +9,7 @@ import {
 } from './dockerService';
 import { readHostFile, writeHostFile } from './hostFsService';
 import { globalLogService } from './globalLogService';
+import { serverChangesAllowed, CHANGES_OFF_MESSAGE } from './automationService';
 
 const DOCKER_SOCKET_PATH = process.env.DOCKER_SOCKET_PATH || '/var/run/docker.sock';
 
@@ -25,6 +26,12 @@ export function setupTerminalWebSocket(server: http.Server): WebSocketServer {
     const url = new URL(req.url || '', `http://${req.headers.host || 'localhost'}`);
     if (url.pathname === '/ws/terminal') {
       wss.handleUpgrade(req, socket, head, (ws) => {
+        // Editing files on the server needs Server Changes
+        if (!serverChangesAllowed()) {
+          ws.send(`\r\n${CHANGES_OFF_MESSAGE}\r\n`);
+          ws.close();
+          return;
+        }
         wss.emit('connection', ws, req);
       });
     }

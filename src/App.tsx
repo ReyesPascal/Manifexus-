@@ -56,7 +56,8 @@ export default function App() {
   const [containers, setContainers] = useState<DeepContainerMetadata[]>([]);
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
   const [privileges, setPrivileges] = useState<AutomationPrivileges | null>(null);
-  const [isAutomationModalOpen, setIsAutomationModalOpen] = useState(false);
+  // Server Changes sheet: open, and the ‹ Back label of the screen it opened on top of ('' = on its own)
+  const [automationFrom, setAutomationFrom] = useState<string | null>(null);
   const [config, setConfig] = useState<ManifexusConfig | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -256,7 +257,7 @@ export default function App() {
     }
   }, []);
 
-  // Fetch host automation privilege status (detects sandboxed vs elevated mode)
+  // Server Changes and Docker access
   const fetchPrivileges = useCallback(async () => {
     try {
       const res = await fetch('/api/system/privileges');
@@ -267,6 +268,27 @@ export default function App() {
     } catch (err) {
       console.error('[Manifexus] Error fetching privileges:', err);
     }
+  }, []);
+
+  // Anything refused because Server Changes is off opens the Server Changes sheet on top, one tap from on
+  useEffect(() => {
+    const original = window.fetch;
+    window.fetch = async (...args: Parameters<typeof fetch>) => {
+      const res = await original(...args);
+      if (res.status === 403) {
+        res
+          .clone()
+          .json()
+          .then((j) => {
+            if (j?.code === 'changes_off') setAutomationFrom((cur) => cur ?? 'Back');
+          })
+          .catch(() => undefined);
+      }
+      return res;
+    };
+    return () => {
+      window.fetch = original;
+    };
   }, []);
 
   // Initial fetch and auto-refresh interval
@@ -1044,7 +1066,7 @@ export default function App() {
         onSaveConfig={handleSaveConfig}
         detectedStacksDir={config?.stacksDir ? undefined : defaultStacksDir}
         privileges={privileges}
-        onOpenAutomationModal={() => setIsAutomationModalOpen(true)}
+        onOpenAutomationModal={() => setAutomationFrom('Settings')}
         onOpenAssistant={() => setAssistant({ open: true, view: 'settings', from: 'settings' })}
       />
 
@@ -1102,17 +1124,18 @@ export default function App() {
         initialDestination={moveInitialDestination}
         initialAppId={moveInitialAppId}
         privileges={privileges}
-        onOpenAutomationModal={() => setIsAutomationModalOpen(true)}
+        onOpenAutomationModal={() => setAutomationFrom('Back')}
         onMoved={() => {
           fetchData(true);
           fetchPrivileges();
         }}
       />
 
-      {/* Host Automation & Privileges Elevation Modal */}
+      {/* Server Changes: one switch, off until turned on */}
       <HostAutomationModal
-        isOpen={isAutomationModalOpen}
-        onClose={() => setIsAutomationModalOpen(false)}
+        isOpen={automationFrom !== null}
+        onClose={() => setAutomationFrom(null)}
+        backLabel={automationFrom || undefined}
         privileges={privileges}
         onRefreshPrivileges={fetchPrivileges}
       />
