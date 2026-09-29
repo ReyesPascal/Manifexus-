@@ -2,6 +2,17 @@
   "_about": "What's new in each version of Manifexus, newest first. Shown in Updates. Write for people, not developers: short, plain sentences about what they can now do. The newest entry's version is what gets built and tagged; older entries can give the \"commit\" they were released from.",
   "releases": [
     {
+      "version": "1.10",
+      "date": "2026-09-29",
+      "headline": "Stacks turn to fill the gaps, on any window size.",
+      "new": [],
+      "improved": [
+        "When the usual shapes would leave gaps (on narrower windows especially), a small stack turns, its apps stacked instead of side by side, to fill them.",
+        "A stack that sits beside taller neighbours spreads its apps evenly instead of leaving empty space at the bottom."
+      ],
+      "fixed": []
+    },
+    {
       "version": "1.9",
       "date": "2026-09-29",
       "headline": "A new look: stacks in liquid glass on a deep midnight blue, and stacks that fill every gap.",

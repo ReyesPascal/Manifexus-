@@ -251,7 +251,7 @@ export const Shelf: React.FC<{
   };
   const bodyId = `shelf-${id.replace(/[^a-z0-9_-]/gi, '_')}`;
   return (
-    <section className={`rounded-[22px] min-w-0 ${open ? 'flex-1' : ''}`} style={{ ...panelStyle, fontFamily: ios.font }} aria-label={title}>
+    <section className={`rounded-[22px] min-w-0 ${open ? 'flex-1 flex flex-col' : ''}`} style={{ ...panelStyle, fontFamily: ios.font }} aria-label={title}>
       <header className="group/head flex items-center gap-3 pl-4 pr-3 sm:pl-5 sm:pr-4 py-3.5">
         {/* Tapping the icon, name or status folds the stack; the ✎ beside the name renames it */}
         <div className="group flex-1 min-w-0 flex items-center gap-3 cursor-pointer" onClick={renaming ? undefined : toggle}>
@@ -327,7 +327,7 @@ export const Shelf: React.FC<{
         )}
       </header>
       {open && (
-        <div id={bodyId} className="px-3 pb-3 sm:px-4 sm:pb-4">
+        <div id={bodyId} className="flex-1 flex flex-col px-3 pb-3 sm:px-4 sm:pb-4">
           {children}
         </div>
       )}
@@ -340,7 +340,8 @@ export const Shelf: React.FC<{
  *
  * - The number of columns comes from the real width, so a card is never narrower than MIN_COL.
  * - A stack is as wide as its apps. One with more apps than fit across takes the shape with no empty
- *   slots (4 apps on 3 columns becomes 2 × 2), and the space beside it goes to other stacks.
+ *   slots (4 apps on 3 columns becomes 2 × 2), and the space beside it goes to other stacks. When that
+ *   still leaves gaps, a small stack may turn (its apps stacked instead of side by side) to fill them.
  * - Bigger stacks are placed first; each stack goes in the first spot it fits, so smaller stacks fill
  *   the gaps next to bigger ones. When stacks grow or shrink, or the window changes, everything re-fits.
  * - Stacks sharing a row line up to the same height.
@@ -353,8 +354,8 @@ const CellCols = React.createContext<number | null>(null);
 
 type Place = { i: number; col: number; row: number; w: number; h: number };
 
-/** The shape for a stack: as wide as its apps, or for more apps than columns the one with fewest empty slots */
-function shapeFor(n: number, C: number): { w: number; h: number } {
+/** The usual shape: as wide as its apps; for more apps than columns, the one with fewest empty slots */
+function naturalShape(n: number, C: number): { w: number; h: number } {
   if (n <= C) return { w: Math.max(1, n), h: 1 };
   let best = { w: C, h: Math.ceil(n / C) };
   let bestHoles = best.w * best.h - n;
@@ -370,7 +371,20 @@ function shapeFor(n: number, C: number): { w: number; h: number } {
   return best;
 }
 
-function placeStacks(apps: number[], C: number): Place[] {
+/** Shapes a stack may take: its usual one, or any with no empty slots up to 3 lines tall (2 apps side by side, or stacked) */
+function shapesFor(n: number, C: number, flexible: boolean): { w: number; h: number }[] {
+  const nat = naturalShape(n, C);
+  if (!flexible) return [nat];
+  const out = [nat];
+  const m = Math.max(1, n);
+  for (let w = Math.min(C, m); w >= 1; w--) {
+    const h = Math.ceil(m / w);
+    if (w * h === m && h <= 3 && !(w === nat.w && h === nat.h)) out.push({ w, h });
+  }
+  return out;
+}
+
+function placeWith(apps: number[], C: number, flexible: boolean): { places: Place[]; rows: number; gaps: number } {
   const order = apps
     .map((n, i) => ({ i, n }))
     // Biggest first (the same order on a phone as on a big screen); equal sizes keep their order
@@ -381,24 +395,38 @@ function placeStacks(apps: number[], C: number): Place[] {
     for (let y = r; y < r + h; y++) for (let x = c; x < c + w; x++) if (taken[y]?.[x]) return false;
     return true;
   };
-  const out: Place[] = [];
+  const places: Place[] = [];
   for (const { i, n } of order) {
-    const { w, h } = shapeFor(n, C);
-    // First spot it fits, top to bottom, left to right
-    for (let r = 0; ; r++) {
-      let c = 0;
-      for (; c <= C - w; c++) if (free(r, c, w, h)) break;
-      if (c <= C - w) {
-        for (let y = r; y < r + h; y++) {
-          taken[y] = taken[y] || [];
-          for (let x = c; x < c + w; x++) taken[y][x] = true;
+    // Each shape's first spot (top to bottom, left to right); the earliest spot wins, the usual shape on a tie
+    let best: Place | null = null;
+    for (const { w, h } of shapesFor(n, C, flexible)) {
+      for (let r = 0; ; r++) {
+        let c = 0;
+        for (; c <= C - w; c++) if (free(r, c, w, h)) break;
+        if (c <= C - w) {
+          if (!best || r < best.row || (r === best.row && c < best.col)) best = { i, col: c, row: r, w, h };
+          break;
         }
-        out.push({ i, col: c, row: r, w, h });
-        break;
       }
     }
+    for (let y = best!.row; y < best!.row + best!.h; y++) {
+      taken[y] = taken[y] || [];
+      for (let x = best!.col; x < best!.col + best!.w; x++) taken[y][x] = true;
+    }
+    places.push(best!);
   }
-  return out;
+  // Empty spots before the last row (the last row may end early)
+  let gaps = 0;
+  for (let y = 0; y < taken.length - 1; y++) for (let x = 0; x < C; x++) if (!taken[y]?.[x]) gaps++;
+  return { places, rows: taken.length, gaps };
+}
+
+/** The usual shapes, unless letting stacks turn (two apps stacked instead of side by side) leaves fewer gaps */
+function placeStacks(apps: number[], C: number): Place[] {
+  const plain = placeWith(apps, C, false);
+  if (!plain.gaps) return plain.places;
+  const flex = placeWith(apps, C, true);
+  return flex.gaps < plain.gaps || (flex.gaps === plain.gaps && flex.rows < plain.rows) ? flex.places : plain.places;
 }
 
 export const ShelfGrid: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -455,7 +483,8 @@ export const TileGrid: React.FC<{ span?: number; children: React.ReactNode }> = 
   const cols = React.useContext(CellCols);
   if (cols)
     return (
-      <div className="grid gap-2.5 sm:gap-3" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
+      // Fills the panel: when it's taller than its apps (beside stacked neighbours), the space is shared evenly
+      <div className="flex-1 grid gap-2.5 sm:gap-3" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, alignContent: 'space-evenly' }}>
         {children}
       </div>
     );
