@@ -351,6 +351,8 @@ async function buildPlan(args: { title?: string; explanation?: string; actions?:
         if (restored === null) return { problem: `Some hidden values (••••••) in the new ${path.posix.basename(p)} don’t match a line in the current file. Keep those lines exactly as they were.` };
         act.content = restored;
       }
+      // Keep the file's ending exactly as it was (models often drop the final newline)
+      if (before !== null && before.endsWith('\n') && !act.content.endsWith('\n')) act.content += '\n';
       if (before !== null && before === act.content) return { problem: `${p} already has exactly that content.` };
       steps.push({
         action: act,
@@ -503,6 +505,7 @@ export async function chat(messages: ChatMessage[], opts: { focus?: string; role
     if (planned) {
       // One short closing sentence, then stop
       let closing = '';
+      let first = true;
       for await (const chunk of ollamaStream<{ message?: { content?: string } }>(
         '/api/chat',
         { model, messages: convo, stream: true, think: info?.think ?? false, options: { num_ctx: 16384, temperature: 0.2 } },
@@ -510,7 +513,10 @@ export async function chat(messages: ChatMessage[], opts: { focus?: string; role
       )) {
         const piece = chunk.message?.content || '';
         closing += piece;
-        if (piece) emit({ type: 'text', delta: piece });
+        if (piece) {
+          emit({ type: 'text', delta: first && text.trim() ? `\n\n${piece.trimStart()}` : piece });
+          first = false;
+        }
       }
       emit({ type: 'done' });
       return;

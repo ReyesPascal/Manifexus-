@@ -25,7 +25,7 @@ import { ProgressView, useRun } from './ProgressTracker';
 // Types (mirror server/restoreService.ts)
 // ----------------------------------------------------------------------------
 
-type Kind = 'move' | 'delete' | 'install' | 'restore';
+type Kind = 'move' | 'delete' | 'install' | 'restore' | 'fix';
 type State = 'available' | 'restored' | 'failed' | 'archived';
 
 interface RestorePoint {
@@ -154,6 +154,8 @@ const KIND: Record<Kind, { color: string; d: string }> = {
   delete: { color: '#FF453A', d: G.trash },
   install: { color: '#30D158', d: G.plus },
   restore: { color: '#0A84FF', d: G.restore },
+  // A fix made by the built-in AI (sparkle)
+  fix: { color: '#BF5AF2', d: 'M12 3c.4 3.6 1.8 5.9 4.1 7 1.2.6 2.7.9 4.4 1.1v1.5c-1.7.2-3.2.5-4.4 1.1-2.3 1.1-3.7 3.4-4.1 7h-1c-.4-3.6-1.8-5.9-4.1-7-1.2-.6-2.7-.9-4.4-1.1v-1.5c1.7-.2 3.2-.5 4.4-1.1 2.3-1.1 3.7-3.4 4.1-7h1Z' },
 };
 
 const KindTile: React.FC<{ p: RestorePoint; size?: number }> = ({ p, size = 32 }) => (
@@ -330,7 +332,7 @@ const Detail: React.FC<{
         {p.state === 'available' && (
           <div className="mt-5 flex flex-col items-center gap-1.5">
             <Button onClick={() => onRestore(false)} className="!h-[40px] !px-6 !text-[15px]">
-              {p.kind === 'restore' ? 'Undo This Restore…' : 'Restore…'}
+              {p.kind === 'restore' ? 'Undo This Restore…' : p.kind === 'fix' ? 'Undo This Fix…' : 'Restore…'}
             </Button>
             {p.newer > 0 && (
               <p className="text-[12px] max-w-[380px]" style={{ color: ios.tertiary }}>
@@ -359,6 +361,12 @@ const Detail: React.FC<{
             </>
           )}
           {p.kind === 'install' && <Row title="Stack" trailing={<span>{p.stacks[0]}</span>} />}
+          {p.kind === 'fix' && (
+            <>
+              <Row title="Made By" trailing={<span>The built-in AI, with your OK</span>} />
+              {p.stacks.length > 0 && <Row title={p.stacks.length === 1 ? 'Stack' : 'Stacks'} trailing={<span>{p.stacks.join(', ')}</span>} />}
+            </>
+          )}
           {p.kind === 'restore' && (
             <>
               <Row title="Restored" trailing={<span className="truncate">{p.detail?.replace(/^to before /, 'Before ')}</span>} />
@@ -509,7 +517,7 @@ const Review: React.FC<{ plan: Plan | null; error?: string; filesOnly?: boolean 
           <Glyph d={G.restore} size={32} stroke={2} />
         </IconTile>
         <h3 className="mt-4 text-[21px] leading-[26px] font-semibold text-white px-4">
-          {filesOnly ? `Restore ${plan.point.stacks[0]}’s Files` : plan.point.kind === 'restore' ? 'Undo This Restore' : 'Restore to Before'}
+          {filesOnly ? `Restore ${plan.point.stacks[0]}’s Files` : plan.point.kind === 'restore' ? 'Undo This Restore' : plan.point.kind === 'fix' ? 'Undo This Fix' : 'Restore to Before'}
         </h3>
         <p className="mt-1 text-[14px] max-w-[460px] px-4" style={{ color: ios.secondary }}>
           {plan.point.title} · {when(plan.point.at)}
@@ -887,7 +895,7 @@ export const RestoreSheet: React.FC<{
     );
   } else if (view.kind === 'review' && plan?.canRestore) {
     const warn = plan.checks.some((c) => c.level === 'warn');
-    const label = view.filesOnly ? 'Restore Files' : plan.point.kind === 'restore' ? 'Undo Restore' : 'Restore';
+    const label = view.filesOnly ? 'Restore Files' : plan.point.kind === 'restore' ? 'Undo Restore' : plan.point.kind === 'fix' ? 'Undo Fix' : 'Restore';
     footer = (
       <div className="flex justify-end gap-2">
         <Button tone="gray" onClick={pop} className="sm:min-w-[110px]">

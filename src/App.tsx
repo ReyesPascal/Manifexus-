@@ -29,6 +29,7 @@ import { SoftwareUpdateSheet, SoftwareUpdateState } from './components/SoftwareU
 import { ActivitySheet } from './components/ActivitySheet';
 import { AppCard } from './components/AppCard';
 import { AppDetailsSheet } from './components/AppDetailsSheet';
+import { AssistantSheet } from './components/AssistantSheet';
 import { GroupManagerModal } from './components/GroupManagerModal';
 import { SettingsModal } from './components/SettingsModal';
 import { SimulateContainerModal } from './components/SimulateContainerModal';
@@ -111,7 +112,9 @@ export default function App() {
   // activity with window.dispatchEvent(new CustomEvent('manifexus:open-activity', { detail: { id } })).
   const [activity, setActivity] = useState<{ open: boolean; id?: string; filter?: string }>({ open: false });
   // A screen opened from Diagnostics / App Details sits on top of it, with a way back
-  const [overDetails, setOverDetails] = useState<null | 'activity' | 'restore' | 'updates' | 'settings'>(null);
+  const [overDetails, setOverDetails] = useState<null | 'activity' | 'restore' | 'updates' | 'settings' | 'assistant'>(null);
+  // Ask Manifexus (the built-in AI); `from` is the screen it was opened from, for its Back button
+  const [assistant, setAssistant] = useState<{ open: boolean; view?: 'setup' | 'settings'; question?: string; focus?: string; from?: 'settings' }>({ open: false });
   // The badge compares server timestamps only (the newest failure vs. the newest one already seen),
   // so a browser clock that's off can't hide it or make it stick
   const [unseenFailure, setUnseenFailure] = useState(false);
@@ -486,7 +489,7 @@ export default function App() {
 
   // Screens opened on top of Diagnostics: Back returns to it, Done closes both
   const detailsLabel = inspectContainer && manifexusHeroContainer && inspectContainer.id === manifexusHeroContainer.id ? 'Diagnostics' : 'App Details';
-  const backProps = (which: 'activity' | 'restore' | 'updates' | 'settings', close: () => void) =>
+  const backProps = (which: 'activity' | 'restore' | 'updates' | 'settings' | 'assistant', close: () => void) =>
     overDetails === which
       ? {
           backLabel: detailsLabel,
@@ -526,6 +529,7 @@ export default function App() {
           }}
           activityAlert={unseenFailure}
           onOpenRestore={() => setIsRestoreOpen(true)}
+          onOpenAssistant={() => setAssistant({ open: true })}
           onOpenSettings={() => setIsSettingsOpen(true)}
           onRefresh={() => {
             fetchData(true);
@@ -938,6 +942,10 @@ export default function App() {
           setOverDetails('settings');
           setIsSettingsOpen(true);
         }}
+        onAskAI={(question, focus) => {
+          setOverDetails('assistant');
+          setAssistant({ open: true, question, focus });
+        }}
         onOpenActivity={(filter) => {
           setOverDetails('activity');
           setActivity({ open: true, filter });
@@ -963,6 +971,17 @@ export default function App() {
         detectedStacksDir={config?.stacksDir ? undefined : defaultStacksDir}
         privileges={privileges}
         onOpenAutomationModal={() => setIsAutomationModalOpen(true)}
+        onOpenAssistant={() => setAssistant({ open: true, view: 'settings', from: 'settings' })}
+      />
+
+      <AssistantSheet
+        open={assistant.open}
+        initialView={assistant.view}
+        initialQuestion={assistant.question}
+        focus={assistant.focus}
+        {...(assistant.from === 'settings'
+          ? { backLabel: 'Settings', onBack: () => setAssistant({ open: false }), onClose: () => { setAssistant({ open: false }); setIsSettingsOpen(false); } }
+          : backProps('assistant', () => setAssistant({ open: false })))}
       />
 
       {/* Simulate Container Modal */}

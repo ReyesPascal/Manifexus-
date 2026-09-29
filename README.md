@@ -54,6 +54,14 @@ Manifexus is a lightweight, self-hosted central command hub that automatically t
 ### 7. Settings
 * **Changes save as you make them,** like the iPhone's Settings app: choices save on tap, text fields when you press Enter or leave the field. A checkmark confirms each save.
 
+### 8. Ask Manifexus: a built-in AI that stays on your server
+* **Private and free:** the AI engine (Ollama) is built into Manifexus. Models are downloaded once, on request, into `/data/ai`; nothing leaves your network and there are no keys or costs.
+* **Picked for your server:** Manifexus reads your processor, memory, graphics card and disk space and recommends a quick helper (explanations, summaries) and a fixer (finding causes, planning fixes) that fit without squeezing your apps. Only one runs at a time, and it frees its memory a few minutes after you're done.
+* **Sees everything Manifexus sees:** apps, stacks, compose and `.env` files, logs, Activity, Restore, Diagnostics and the server itself. Passwords and tokens are always hidden from it.
+* **Fixes with your OK:** proposed changes show a before/after of every file. Making them takes a backup first, uses the same progress tracker as moves, is saved in Restore (Undo This Fix) and recorded in Activity.
+* **Choose what it may do:** Look Only, Ask Before Changes (default), Fix Routine Things (starts and restarts on its own), or Expert (may also propose commands, each shown first).
+* **Fix with AI** from Diagnostics' To Fix list sends it the issue with everything it needs.
+
 ---
 
 ## 🚀 Quick Start (Single-Line Installation)

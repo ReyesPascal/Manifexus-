@@ -13,6 +13,8 @@ interface SettingsModalProps {
   privileges?: AutomationPrivileges | null;
   /** Opens the Host Automation & Privileges window */
   onOpenAutomationModal?: () => void;
+  /** Opens the built-in AI's settings */
+  onOpenAssistant?: () => void;
   /** Opened from another screen (e.g. Diagnostics): shows "‹ label" to go back to it */
   backLabel?: string;
   onBack?: () => void;
@@ -41,6 +43,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onOpenAutomationModal,
   backLabel,
   onBack,
+  onOpenAssistant,
 }) => {
   const [hostAddress, setHostAddress] = useState(config?.hostAddress || 'localhost');
   const [refreshInterval, setRefreshInterval] = useState(config?.refreshIntervalSeconds || 10);
@@ -201,6 +204,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 ? 'Manifexus can edit stack files on your server, so moves and restores run in one click.'
                 : 'Manifexus can see containers but can’t edit files on your server. Tap to give it full access.'}
             </SectionFooter>
+          </section>
+        )}
+
+        {onOpenAssistant && (
+          <section>
+            <SectionHeader>Built-in AI</SectionHeader>
+            <Group>
+              <Row onClick={onOpenAssistant} title="AI Assistant" subtitle="Models, and what it may do on its own" chevron />
+            </Group>
           </section>
         )}
 

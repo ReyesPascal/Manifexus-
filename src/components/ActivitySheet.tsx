@@ -121,6 +121,7 @@ const TYPE_FILTERS: { key: string; label: string; types?: string[]; statuses?: S
   { key: 'stack', label: 'Stacks', types: ['stack'] },
   { key: 'app', label: 'Apps', types: ['app'] },
   { key: 'settings', label: 'Settings', types: ['settings'] },
+  { key: 'fix', label: 'Fixes', types: ['fix'] },
 ];
 
 function fmtDuration(ms?: number): string {

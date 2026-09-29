@@ -18,6 +18,7 @@ import {
 import { DeepContainerMetadata, UserGroup, AppOverride, ContainerMount } from '../types';
 import { ManifexusAppIcon } from './SoftwareUpdateSheet';
 import { copyText } from './ActivitySheet';
+import { AssistantIcon } from './AssistantSheet';
 
 /**
  * One screen for any app, and Diagnostics for Manifexus itself: health checks in plain words, live
@@ -235,9 +236,11 @@ export const AppDetailsSheet: React.FC<{
   onOpenRestore?: () => void;
   onOpenSettings?: () => void;
   onOpenActivity?: (filter?: string) => void;
+  /** Ask the built-in AI to fix these issues */
+  onAskAI?: (question: string, focus: string) => void;
   /** Another screen is open on top of this one */
   covered?: boolean;
-}> = ({ container, system, groups, hostAddress, onClose, onSaveOverride, onAction, onOpenUpdates, onOpenRestore, onOpenSettings, onOpenActivity, covered }) => {
+}> = ({ container, system, groups, hostAddress, onClose, onSaveOverride, onAction, onOpenUpdates, onOpenRestore, onOpenSettings, onOpenActivity, onAskAI, covered }) => {
   const open = Boolean(container);
   const [stack, setStack] = useState<View[]>(['overview']);
   const view = stack[stack.length - 1];
@@ -494,7 +497,23 @@ export const AppDetailsSheet: React.FC<{
         {issues.length > 0 && (
           <section ref={toFixRef} className="scroll-mt-4">
             <SectionHeader>To Fix</SectionHeader>
-            <Group>{issues.map(checkRow)}</Group>
+            <Group>
+              {issues.map(checkRow)}
+              {onAskAI && (
+                <Row
+                  onClick={() =>
+                    onAskAI(
+                      issues.length === 1 ? `Please fix this: ${issues[0].title}` : `Please fix these ${issues.length} issues`,
+                      `${system ? 'Manifexus Diagnostics' : `The app ${name}`} shows these issues to fix:\n${issues.map((c) => `- ${c.title}: ${c.detail}`).join('\n')}`
+                    )
+                  }
+                  leading={<AssistantIcon size={26} />}
+                  title={<span style={{ color: ios.blue }}>{issues.length === 1 ? 'Fix with AI' : 'Fix These with AI'}</span>}
+                  subtitle="It looks into it and shows you the changes before anything happens"
+                  chevron
+                />
+              )}
+            </Group>
             <SectionFooter>These stay here until they’re fixed. Check Again after fixing one.</SectionFooter>
           </section>
         )}

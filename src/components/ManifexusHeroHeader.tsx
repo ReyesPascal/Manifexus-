@@ -1,5 +1,5 @@
 import React from 'react';
-import { Activity, History, Stethoscope, Settings, RefreshCw } from 'lucide-react';
+import { Activity, History, Stethoscope, Settings, RefreshCw, Sparkles } from 'lucide-react';
 import { DeepContainerMetadata, SystemStatus } from '../types';
 import { ManifexusAppIcon, UpdateGlyph } from './SoftwareUpdateSheet';
 import { ios } from './ui/ios';
@@ -20,6 +20,8 @@ interface ManifexusHeroHeaderProps {
   activityAlert?: boolean;
   /** Opens Restore */
   onOpenRestore?: () => void;
+  /** Ask Manifexus (the built-in AI) */
+  onOpenAssistant?: () => void;
   onOpenSettings: () => void;
   onRefresh: () => void;
   isRefreshing?: boolean;
@@ -33,7 +35,8 @@ const Tip: React.FC<{ text: string; side?: 'top' | 'bottom'; align?: 'center' | 
 }) => (
   <span
     role="tooltip"
-    className={`pointer-events-none absolute z-30 w-max max-w-[230px] rounded-[10px] px-2.5 py-1.5 text-[11.5px] leading-snug font-normal normal-case tracking-normal whitespace-normal text-left opacity-0 scale-95 transition-all duration-150 delay-200 group-hover:opacity-100 group-hover:scale-100 group-focus-visible:opacity-100 group-focus-visible:scale-100 ${
+    // Phones have no hover, so tooltips aren't laid out there (they'd widen the page)
+    className={`max-sm:hidden pointer-events-none absolute z-30 w-max max-w-[230px] rounded-[10px] px-2.5 py-1.5 text-[11.5px] leading-snug font-normal normal-case tracking-normal whitespace-normal text-left opacity-0 scale-95 transition-all duration-150 delay-200 group-hover:opacity-100 group-hover:scale-100 group-focus-visible:opacity-100 group-focus-visible:scale-100 ${
       side === 'top' ? 'bottom-full mb-2 origin-bottom' : 'top-full mt-2 origin-top'
     } ${align === 'end' ? 'right-0' : 'left-1/2 -translate-x-1/2'}`}
     style={{
@@ -119,6 +122,7 @@ export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
   onOpenActivity,
   activityAlert,
   onOpenRestore,
+  onOpenAssistant,
   onOpenSettings,
   onRefresh,
   isRefreshing,
@@ -192,6 +196,12 @@ export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
               backdropFilter: 'blur(20px)',
             }}
           >
+            {onOpenAssistant && (
+              <>
+                <ToolButton icon={<Sparkles className={iconCls} />} label="Ask" tip="Ask Manifexus: the built-in AI can look at your apps and fix things with your OK." onClick={onOpenAssistant} />
+                <Divider />
+              </>
+            )}
             <ToolButton
               icon={
                 <span className="relative flex">
@@ -236,6 +246,7 @@ export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
                 }
                 tone={updateAvailable || updating ? 'blue' : 'default'}
                 onClick={onOpenUpdates}
+                align="end"
               />
             )}
             <ToolButton
