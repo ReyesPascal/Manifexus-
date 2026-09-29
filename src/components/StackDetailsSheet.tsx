@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { DeepContainerMetadata } from '../types';
 import { AppIcon } from './AppCard';
-import { helperName } from '../appHelpers';
+import { helperKind } from '../appHelpers';
 import { FolderIcon, Health, displayFont } from './Shelf';
 import { copyText } from './ActivitySheet';
 import { Button, Group, Row, SectionFooter, SectionHeader, Sheet, ios } from './ui/ios';
@@ -87,7 +87,7 @@ export const StackDetailsSheet: React.FC<{
                   <span className="inline-flex items-center gap-1.5">
                     <span className="w-[7px] h-[7px] rounded-full" style={{ background: c.state === 'running' ? ios.green : c.state === 'restarting' ? ios.red : '#8E8E93' }} />
                     {STATE[c.state] || c.state}
-                    {(helpersOf?.get(c.id) || []).length > 0 && ` · with ${helpersOf!.get(c.id)!.map(helperName).join(', ')}`}
+                    {(helpersOf?.get(c.id) || []).length > 0 && ` · ${helpersOf!.get(c.id)!.map((h) => `${helperKind(h)} linked`).join(', ')}`}
                   </span>
                 }
                 chevron

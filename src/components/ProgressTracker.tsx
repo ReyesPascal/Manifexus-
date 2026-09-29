@@ -340,7 +340,7 @@ export const ProgressView: React.FC<{
       )}
       {run.status === 'done' && onDone && !onFinished && showCommands && (
         // Commands are shown, so it doesn't close by itself: Done stays in reach at the bottom
-        <div className="sticky bottom-0 -mx-4 sm:-mx-5 px-4 sm:px-5 pt-6 pb-1 flex justify-end" style={{ background: `linear-gradient(to bottom, transparent, ${ios.sheet} 45%)` }}>
+        <div className="sticky -bottom-10 -mx-4 sm:-mx-5 -mb-10 px-4 sm:px-5 pt-3 pb-4 flex justify-end" style={{ background: ios.sheet, borderTop: `0.5px solid ${ios.separator}` }}>
           <Button onClick={onDone} className="w-full sm:w-auto sm:min-w-[150px]">
             Done
           </Button>

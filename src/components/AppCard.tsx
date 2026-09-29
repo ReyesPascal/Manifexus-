@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { DeepContainerMetadata, UserGroup } from '../types';
 import { MenuButton, MenuItem } from './ui/ios';
-import { helperName } from '../appHelpers';
+import { helperKind, helperProduct } from '../appHelpers';
 
 interface AppCardProps {
   container: DeepContainerMetadata;
@@ -65,6 +65,14 @@ export const AppIcon: React.FC<{ container: DeepContainerMetadata; size?: number
     </div>
   );
 };
+
+const DbGlyph = () => (
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" aria-hidden>
+    <ellipse cx="12" cy="5.5" rx="7.5" ry="2.8" />
+    <path d="M4.5 5.5v13c0 1.5 3.4 2.8 7.5 2.8s7.5-1.3 7.5-2.8v-13" />
+    <path d="M4.5 12c0 1.5 3.4 2.8 7.5 2.8s7.5-1.3 7.5-2.8" />
+  </svg>
+);
 
 const OpenGlyph = () => (
   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -169,10 +177,21 @@ export const AppCard: React.FC<AppCardProps> = ({ container, inStack, helpers = 
       }`}
       style={{ fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", Roboto, sans-serif' }}
     >
-      <div className="flex items-center gap-3 min-w-0">
+      <div className="relative flex items-center gap-3 min-w-0">
         <div className={running ? '' : 'opacity-60 grayscale-[35%]'}>
           <AppIcon container={container} size={48} />
         </div>
+        {helpers.length > 0 && (
+          <span
+            className="absolute left-[32px] top-[30px] w-[22px] h-[22px] rounded-full flex items-center justify-center"
+            style={{ background: '#2c2c2e', boxShadow: '0 0 0 2.5px #1b1b1e', color: downHelpers.length ? '#FF9F0A' : 'rgba(235,235,245,0.75)' }}
+            title={helpers.map((h) => `${helperKind(h)} linked: ${helperProduct(h)} (${h.state === 'running' ? 'running' : 'stopped'})`).join('\n')}
+            role="img"
+            aria-label={helpers.map((h) => `${helperKind(h)} linked, ${h.state === 'running' ? 'running' : 'stopped'}`).join('. ')}
+          >
+            <DbGlyph />
+          </span>
+        )}
         <div className="flex-1 min-w-0">
           <h3 className="text-[16px] leading-[21px] font-semibold text-white truncate" title={name}>
             {name}
@@ -180,22 +199,13 @@ export const AppCard: React.FC<AppCardProps> = ({ container, inStack, helpers = 
           <div className="mt-0.5 flex items-center gap-1.5 text-[13px] leading-[18px] min-w-0" style={{ color: 'rgba(235,235,245,0.6)' }}>
             <span className="w-[7px] h-[7px] rounded-full flex-shrink-0" style={{ background: busyLabel ? '#0A84FF' : running && downHelpers.length ? '#FF9F0A' : st.color }} aria-hidden />
             <span className="flex-shrink-0">{busyLabel || st.label}</span>
-            {running && !busyLabel && downHelpers.length > 0 ? (
+            {running && !busyLabel && downHelpers.length > 0 && (
               <>
                 <span aria-hidden>·</span>
-                <span className="truncate" style={{ color: '#FF9F0A' }} title={`${downHelpers.map(helperName).join(', ')} isn’t running`}>
-                  {downHelpers.map(helperName).join(', ')} stopped
+                <span className="truncate" style={{ color: '#FF9F0A' }}>
+                  {downHelpers.length === 1 ? `${helperKind(downHelpers[0])} stopped` : `${downHelpers.length} linked parts stopped`}
                 </span>
               </>
-            ) : (
-              helpers.length > 0 && (
-                <>
-                  <span aria-hidden>·</span>
-                  <span className="truncate" title={`Includes ${helpers.map(helperName).join(', ')}`}>
-                    with {helpers.map(helperName).join(', ')}
-                  </span>
-                </>
-              )
             )}
             {container.compose?.project && !inStack && (
               <>

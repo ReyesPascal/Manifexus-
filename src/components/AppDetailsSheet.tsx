@@ -19,7 +19,7 @@ import { DeepContainerMetadata, UserGroup, AppOverride, ContainerMount } from '.
 import { ManifexusAppIcon } from './SoftwareUpdateSheet';
 import { copyText } from './ActivitySheet';
 import { AppIcon } from './AppCard';
-import { helperName } from '../appHelpers';
+import { helperKind, helperProduct } from '../appHelpers';
 import type { FixInfo, FixRequest } from './FixSheet';
 
 /**
@@ -610,18 +610,18 @@ export const AppDetailsSheet: React.FC<{
 
         {!system && (helpers.length > 0 || partOf) && (
           <section>
-            <SectionHeader>{partOf ? 'Part Of' : 'Also Part of This App'}</SectionHeader>
+            <SectionHeader>{partOf ? 'Linked To' : 'Linked'}</SectionHeader>
             <Group className="ios-inset-icon">
               {(partOf ? [partOf] : helpers).map((h) => (
                 <Row
                   key={h.id}
                   onClick={onOpenApp ? () => onOpenApp(h) : undefined}
                   leading={<AppIcon container={h} size={29} />}
-                  title={partOf ? h.customName || h.friendlyName || h.cleanName : helperName(h)}
+                  title={partOf ? h.customName || h.friendlyName || h.cleanName : `${helperKind(h)} · ${helperProduct(h)}`}
                   subtitle={
                     <span className="inline-flex items-center gap-1.5">
                       <span className="w-[7px] h-[7px] rounded-full" style={{ background: h.state === 'running' ? ios.green : h.state === 'restarting' ? ios.red : '#8E8E93' }} />
-                      {h.state === 'running' ? 'Running' : h.state === 'restarting' ? 'Keeps restarting' : 'Stopped'} · {h.image.split('/').pop()?.split('@')[0]}
+                      {h.state === 'running' ? 'Running' : h.state === 'restarting' ? 'Keeps restarting' : 'Stopped'} · {partOf ? 'the app this belongs to' : `container ${h.compose?.service || h.cleanName}`}
                     </span>
                   }
                   chevron={Boolean(onOpenApp)}
@@ -631,7 +631,7 @@ export const AppDetailsSheet: React.FC<{
             <SectionFooter>
               {partOf
                 ? `This runs behind ${partOf.customName || partOf.friendlyName || partOf.cleanName}, so the dashboard shows it inside that app instead of as its own card.`
-                : 'The database and other parts this app needs. They’re shown here instead of as their own cards; starting the app starts them too.'}
+                : 'What this app needs to work. It’s kept with the app instead of on its own card, and starting the app starts it too.'}
             </SectionFooter>
           </section>
         )}

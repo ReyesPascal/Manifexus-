@@ -171,7 +171,6 @@ export const Shelf: React.FC<{
           aria-expanded={open}
           aria-controls={bodyId}
           className="group flex-1 min-w-0 flex items-center gap-3 text-left rounded-[12px] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0A84FF]"
-          title={open ? 'Fold' : 'Show apps'}
         >
           {icon}
           <span className="min-w-0 flex-1">

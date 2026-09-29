@@ -72,3 +72,25 @@ export function helpersByApp(apps: DeepContainerMetadata[], parents: Map<string,
 
 /** A short name for a helper: "db", "redis" */
 export const helperName = (c: DeepContainerMetadata) => c.customName || c.compose?.service || c.friendlyName || c.cleanName;
+
+/** What a helper is, in a word: Database, Cache, Search… */
+export function helperKind(c: DeepContainerMetadata): string {
+  const img = (c.image || '').toLowerCase();
+  if (/(mariadb|mysql|postgres|postgis|pgvecto|timescaledb|mongo|cassandra|couchdb|influxdb)/.test(img)) return 'Database';
+  if (/(redis|valkey|keydb|dragonfly|memcached)/.test(img)) return 'Cache';
+  if (/(elasticsearch|opensearch)/.test(img)) return 'Search';
+  if (/(rabbitmq|nats|mosquitto)/.test(img)) return 'Messaging';
+  if (/clamav/.test(img)) return 'Virus Scanner';
+  if (/minio/.test(img)) return 'Storage';
+  return 'Service';
+}
+
+/** The product behind a helper, from its image: "MariaDB 11", "Redis" */
+export function helperProduct(c: DeepContainerMetadata): string {
+  const ref = (c.image || '').split('@')[0];
+  const name = (ref.split('/').pop() || ref).split(':')[0];
+  const tag = ref.includes(':') ? ref.split(':').pop() : '';
+  const pretty: Record<string, string> = { mariadb: 'MariaDB', mysql: 'MySQL', postgres: 'PostgreSQL', postgresql: 'PostgreSQL', redis: 'Redis', valkey: 'Valkey', mongo: 'MongoDB', memcached: 'Memcached', elasticsearch: 'Elasticsearch', opensearch: 'OpenSearch', clamav: 'ClamAV', minio: 'MinIO', rabbitmq: 'RabbitMQ' };
+  const label = pretty[name.toLowerCase()] || name;
+  return tag && /^\d/.test(tag) ? `${label} ${tag.split('-')[0]}` : label;
+}
