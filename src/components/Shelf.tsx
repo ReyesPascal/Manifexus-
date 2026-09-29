@@ -150,11 +150,10 @@ export const Shelf: React.FC<{
   menu?: MenuItem[];
   /** Keep it open even if folded before (e.g. an app in it has a problem) */
   forceOpen?: boolean;
-  /** Columns it spans in the ShelfGrid (1 to 3); a one-column panel keeps its header compact */
+  /** Columns it spans in the ShelfGrid (1 to 3) */
   span?: number;
   children: React.ReactNode;
 }> = ({ id, title, icon, status, action, menu, forceOpen, span = 3, children }) => {
-  const narrow = span === 1;
   const [folded, setFolded] = useState(() => readFolded().has(id));
   const open = forceOpen || !folded;
   const toggle = () => {
@@ -199,12 +198,11 @@ export const Shelf: React.FC<{
             onClick={action.onClick}
             title={action.title || action.label}
             aria-label={action.label}
-            // A narrow panel shows just the +, so the stack's name keeps the room
-            className={`hidden sm:inline-flex flex-shrink-0 items-center justify-center gap-1.5 h-8 rounded-full text-[13px] font-medium transition-colors hover:brightness-125 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0A84FF] ${narrow ? 'w-8' : 'pl-2.5 pr-3.5'}`}
+            // Just a +, so the stack's name keeps the room; the tooltip says what it adds
+            className="inline-flex flex-shrink-0 items-center justify-center w-8 h-8 rounded-full transition-colors hover:brightness-125 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0A84FF]"
             style={{ background: 'rgba(118,118,128,0.16)', boxShadow: 'inset 0 0 0 0.5px rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.9)' }}
           >
             <PlusGlyph size={13} />
-            {!narrow && action.label}
           </button>
         )}
         {menu && menu.length > 0 && (
@@ -213,7 +211,7 @@ export const Shelf: React.FC<{
             label={<MoreGlyph />}
             ariaLabel={`More for ${title}`}
             title="More"
-            items={action && isPhone() ? [{ key: '__action', label: action.label, onSelect: action.onClick }, ...menu.map((m, i) => (i === 0 ? { ...m, divider: true } : m))] : menu}
+            items={menu}
             className="flex-shrink-0 w-9 h-9 rounded-full inline-flex items-center justify-center text-white/70 hover:text-white hover:bg-white/[0.08] focus-visible:outline-2 focus-visible:outline-[#0A84FF]"
           />
         )}
@@ -226,11 +224,6 @@ export const Shelf: React.FC<{
     </section>
   );
 };
-
-/** Phones hide the Add App capsule, so it moves into the menu there */
-function isPhone() {
-  return typeof window !== 'undefined' && window.matchMedia?.('(max-width: 639px)').matches;
-}
 
 /**
  * Panels sit side by side and take only the width their apps need: a stack with one app is one
@@ -263,10 +256,47 @@ export const ShelfNote: React.FC<{ children: React.ReactNode }> = ({ children })
 // Section bar
 // ----------------------------------------------------------------------------
 
+type Filter = 'all' | 'running' | 'stopped';
+
+/** One quiet number on the section bar: a dot, the count and a word. Tapping it filters (or opens). */
+const Stat: React.FC<{
+  value?: number;
+  word: string;
+  dot?: string;
+  active?: boolean;
+  tip: string;
+  onClick?: () => void;
+}> = ({ value, word, dot, active, tip, onClick }) => (
+  <button
+    type="button"
+    onClick={onClick}
+    title={tip}
+    aria-pressed={active}
+    className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full text-[13px] transition-colors hover:bg-white/[0.06] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0A84FF]"
+    style={
+      active
+        ? { background: 'rgba(10,132,255,0.16)', boxShadow: 'inset 0 0 0 0.5px rgba(10,132,255,0.55)', color: '#6CB6FF' }
+        : { color: ios.secondary }
+    }
+  >
+    {dot && <span className="w-[7px] h-[7px] rounded-full flex-shrink-0" style={{ background: dot }} aria-hidden />}
+    <span className="font-semibold tabular-nums" style={{ color: active ? '#fff' : 'rgba(255,255,255,0.92)' }}>
+      {value ?? '…'}
+    </span>
+    <span>{word}</span>
+    {active && (
+      <span className="ml-0.5 text-[11px] opacity-80" aria-hidden>
+        ✕
+      </span>
+    )}
+  </button>
+);
+
 /**
- * The break between the header and the stacks: a quiet "Your Stacks" label and a hairline, with the
- * "Showing only running apps" note on the right. Search and New Stack live in the header. With groups
- * shown, the label becomes Stacks | Groups to tap between, and + adds or edits groups.
+ * The break between the header and the stacks: a quiet "Your Stacks" label and a hairline, and on its
+ * right the numbers that describe what's below: how many apps are running and stopped (tap one to
+ * show only those, tap it again for all) and how many ports are in use (tap to see them). Search and
+ * New Stack live in the header. With groups shown, the label becomes Stacks | Groups to tap between.
  */
 export const LibraryBar: React.FC<{
   /** Off: just the Your Stacks label, no Groups to switch to */
@@ -275,12 +305,17 @@ export const LibraryBar: React.FC<{
   onView: (v: 'compose' | 'groups') => void;
   /** How many stacks are shown */
   count?: number;
-  filter: 'all' | 'running' | 'stopped';
-  onClearFilter: () => void;
+  filter: Filter;
+  onFilter: (f: Filter) => void;
+  running?: number;
+  stopped?: number;
+  ports?: number;
+  onShowPorts?: () => void;
   /** Group actions (New Group, Edit Groups), while groups are shown */
   groupItems?: MenuItem[];
-}> = ({ showGroups = false, view, onView, count, filter, onClearFilter, groupItems = [] }) => {
+}> = ({ showGroups = false, view, onView, count, filter, onFilter, running, stopped, ports, onShowPorts, groupItems = [] }) => {
   const label = 'text-[12px] font-semibold uppercase tracking-[0.08em]';
+  const toggle = (f: Filter) => onFilter(filter === f ? 'all' : f);
   const tab = (v: 'compose' | 'groups', text: string) => (
     <button
       type="button"
@@ -294,7 +329,7 @@ export const LibraryBar: React.FC<{
     </button>
   );
   return (
-    <div className="mt-3 mb-4 flex items-center gap-3 min-h-[28px]" style={{ fontFamily: ios.font }}>
+    <div className="mt-3 mb-4 flex flex-wrap items-center gap-x-3 gap-y-2 min-h-[28px]" style={{ fontFamily: ios.font }}>
       {showGroups ? (
         <div role="tablist" aria-label="Arrange apps" className="flex items-center gap-4 flex-shrink-0">
           {tab('compose', 'Stacks')}
@@ -310,16 +345,27 @@ export const LibraryBar: React.FC<{
           )}
         </h2>
       )}
-      <div className="flex-1 h-px" style={{ background: 'linear-gradient(90deg, rgba(255,255,255,0.14), rgba(255,255,255,0.03))' }} aria-hidden />
-      {filter !== 'all' && (
-        <div className="flex items-center gap-2 text-[13px] flex-shrink-0" style={{ color: ios.secondary }}>
-          <span className="max-sm:hidden">Showing only {filter === 'running' ? 'running' : 'stopped'} apps.</span>
-          <span className="sm:hidden">Only {filter}</span>
-          <button type="button" onClick={onClearFilter} className="font-medium hover:opacity-80" style={{ color: ios.blue }}>
-            Show All
-          </button>
-        </div>
-      )}
+      <div className="flex-1 min-w-6 h-px" style={{ background: 'linear-gradient(90deg, rgba(255,255,255,0.14), rgba(255,255,255,0.03))' }} aria-hidden />
+      <div className="flex items-center gap-0.5 -mr-2.5 max-sm:w-full max-sm:-ml-2.5" role="group" aria-label="Your apps">
+        <Stat
+          value={running}
+          word="Running"
+          dot={ios.green}
+          active={filter === 'running'}
+          tip={filter === 'running' ? 'Showing only running apps. Click to show all.' : 'Show only the apps that are running'}
+          onClick={() => toggle('running')}
+        />
+        <Stat
+          value={stopped}
+          word="Stopped"
+          dot={stopped ? '#FF9F0A' : '#8E8E93'}
+          active={filter === 'stopped'}
+          tip={filter === 'stopped' ? 'Showing only stopped apps. Click to show all.' : 'Show only the apps that aren’t running'}
+          onClick={() => toggle('stopped')}
+        />
+        <span className="w-px h-3.5 mx-1" style={{ background: 'rgba(255,255,255,0.12)' }} aria-hidden />
+        <Stat value={ports} word={ports === 1 ? 'Port' : 'Ports'} tip="Ports in use on your server. Click to see which app uses each one." onClick={onShowPorts} />
+      </div>
       {showGroups && groupItems.length > 0 && (
         <MenuButton
           look="bare"

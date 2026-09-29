@@ -652,18 +652,6 @@ export default function App() {
             setIsUpdatesOpen(true);
             refreshSoftwareUpdate();
           }}
-          stackCount={stats.stacks}
-          running={stats.running}
-          stopped={stats.stopped}
-          total={stats.total}
-          portsInUse={stats.ports}
-          statusFilter={statusFilter}
-          onStatusFilterChange={setStatusFilter}
-          onShowPorts={() => setIsPortsOpen(true)}
-          onShowStacks={() => {
-            setStatusFilter('all');
-            setViewMode('compose');
-          }}
           onOpenActivity={() => {
             setActivity({ open: true });
             markFailuresSeen(lastFailureAt.current);
@@ -718,7 +706,11 @@ export default function App() {
           onView={setViewMode}
           count={isLoading || searchQuery || statusFilter !== 'all' ? undefined : stats.stacks}
           filter={statusFilter}
-          onClearFilter={() => setStatusFilter('all')}
+          onFilter={setStatusFilter}
+          running={isLoading ? undefined : stats.running}
+          stopped={isLoading ? undefined : stats.stopped}
+          ports={isLoading ? undefined : stats.ports}
+          onShowPorts={() => setIsPortsOpen(true)}
           groupItems={[
             { key: 'group', label: 'New Group…', onSelect: () => setIsGroupManagerOpen(true) },
             ...(viewMode === 'groups' ? [{ key: 'edit', label: 'Edit Groups…', divider: true, onSelect: () => setIsGroupManagerOpen(true) }] : []),

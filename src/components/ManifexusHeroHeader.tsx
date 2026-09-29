@@ -13,19 +13,6 @@ interface ManifexusHeroHeaderProps {
   /** An update is being installed right now */
   updating?: boolean;
   onOpenUpdates?: () => void;
-  /** Number of stacks */
-  stackCount?: number;
-  /** Apps on the dashboard: running, stopped and the total */
-  running?: number;
-  stopped?: number;
-  total?: number;
-  /** Host ports in use by running apps */
-  portsInUse?: number;
-  /** Which apps the page shows; the Running and Stopped chips set it */
-  statusFilter?: 'all' | 'running' | 'stopped';
-  onStatusFilterChange?: (f: 'all' | 'running' | 'stopped') => void;
-  onShowPorts?: () => void;
-  onShowStacks?: () => void;
   onOpenActivity: () => void;
   /** Something failed since Activity was last opened */
   activityAlert?: boolean;
@@ -143,15 +130,6 @@ export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
   updateAvailable,
   updating,
   onOpenUpdates,
-  stackCount,
-  running,
-  stopped,
-  total,
-  portsInUse,
-  statusFilter = 'all',
-  onStatusFilterChange,
-  onShowPorts,
-  onShowStacks,
   onOpenActivity,
   activityAlert,
   onOpenRestore,
@@ -345,46 +323,12 @@ export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
           </div>
         </div>
 
-        {/* Status */}
+        {/* Manifexus itself; what your apps are doing is on the Your Stacks line below */}
         <div
-          className="mt-5 pt-4 flex flex-wrap items-center justify-between gap-3"
+          className="mt-5 pt-4 flex flex-wrap items-center gap-3"
           style={{ borderTop: '0.5px solid rgba(255,255,255,0.09)' }}
         >
-          {/* Your apps: tap Running or Stopped to show only those, Ports to see every port in use */}
-          <div className="flex flex-wrap items-center gap-2">
-            <Chip
-              label="Running"
-              tone={statusFilter === 'running' ? 'blue' : 'default'}
-              tip={statusFilter === 'running' ? 'Showing only running apps. Click to show all apps.' : 'Apps that are running. Click to show only these.'}
-              onClick={onStatusFilterChange ? () => onStatusFilterChange(statusFilter === 'running' ? 'all' : 'running') : undefined}
-            >
-              <span className="inline-flex items-baseline gap-1">
-                <span className="text-[14px] font-semibold tabular-nums" style={{ color: ios.green }}>
-                  {running ?? '…'}
-                </span>
-                {total !== undefined && <span className="text-[12px] tabular-nums" style={{ color: ios.tertiary }}>of {total}</span>}
-              </span>
-            </Chip>
-            <Chip
-              label="Stopped"
-              tone={statusFilter === 'stopped' ? 'blue' : 'default'}
-              tip={statusFilter === 'stopped' ? 'Showing only stopped apps. Click to show all apps.' : 'Apps that aren’t running. Click to show only these.'}
-              onClick={onStatusFilterChange ? () => onStatusFilterChange(statusFilter === 'stopped' ? 'all' : 'stopped') : undefined}
-            >
-              <span className="text-[14px] font-semibold tabular-nums" style={{ color: stopped ? '#FF9F0A' : 'rgba(255,255,255,0.55)' }}>
-                {stopped ?? '…'}
-              </span>
-            </Chip>
-            <Chip label="Stacks" tip="How many Docker Compose stacks your apps are grouped into." onClick={onShowStacks}>
-              <span className="text-[14px] font-semibold text-white tabular-nums">{stackCount ?? '…'}</span>
-            </Chip>
-            <Chip label="Ports" tip="Ports in use on your server. Click to see which app uses each one." onClick={onShowPorts}>
-              <span className="text-[14px] font-semibold text-white tabular-nums">{portsInUse ?? '…'}</span>
-            </Chip>
-          </div>
-
-          {/* Manifexus itself */}
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex-1 flex flex-wrap items-center gap-2">
             <Chip
               label={isVersion ? 'Version' : 'Build'}
               tone={updateAvailable ? 'blue' : 'default'}
@@ -419,19 +363,19 @@ export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
             <Chip className="max-sm:hidden" label="Dashboard Port" tip="The port this dashboard is served on. Open it as http://your-server:port.">
               <span className="text-[14px] font-semibold text-white tabular-nums tracking-wide">{port}</span>
             </Chip>
+          </div>
 
-            <button
+          <button
             type="button"
             onClick={onRefresh}
             aria-label="Refresh"
-            className="group relative inline-flex items-center gap-1.5 h-8 px-3 rounded-full text-[13px] font-medium transition-colors hover:bg-white/[0.08] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0A84FF]"
+            className="group relative -mr-3 inline-flex items-center gap-1.5 h-8 px-3 rounded-full text-[13px] font-medium transition-colors hover:bg-white/[0.08] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0A84FF]"
             style={{ color: ios.blue }}
           >
             <RefreshCw className={`${iconCls} ${isRefreshing ? 'animate-spin' : ''}`} />
             {isRefreshing ? 'Refreshing…' : 'Refresh'}
             <Tip text="Reload apps, stacks and status from Docker now." align="end" />
           </button>
-          </div>
         </div>
       </div>
     </section>
