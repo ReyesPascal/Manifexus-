@@ -98,6 +98,8 @@ export interface ManifexusConfig {
   stacksDir?: string;
   /** Version 1.1 set up its example problem for the built-in AI (only ever done once) */
   aiExampleSeeded?: boolean;
+  /** Names shown for stacks on the dashboard, by compose project; the folder keeps its real name */
+  stackNames?: Record<string, string>;
   /** Simple keeps screens clean; Advanced shows the technical side (commands, and later the terminal editor) */
   experienceMode?: 'simple' | 'advanced';
   /** Show the command behind each step. Unset = follow the mode (on in Advanced) */

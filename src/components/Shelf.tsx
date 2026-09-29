@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { DeepContainerMetadata } from '../types';
 import { AppIcon } from './AppCard';
 import { MenuButton, MenuItem, ios } from './ui/ios';
@@ -47,6 +47,83 @@ export const PlusGlyph: React.FC<{ size?: number }> = ({ size = 14 }) => (
     <path d="M12 5v14M5 12h14" />
   </svg>
 );
+
+const PencilGlyph = () => (
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16v4Z" />
+    <path d="m13.5 6.5 4 4" />
+  </svg>
+);
+
+/**
+ * The small ✎ beside a name. It appears when you point at the name (and stays faintly visible on
+ * touch screens, which can't point), so names stay clean until you want to change one.
+ */
+export const RenameButton: React.FC<{ label: string; onClick: () => void; group?: 'head' | 'card' }> = ({ label, onClick, group = 'head' }) => (
+  <button
+    type="button"
+    onClick={(e) => {
+      e.stopPropagation();
+      onClick();
+    }}
+    title="Rename"
+    aria-label={`Rename ${label}`}
+    className={`flex-shrink-0 w-6 h-6 -my-1 rounded-full inline-flex items-center justify-center text-white opacity-0 transition-opacity hover:!opacity-100 hover:bg-white/[0.08] focus:outline-none focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-[#0A84FF] [@media(hover:none)]:opacity-40 ${
+      group === 'head' ? 'group-hover/head:opacity-50' : 'group-hover/card:opacity-50'
+    }`}
+  >
+    <PencilGlyph />
+  </button>
+);
+
+/**
+ * A name being renamed, in place: the same type, on a soft field. Enter or clicking away saves,
+ * Esc cancels, and an empty name goes back to the original (shown as the placeholder).
+ */
+export const InlineName: React.FC<{
+  value: string;
+  original: string;
+  onSave: (name: string) => void;
+  onCancel: () => void;
+  className?: string;
+  style?: React.CSSProperties;
+}> = ({ value, original, onSave, onCancel, className = '', style }) => {
+  const [text, setText] = useState(value);
+  const done = useRef(false);
+  const input = useRef<HTMLInputElement>(null);
+  // Focus once whatever opened it (e.g. a menu handing focus back to its button) has settled
+  useEffect(() => {
+    const t = setTimeout(() => input.current?.focus(), 60);
+    return () => clearTimeout(t);
+  }, []);
+  const finish = (save: boolean) => {
+    if (done.current) return;
+    done.current = true;
+    if (save && text.trim() !== value) onSave(text.trim());
+    else onCancel();
+  };
+  return (
+    <input
+      ref={input}
+      value={text}
+      onChange={(e) => setText(e.target.value)}
+      onFocus={(e) => e.currentTarget.select()}
+      onBlur={() => finish(true)}
+      onKeyDown={(e) => {
+        e.stopPropagation();
+        if (e.key === 'Enter') finish(true);
+        if (e.key === 'Escape') finish(false);
+      }}
+      onClick={(e) => e.stopPropagation()}
+      onMouseDown={(e) => e.stopPropagation()}
+      placeholder={original}
+      aria-label={`New name for ${original}`}
+      spellCheck={false}
+      className={`w-full min-w-0 -mx-1.5 px-1.5 rounded-[8px] bg-white/[0.08] text-white outline-none ring-2 ring-[#0A84FF]/70 placeholder:text-white/30 ${className}`}
+      style={style}
+    />
+  );
+};
 
 /** A stack's icon: its apps' icons in a 2×2, like a folder on iPhone */
 export const FolderIcon: React.FC<{ apps: DeepContainerMetadata[]; tint?: string; size?: number }> = ({ apps, tint, size = 44 }) => {
@@ -152,8 +229,11 @@ export const Shelf: React.FC<{
   forceOpen?: boolean;
   /** Columns it spans in the ShelfGrid (1 to 3) */
   span?: number;
+  /** Rename it on the dashboard; `original` is its real name (the folder's), shown as the placeholder */
+  rename?: { original: string; onSave: (name: string) => void };
   children: React.ReactNode;
-}> = ({ id, title, icon, status, action, menu, forceOpen, span = 3, children }) => {
+}> = ({ id, title, icon, status, action, menu, forceOpen, span = 3, rename, children }) => {
+  const [renaming, setRenaming] = useState(false);
   const [folded, setFolded] = useState(() => readFolded().has(id));
   const open = forceOpen || !folded;
   const toggle = () => {
@@ -166,32 +246,56 @@ export const Shelf: React.FC<{
   const bodyId = `shelf-${id.replace(/[^a-z0-9_-]/gi, '_')}`;
   return (
     <section className={`rounded-[22px] min-w-0 ${SPAN_CLASS[span] ?? SPAN_CLASS[3]}`} style={{ ...panelStyle, fontFamily: ios.font }} aria-label={title}>
-      <header className="flex items-center gap-3 pl-4 pr-3 sm:pl-5 sm:pr-4 py-3.5">
-        <button
-          type="button"
-          onClick={toggle}
-          aria-expanded={open}
-          aria-controls={bodyId}
-          className="group flex-1 min-w-0 flex items-center gap-3 text-left rounded-[12px] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0A84FF]"
-        >
-          {icon}
+      <header className="group/head flex items-center gap-3 pl-4 pr-3 sm:pl-5 sm:pr-4 py-3.5">
+        {/* Tapping the icon, name or status folds the stack; the ✎ beside the name renames it */}
+        <div className="group flex-1 min-w-0 flex items-center gap-3 cursor-pointer" onClick={renaming ? undefined : toggle}>
+          <span className="flex-shrink-0">{icon}</span>
           <span className="min-w-0 flex-1">
             <span className="flex items-center gap-1.5 min-w-0">
-              <h2
-                className="text-[19px] leading-[24px] font-semibold text-white truncate"
-                style={{ fontFamily: displayFont, letterSpacing: '-0.02em' }}
-              >
-                {title}
-              </h2>
-              <span className="flex-shrink-0 opacity-40 group-hover:opacity-80 transition-opacity text-white">
-                <Chevron open={open} />
-              </span>
+              {renaming && rename ? (
+                <InlineName
+                  value={title === rename.original ? '' : title}
+                  original={rename.original}
+                  onSave={(n) => {
+                    setRenaming(false);
+                    rename.onSave(n);
+                  }}
+                  onCancel={() => setRenaming(false)}
+                  className="text-[19px] leading-[24px] h-[28px] font-semibold"
+                  style={{ fontFamily: displayFont, letterSpacing: '-0.02em' }}
+                />
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggle();
+                    }}
+                    aria-expanded={open}
+                    aria-controls={bodyId}
+                    title={rename && title !== rename.original ? `Folder: ${rename.original}` : undefined}
+                    className="flex items-center gap-1.5 min-w-0 text-left rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0A84FF]"
+                  >
+                    <h2
+                      className="text-[19px] leading-[24px] font-semibold text-white truncate"
+                      style={{ fontFamily: displayFont, letterSpacing: '-0.02em' }}
+                    >
+                      {title}
+                    </h2>
+                    <span className="flex-shrink-0 opacity-40 group-hover:opacity-80 transition-opacity text-white">
+                      <Chevron open={open} />
+                    </span>
+                  </button>
+                  {rename && <RenameButton label={title} onClick={() => setRenaming(true)} />}
+                </>
+              )}
             </span>
             <span className="mt-0.5 flex items-center text-[13px] leading-[18px] min-w-0" style={{ color: ios.secondary }}>
               {status}
             </span>
           </span>
-        </button>
+        </div>
         {action && (
           <button
             type="button"
@@ -211,7 +315,7 @@ export const Shelf: React.FC<{
             label={<MoreGlyph />}
             ariaLabel={`More for ${title}`}
             title="More"
-            items={menu}
+            items={rename ? [{ key: '__rename', label: 'Rename', onSelect: () => setRenaming(true) }, ...menu.map((m, i) => (i === 0 ? { ...m, divider: true } : m))] : menu}
             className="flex-shrink-0 w-9 h-9 rounded-full inline-flex items-center justify-center text-white/70 hover:text-white hover:bg-white/[0.08] focus-visible:outline-2 focus-visible:outline-[#0A84FF]"
           />
         )}

@@ -21,6 +21,7 @@
       ],
       "improved": [
         "Running, Stopped, Stacks and Ports now live in the header. Tap Running or Stopped to show only those apps, or Ports to see which app uses each port.",
+        "Rename stacks and apps right on the dashboard: point at a name and tap the pencil beside it (or choose Rename in a stack's menu). Only the name you see changes, never the folder or container, and clearing it brings back the original. Names you give apps now stay after updates.",
         "Stacks sit side by side and take only the room their apps need: a stack with one app is one column wide, so you see all your stacks at a glance instead of scrolling past empty space.",
         "Search and New Stack are in the header, right under the toolbar, and a quiet Your Stacks line separates the header from your stacks.",
         "Progress follows along: while a move, restore or fix runs, the screen scrolls to the step that's working (scroll up yourself and it waits for you).",

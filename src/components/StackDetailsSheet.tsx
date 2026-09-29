@@ -48,7 +48,9 @@ export const StackDetailsSheet: React.FC<{
   onEditCompose?: () => void;
   onOpenRestore: () => void;
   onDelete?: () => void;
-}> = ({ project, apps, helpersOf, workingDir, composeFile, onClose, onOpenApp, onAddApp, onEditCompose, onOpenRestore, onDelete }) => {
+  /** The name you gave it on the dashboard */
+  displayName?: string;
+}> = ({ project, apps, helpersOf, workingDir, composeFile, onClose, onOpenApp, onAddApp, onEditCompose, onOpenRestore, onDelete, displayName }) => {
   if (!project) return null;
   return (
     <Sheet open title="Stack Details" onClose={onClose} zIndex={55}>
@@ -56,8 +58,13 @@ export const StackDetailsSheet: React.FC<{
         <div className="flex flex-col items-center text-center pt-2">
           <FolderIcon apps={apps} size={72} />
           <h3 className="mt-3.5 text-[24px] leading-[29px] font-semibold text-white" style={{ fontFamily: displayFont, letterSpacing: '-0.02em' }}>
-            {project}
+            {displayName || project}
           </h3>
+          {displayName && displayName !== project && (
+            <div className="mt-0.5 text-[13px] font-mono" style={{ color: ios.tertiary }}>
+              {project}
+            </div>
+          )}
           <div className="mt-1 text-[14px]" style={{ color: ios.secondary }}>
             <Health apps={apps} alsoCheck={apps.flatMap((a) => helpersOf?.get(a.id) || [])} />
           </div>

@@ -40,6 +40,8 @@ interface MoveAppsModalProps {
   isOpen: boolean;
   onClose: () => void;
   containers: DeepContainerMetadata[];
+  /** Names you gave stacks on the dashboard, by folder name */
+  stackNames?: Record<string, string>;
   /** Databases and caches, by id, mapped to the app they belong to: they move with it and aren't listed */
   linkedTo?: Map<string, string>;
   emptyStacks?: EmptyComposeStack[];
@@ -124,6 +126,7 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
   isOpen,
   onClose,
   containers,
+  stackNames = {},
   linkedTo,
   emptyStacks = [],
   defaultStacksDir,
@@ -527,7 +530,7 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
                     <StackGlyph />
                   </IconTile>
                 }
-                title={s.project}
+                title={stackNames[s.project] || s.project}
                 trailing={
                   <>
                     <span className="text-[15px]">{current ? 'Current' : s.apps.length === 0 ? 'Empty' : plural(s.apps.length, 'app')}</span>

@@ -110,7 +110,7 @@ import {
   getSelf,
 } from './server/updateService';
 import fs from 'fs';
-import { DeepContainerMetadata } from './src/types';
+import { AppOverride, DeepContainerMetadata } from './src/types';
 
 async function startServer() {
   const app = express();
@@ -297,7 +297,7 @@ async function startServer() {
       const config = getConfig();
       const apps = containers.filter((c) => {
         if (isManifexusContainer(c)) return false;
-        const o = config.appOverrides[c.id] || config.appOverrides[c.cleanName] || {};
+        const o = { ...config.appOverrides[c.id], ...config.appOverrides[c.cleanName] };
         return !o.isHidden;
       });
       const runningCount = apps.filter((c) => c.state === 'running').length;
@@ -395,7 +395,9 @@ async function startServer() {
       const enriched: DeepContainerMetadata[] = containers.map((c) => {
         const key = c.id;
         const nameKey = c.cleanName;
-        const override = config.appOverrides[key] || config.appOverrides[nameKey] || {};
+        // Saved by the app's name, so it survives updates (which give the container a new id);
+        // older settings saved by id still count, the name's win
+        const override: AppOverride = { ...config.appOverrides[key], ...config.appOverrides[nameKey] };
 
         const web = webInfo(c);
         const chosen = override.customPort && c.ports.some((p) => p.publicPort === override.customPort) ? override.customPort : undefined;

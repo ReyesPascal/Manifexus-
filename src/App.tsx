@@ -320,13 +320,15 @@ export default function App() {
     }
   };
 
-  // Save deep customization override from Inspect modal
+  // Save deep customization override from Inspect modal. Saved by the app's name, which stays the
+  // same when an update recreates it (its id doesn't). Cleared fields are sent as null so they clear.
   const handleSaveOverride = async (containerId: string, override: AppOverride) => {
+    const key = containers.find((c) => c.id === containerId)?.cleanName || containerId;
     try {
-      const res = await fetch(`/api/containers/${containerId}/override`, {
+      const res = await fetch(`/api/containers/${encodeURIComponent(key)}/override`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(override),
+        body: JSON.stringify(override, (_k, v) => (v === undefined ? null : v)),
       });
       if (res.ok) {
         await fetchData(true);
@@ -337,18 +339,23 @@ export default function App() {
   };
 
   // Quick set primary Web UI port from app card
-  const handleSetPrimaryPort = async (containerId: string, port: number) => {
+  const handleSetPrimaryPort = (containerId: string, port: number) => handleSaveOverride(containerId, { customPort: port });
+
+  // Rename an app right on its card (empty goes back to its own name)
+  const handleRenameApp = (containerId: string, name: string) => handleSaveOverride(containerId, { customName: name.trim() || undefined });
+
+  // The name shown for a stack; its folder keeps the real one
+  const stackLabel = (project: string) => config?.stackNames?.[project]?.trim() || project;
+  const handleRenameStack = async (project: string, name: string) => {
+    const stackNames = { ...(config?.stackNames || {}) };
+    if (name.trim() && name.trim() !== project) stackNames[project] = name.trim();
+    else delete stackNames[project];
+    // Show it straight away; the save follows
+    setConfig((c) => (c ? { ...c, stackNames } : c));
     try {
-      const res = await fetch(`/api/containers/${containerId}/override`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ customPort: port }),
-      });
-      if (res.ok) {
-        await fetchData(true);
-      }
+      await handleSaveConfig({ stackNames });
     } catch (err) {
-      console.error('Failed to set primary port:', err);
+      console.error('Failed to rename stack:', err);
     }
   };
 
@@ -451,7 +458,7 @@ export default function App() {
         const q = searchQuery.toLowerCase();
         const matchName = [c.customName, c.friendlyName, c.cleanName].some((n) => (n || '').toLowerCase().includes(q));
         const matchImage = c.image.toLowerCase().includes(q);
-        const matchProject = (c.compose.project || '').toLowerCase().includes(q);
+        const matchProject = [c.compose.project, c.compose.project && config?.stackNames?.[c.compose.project]].some((n) => (n || '').toLowerCase().includes(q));
         const matchService = (c.compose.service || '').toLowerCase().includes(q);
         const matchPort = c.ports.some(
           (p) => String(p.publicPort || '').includes(q) || String(p.privatePort).includes(q)
@@ -479,7 +486,7 @@ export default function App() {
       out.push(show);
     }
     return out;
-  }, [containers, statusFilter, searchQuery, userGroups, helperOf]);
+  }, [containers, statusFilter, searchQuery, userGroups, helperOf, config?.stackNames]);
 
   // Summary numbers, computed from exactly what the dashboard shows as app cards
   // (not Manifexus itself, not apps hidden in Settings)
@@ -532,7 +539,7 @@ export default function App() {
     for (const es of emptyStacks) {
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
-        if (!es.project.toLowerCase().includes(q)) {
+        if (![es.project, config?.stackNames?.[es.project]].some((n) => (n || '').toLowerCase().includes(q))) {
           continue;
         }
       }
@@ -562,7 +569,7 @@ export default function App() {
     }
 
     return { stacksMap, standalone };
-  }, [filteredContainers, emptyStacks, searchQuery]);
+  }, [filteredContainers, emptyStacks, searchQuery, config?.stackNames]);
 
   // Simple / Advanced and Show Commands, for every screen
   useEffect(() => setPrefsFromConfig(config), [config]);
@@ -587,6 +594,8 @@ export default function App() {
     <AppCard
       key={c.id}
       inStack={inStack}
+      stackName={c.compose?.project ? stackLabel(c.compose.project) : undefined}
+      onRename={handleRenameApp}
       container={c}
       helpers={helpersOf.get(c.id)}
       hostAddress={hostAddress}
@@ -816,7 +825,8 @@ export default function App() {
                     key={projectName}
                     span={span}
                     id={`stack:${projectName}`}
-                    title={projectName}
+                    title={stackLabel(projectName)}
+                    rename={{ original: projectName, onSave: (n) => void handleRenameStack(projectName, n) }}
                     icon={<FolderIcon apps={apps} />}
                     status={<Health apps={apps} alsoCheck={apps.flatMap((a) => helpersOf.get(a.id) || [])} />}
                     forceOpen={apps.some((c) => c.state === 'restarting' || c.state === 'dead')}
@@ -919,6 +929,7 @@ export default function App() {
         return (
           <StackDetailsSheet
             project={d ? stackDetails : null}
+            displayName={stackDetails ? stackLabel(stackDetails) : undefined}
             apps={d?.containers || []}
             helpersOf={helpersOf}
             workingDir={d?.workingDir}
@@ -1066,6 +1077,7 @@ export default function App() {
 
       {/* Stack Merger & Migration Studio Modal */}
       <MoveAppsModal
+        stackNames={config?.stackNames}
         isOpen={isMergeModalOpen}
         onClose={() => setIsMergeModalOpen(false)}
         containers={containers}

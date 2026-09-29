@@ -1,12 +1,15 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { DeepContainerMetadata, UserGroup } from '../types';
 import { MenuButton, MenuItem } from './ui/ios';
+import { InlineName, RenameButton } from './Shelf';
 import { helperKind } from '../appHelpers';
 
 interface AppCardProps {
   container: DeepContainerMetadata;
   /** Shown inside its stack's section, so the stack name isn't repeated */
   inStack?: boolean;
+  /** The stack's name as shown on the dashboard (when it's been renamed) */
+  stackName?: string;
   /** Its own databases and caches, shown as part of it */
   helpers?: DeepContainerMetadata[];
   hostAddress: string;
@@ -17,6 +20,8 @@ interface AppCardProps {
   onSetPrimaryPort?: (containerId: string, port: number) => void;
   /** Opens the Move apps flow with this app selected */
   onMoveApp?: (container: DeepContainerMetadata) => void;
+  /** Rename it right on the card (empty goes back to its own name) */
+  onRename?: (containerId: string, name: string) => void;
 }
 
 const STATE: Record<string, { label: string; color: string }> = {
@@ -132,9 +137,15 @@ const InfoGlyph = () => (
  * and Move and Details beside it. The bottom row runs it: one clear action (Open its web page, or
  * Start it) with Restart and Stop beside it. Tapping the card also opens Details.
  */
-export const AppCard: React.FC<AppCardProps> = ({ container, inStack, helpers = [], hostAddress, groups, onInspect, onAction, onSetPrimaryPort, onMoveApp }) => {
+export const AppCard: React.FC<AppCardProps> = ({ container, inStack, stackName, helpers = [], hostAddress, groups, onInspect, onAction, onSetPrimaryPort, onMoveApp, onRename }) => {
   const [acting, setActing] = useState<'start' | 'stop' | 'restart'>();
-  const name = container.customName || container.friendlyName || container.cleanName;
+  const [renaming, setRenaming] = useState(false);
+  // A new name shows straight away, before the refresh brings it back from the server
+  const [pending, setPending] = useState<string>();
+  const ownName = container.friendlyName || container.cleanName;
+  const saved = container.customName || ownName;
+  const name = pending !== undefined ? pending || ownName : saved;
+  useEffect(() => setPending(undefined), [saved]);
   const running = container.state === 'running';
   const st = STATE[container.state] || { label: container.state, color: '#8E8E93' };
   const host = hostAddress || 'localhost';
@@ -184,7 +195,7 @@ export const AppCard: React.FC<AppCardProps> = ({ container, inStack, helpers = 
         }
       }}
       aria-label={`${name}, ${st.label}. Show details`}
-      className={`group relative flex flex-col gap-4 rounded-[18px] p-4 cursor-pointer text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0A84FF] ${
+      className={`group/card relative flex flex-col gap-4 rounded-[18px] p-4 cursor-pointer text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0A84FF] ${
         running ? 'bg-white/[0.045] hover:bg-white/[0.07]' : 'bg-white/[0.025] hover:bg-white/[0.05]'
       }`}
       style={{ fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", Roboto, sans-serif' }}
@@ -194,9 +205,26 @@ export const AppCard: React.FC<AppCardProps> = ({ container, inStack, helpers = 
           <AppIcon container={container} size={48} />
         </div>
         <div className="flex-1 min-w-0">
-          <h3 className="text-[16px] leading-[21px] font-semibold text-white truncate" title={name}>
-            {name}
-          </h3>
+          {renaming ? (
+            <InlineName
+              value={container.customName ? name : ''}
+              original={ownName}
+              onSave={(n) => {
+                setRenaming(false);
+                setPending(n);
+                onRename?.(container.id, n);
+              }}
+              onCancel={() => setRenaming(false)}
+              className="text-[16px] leading-[21px] h-[23px] font-semibold"
+            />
+          ) : (
+            <div className="flex items-center gap-1 min-w-0">
+              <h3 className="text-[16px] leading-[21px] font-semibold text-white truncate" title={name !== ownName ? `${name} (${ownName})` : name}>
+                {name}
+              </h3>
+              {onRename && <RenameButton group="card" label={name} onClick={() => setRenaming(true)} />}
+            </div>
+          )}
           <div className="mt-0.5 flex items-center gap-1.5 text-[13px] leading-[18px] min-w-0" style={{ color: 'rgba(235,235,245,0.6)' }}>
             <span className="w-[7px] h-[7px] rounded-full flex-shrink-0" style={{ background: busyLabel ? '#0A84FF' : running && downHelpers.length ? '#FF9F0A' : st.color }} aria-hidden />
             <span className="flex-shrink-0">{busyLabel || st.label}</span>
@@ -211,7 +239,7 @@ export const AppCard: React.FC<AppCardProps> = ({ container, inStack, helpers = 
             {container.compose?.project && !inStack && (
               <>
                 <span aria-hidden>·</span>
-                <span className="truncate">{container.compose.project}</span>
+                <span className="truncate">{stackName || container.compose.project}</span>
               </>
             )}
             {group && (
