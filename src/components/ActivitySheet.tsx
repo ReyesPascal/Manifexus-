@@ -124,7 +124,7 @@ const TYPE_FILTERS: { key: string; label: string; types?: string[]; statuses?: S
   { key: 'app', label: 'Apps', types: ['app'] },
   { key: 'settings', label: 'Settings', types: ['settings'] },
   { key: 'fix', label: 'Fixes', types: ['fix'] },
-  { key: 'ask', label: 'AI Questions', types: ['ask'] },
+  { key: 'ask', label: 'Fix with AI', types: ['ask'] },
 ];
 
 function fmtDuration(ms?: number): string {

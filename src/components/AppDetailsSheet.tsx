@@ -18,8 +18,7 @@ import {
 import { DeepContainerMetadata, UserGroup, AppOverride, ContainerMount } from '../types';
 import { ManifexusAppIcon } from './SoftwareUpdateSheet';
 import { copyText } from './ActivitySheet';
-import { AssistantIcon } from './AssistantSheet';
-import type { FixRequest } from './FixSheet';
+import type { FixInfo, FixRequest } from './FixSheet';
 
 /**
  * One screen for any app, and Diagnostics for Manifexus itself: health checks in plain words, live
@@ -34,12 +33,22 @@ import type { FixRequest } from './FixSheet';
 type Level = 'ok' | 'warn' | 'error' | 'info';
 type Link = 'activity' | 'updates' | 'restore' | 'settings' | 'logs' | 'storage';
 
+const FixGlyph = () => (
+  <span className="w-[26px] h-[26px] rounded-[7px] flex items-center justify-center" style={{ background: '#0A84FF' }}>
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M14.7 6.3a4 4 0 0 0-5.4 5.2L3 17.8V21h3.2l6.3-6.3a4 4 0 0 0 5.2-5.4l-2.6 2.6-2.3-.6-.6-2.3 2.5-2.7Z" />
+    </svg>
+  </span>
+);
+
 interface Check {
   id: string;
   level: Level;
   title: string;
   detail: string;
   link?: Link;
+  /** How to fix it: automatically, and by hand */
+  fix?: FixInfo;
 }
 
 interface Resources {
@@ -238,7 +247,7 @@ export const AppDetailsSheet: React.FC<{
   onOpenSettings?: () => void;
   onOpenActivity?: (filter?: string) => void;
   /** Ask the built-in AI to fix these issues */
-  /** Fix with AI: the issues, and where to check them again afterwards */
+  /** Fix This: the issues, how to fix them, and where to check them again afterwards */
   onFixWithAI?: (r: FixRequest) => void;
   /** Another screen is open on top of this one */
   covered?: boolean;
@@ -507,14 +516,15 @@ export const AppDetailsSheet: React.FC<{
                     onFixWithAI({
                       question: issues.length === 1 ? `Please fix this: ${issues[0].title}` : `Please fix these ${issues.length} issues`,
                       focus: `${system ? 'Manifexus Diagnostics' : `The app ${name}`} shows these issues to fix:\n${issues.map((c) => `- ${c.title}: ${c.detail}`).join('\n')}`,
-                      issues: issues.map((c) => ({ title: c.title, detail: c.detail, level: c.level })),
+                      issues: issues.map((c) => ({ id: c.id, title: c.title, detail: c.detail, level: c.level, fix: c.fix })),
                       recheckUrl: system ? '/api/diagnostics' : `/api/containers/${encodeURIComponent(container.id)}/diagnostics`,
                       subject: system ? 'Manifexus' : name,
+                      appId: system ? undefined : container.id,
                     })
                   }
-                  leading={<AssistantIcon size={26} />}
-                  title={<span style={{ color: ios.blue }}>{issues.length === 1 ? 'Fix with AI' : 'Fix These with AI'}</span>}
-                  subtitle="It looks into it and shows you the changes before anything happens"
+                  leading={<FixGlyph />}
+                  title={<span style={{ color: ios.blue }}>{issues.length === 1 ? 'Fix This' : 'Fix These'}</span>}
+                  subtitle={issues.some((c) => c.fix?.auto) ? 'Automatically, step by step yourself, or with the built-in AI' : 'Step by step yourself, or with the built-in AI'}
                   chevron
                 />
               )}

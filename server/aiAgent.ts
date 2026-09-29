@@ -397,7 +397,7 @@ async function buildPlan(args: { title?: string; explanation?: string; actions?:
   if (!actions.length) return { problem: 'The plan has no actions.' };
   const steps: PlanStep[] = [];
   for (const act of actions) {
-    if ((act.type === 'edit_file' || act.type === 'write_file') && !getAiSettings().access.files) return { problem: 'Changing files is off: the person hasn’t allowed looking at files. Use the other actions, or explain the change in words.' };
+    if ((act.type === 'edit_file' || act.type === 'write_file') && model !== AUTO_FIX && !getAiSettings().access.files) return { problem: 'Changing files is off: the person hasn’t allowed looking at files. Use the other actions, or explain the change in words.' };
     // A small edit becomes the whole new file, so it's reviewed, backed up and run like any file change
     if (act.type === 'edit_file') {
       const edited = await applyEdit(act);
@@ -485,6 +485,14 @@ async function buildPlan(args: { title?: string; explanation?: string; actions?:
 }
 
 export const getPlan = (id: string) => plans.get(id);
+
+/** Plans made by Manifexus's own fixes (not the AI): the AI's permission settings don't apply to them */
+export const AUTO_FIX = 'manifexus';
+
+/** An automatic fix as a plan: reviewed (with every file as a before/after), backed up and run like any other */
+export async function planFromActions(title: string, explanation: string, actions: PlanAction[]): Promise<{ plan?: Plan; problem?: string }> {
+  return buildPlan({ title, explanation, actions }, 'ask', AUTO_FIX);
+}
 
 /** Apply an edit_file action to the current file: the new content, or why it can't be applied */
 async function applyEdit(act: PlanAction): Promise<string | { problem: string }> {
@@ -1072,7 +1080,7 @@ export async function runPlan(id: string, emit: Emit): Promise<void> {
   const plan = plans.get(id);
   if (!plan) return emit({ type: 'failed', log: 'This plan has expired. Ask again to get a fresh one.' });
   const settings = getAiSettings();
-  if (settings.freedom === 'look') return emit({ type: 'failed', log: 'The assistant is set to “Look only”, so it can’t make changes.' });
+  if (settings.freedom === 'look' && plan.model !== AUTO_FIX) return emit({ type: 'failed', log: 'The built-in AI is set to “Look only”, so it can’t make changes.' });
 
   const names = ['Saving a backup', ...plan.steps.map((s) => s.label), 'Checking everything is running'];
   names.forEach((n, i) => emit({ type: 'step_update', stepIndex: i + 1, stepName: n, status: 'pending' }));

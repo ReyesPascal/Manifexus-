@@ -595,7 +595,6 @@ export default function App() {
           }}
           activityAlert={unseenFailure}
           onOpenRestore={() => setIsRestoreOpen(true)}
-          onOpenAssistant={() => setAssistant({ open: true })}
           onOpenSettings={() => setIsSettingsOpen(true)}
           onRefresh={() => {
             fetchData(true);
@@ -1051,10 +1050,6 @@ export default function App() {
           setAssistant({ open: true, question: r.question, focus: r.focus, fixAfter: r });
         }}
         onAction={handleAiAction}
-        onContinueInAsk={(question, answer, focus) => {
-          setFixRequest(null);
-          setAssistant({ open: true, focus, seed: { question, answer } });
-        }}
       />
 
       <AssistantSheet

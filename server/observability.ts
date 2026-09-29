@@ -230,8 +230,9 @@ const ROUTES: [string, RegExp, Describer][] = [
   ['POST', /^\/api\/ai\/models\/cancel$/, (_r, b) => ({ type: 'settings', title: `Cancel download of AI model ${b?.model || ''}`.trim() })],
   ['POST', /^\/api\/ai\/chat$/, (_r, b) => {
     const list = Array.isArray(b?.messages) ? b.messages : [];
-    const q = String(list[list.length - 1]?.content || '').replace(/\s+/g, ' ').trim();
-    return { type: 'ask', title: `Ask Manifexus: ${q.length > 80 ? `${q.slice(0, 79)}…` : q || 'a question'}` };
+    const q = String(list[list.length - 1]?.content || '').replace(/\s+/g, ' ').replace(/^Please fix (this|these \d+ issues):?\s*/i, '').trim();
+    const t = q.length > 80 ? `${q.slice(0, 79)}…` : q;
+    return b?.mode === 'fix' ? { type: 'ask', title: `Fix with AI: ${t || 'a problem'}` } : { type: 'ask', title: `Ask Manifexus: ${t || 'a question'}` };
   }],
   ['POST', /^\/api\/ai\/models\/remove$/, (_r, b) => ({ type: 'settings', title: `Remove AI model ${b?.model || ''}`.trim() })],
   ['POST', /^\/api\/restore\/([^/]+)\/copy$/, () => ({ type: 'undo', title: 'Restore a backup to another folder' })],
@@ -252,7 +253,7 @@ const ROUTES: [string, RegExp, Describer][] = [
 
 /** Read-only POSTs and the log API itself: no activity, low-detail request event only. */
 // Background requests the person didn't ask for directly: logged, but not listed in Activity
-const QUIET = [/^\/api\/stacks\/data-footprint$/, /^\/api\/logs(\/|$)/, /^\/api\/ai\/warm$/];
+const QUIET = [/^\/api\/stacks\/data-footprint$/, /^\/api\/logs(\/|$)/, /^\/api\/ai\/warm$/, /^\/api\/diagnostics\/autofix$/];
 
 export function requestTracker(req: Request, res: Response, next: NextFunction) {
   if (!req.path.startsWith('/api/')) return next();

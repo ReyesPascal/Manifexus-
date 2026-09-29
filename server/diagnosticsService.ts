@@ -23,6 +23,8 @@ export interface Check {
   detail: string;
   /** Opens a related screen in the dashboard */
   link?: 'activity' | 'updates' | 'restore' | 'settings' | 'logs' | 'storage';
+  /** Specifics a fix needs (which file, app or value), not shown */
+  data?: Record<string, string>;
 }
 
 export interface Resources {
@@ -247,7 +249,7 @@ async function duplicateAppsCheck(): Promise<Check | undefined> {
     const file = String(st.configFiles || '').split(',')[0]?.trim();
     if (st.project && file?.startsWith('/') && !files.has(file)) files.set(file, st.project);
   }
-  const found: { app: string; stack: string; file: string; runsIn: string }[] = [];
+  const found: { app: string; stack: string; file: string; runsIn: string; service: string }[] = [];
   const DETACHED = '\u0000'; // same stack name, but not a container this file made
   await Promise.all(
     Array.from(files.entries()).map(async ([file, stack]) => {
@@ -265,7 +267,7 @@ async function duplicateAppsCheck(): Promise<Check | undefined> {
         const o = owner.get(n)!;
         // Compose only adopts a container it made for this very service; anything else is in the way
         if (o.project === stack && o.service === key && !o.oneoff) continue;
-        found.push({ app: n, stack, file, runsIn: o.project === stack ? DETACHED : o.project });
+        found.push({ app: n, stack, file, runsIn: o.project === stack ? DETACHED : o.project, service: key });
       }
     })
   );
@@ -280,6 +282,7 @@ async function duplicateAppsCheck(): Promise<Check | undefined> {
   return {
     id: 'duplicates',
     level: 'warn',
+    data: { app: first.app, stack: first.stack, file: first.file, service: first.service, detached: first.runsIn === DETACHED ? 'yes' : '' },
     title:
       first.runsIn === DETACHED && found.length === 1
         ? `${first.app} can’t be started from ${first.stack}’s file`
@@ -349,6 +352,7 @@ export async function systemDiagnostics() {
     checks.push({
       id: 'stacks-dir',
       level: 'error',
+      data: { value: stacksSetting, ...(dataMount ? { file: settingsFile } : {}) },
       title: 'New stacks folder setting is broken',
       detail: `It’s saved as “${stacksSetting}”, which isn’t a full path (it should start with /), so Manifexus ignores it. It’s the "stacksDir" line in Manifexus’s settings file: ${settingsFile}.`,
     });

@@ -93,7 +93,9 @@ import {
 import { systemDiagnostics, systemReport, appDiagnostics, appLogs } from './server/diagnosticsService';
 import { getSystemSpecs } from './server/systemSpecs';
 import { aiStatus, saveAiSettings, installModel, installBundle as installAiBundle, cancelDownload, removeModel, warmUpEngine, catalogModel, stopEngine, installEngineNow } from './server/aiService';
-import { chat as aiChat, runPlan, getPlan, warm as aiWarm } from './server/aiAgent';
+import { chat as aiChat, runPlan, getPlan, warm as aiWarm, planFromActions } from './server/aiAgent';
+import { describeFix, autoFixActions, FixContext } from './server/fixCatalog';
+import type { Check } from './server/diagnosticsService';
 import { learnActivity, recentCommands } from './server/commandLog';
 import { seedAiExample } from './server/aiExample';
 import {
@@ -976,8 +978,45 @@ async function startServer() {
     }
   });
 
+  // Each problem comes with how to fix it: automatically (when Manifexus knows how) and by hand
+  const withFixes = (checks: Check[], ctx: FixContext) => checks.map((c) => ({ ...c, fix: describeFix(c, ctx) }));
+  const selfDir = async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const env: any = await environmentSnapshot().catch(() => ({}));
+    return env?.manifexus?.compose?.workingDir as string | undefined;
+  };
+
   app.get('/api/diagnostics', async (req, res) => {
-    res.json(await systemDiagnostics());
+    const d = await systemDiagnostics();
+    res.json({ ...d, checks: withFixes(d.checks, { selfDir: await selfDir() }) });
+  });
+
+  // Fix Automatically: the change for the chosen problems, from checks run just now, as a plan to review
+  app.post('/api/diagnostics/autofix', async (req, res) => {
+    try {
+      const appId = typeof req.body?.appId === 'string' ? req.body.appId : undefined;
+      const ids: string[] = Array.isArray(req.body?.checkIds) ? req.body.checkIds.map(String) : [];
+      const d = appId ? await appDiagnostics(appId) : await systemDiagnostics();
+      const ctx: FixContext = appId ? { app: (d as { name?: string }).name } : { selfDir: await selfDir() };
+      const chosen = d.checks.filter((c: Check) => ids.includes(c.id) && describeFix(c, ctx)?.auto);
+      if (!chosen.length) return res.status(400).json({ error: 'None of these can be fixed automatically any more. Check Again to see what’s left.' });
+      const actions = [];
+      for (const c of chosen) {
+        const a = await autoFixActions(c, ctx);
+        if ('problem' in a) return res.status(400).json({ error: a.problem });
+        actions.push(...a);
+      }
+      const what = chosen.map((c: Check) => describeFix(c, ctx)!.auto!);
+      const { plan, problem } = await planFromActions(
+        chosen.length === 1 ? what[0] : `Fix ${chosen.length} problems`,
+        `Manifexus knows how to fix ${chosen.length === 1 ? 'this' : 'these'}:\n\n${chosen.map((c: Check, i: number) => `- **${c.title}**: ${what[i]}`).join('\n')}`,
+        actions
+      );
+      if (!plan) return res.status(400).json({ error: problem || 'Couldn’t prepare the fix.' });
+      res.json(plan);
+    } catch (e) {
+      res.status(500).json({ error: (e as Error).message });
+    }
   });
 
   app.get('/api/diagnostics/report', async (req, res) => {
@@ -988,7 +1027,8 @@ async function startServer() {
 
   app.get('/api/containers/:id/diagnostics', async (req, res) => {
     try {
-      res.json(await appDiagnostics(req.params.id));
+      const d = await appDiagnostics(req.params.id);
+      res.json({ ...d, checks: withFixes(d.checks, { app: d.name }) });
     } catch (err) {
       res.status(404).json({ error: `Couldn’t inspect this app: ${(err as Error).message}` });
     }

@@ -105,7 +105,7 @@ export const FREEDOM: { value: Freedom; title: string; sub: string }[] = [
   { value: 'look', title: 'Look Only', sub: 'Explains and advises. Never changes anything.' },
   { value: 'ask', title: 'Ask Before Changes', sub: 'Shows every change for you to review first.' },
   { value: 'routine', title: 'Fix Routine Things', sub: 'Starts and restarts apps on its own. Anything else still asks.' },
-  { value: 'expert', title: 'Expert', sub: 'Like “Ask”, and may also propose commands to run on your server. Each is shown first.' },
+  { value: 'expert', title: 'Expert', sub: 'Like Ask Before Changes, and may also propose commands to run on your server. Each is shown first.' },
 ];
 
 export const fmtLeft = (s: number) => (s >= 90 ? `${Math.round(s / 60)} min` : `${Math.max(1, Math.round(s))} s`);

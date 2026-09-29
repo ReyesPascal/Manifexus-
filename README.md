@@ -54,19 +54,20 @@ Manifexus is a lightweight, self-hosted central command hub that automatically t
 ### 7. Settings
 * **Changes save as you make them,** like the iPhone's Settings app: choices save on tap, text fields when you press Enter or leave the field. A checkmark confirms each save.
 
-### 8. Ask Manifexus: a built-in AI that stays on your server
-* **Private and free:** the AI engine (Ollama) is built into Manifexus. Models are downloaded once, on request, into `/data/ai`; nothing leaves your network and there are no keys or costs.
-* **Guided setup:** the first time you open Ask (or Fix with AI), a short setup picks the models, what it may do, what it may look at and how hard it thinks. The models download as one pipeline while you choose: one after another, smallest first, each checked, loaded into memory and tested (which also measures its speed on your server) while the next downloads.
-* **Choose what it sees:** app logs, files on the server, Activity and Restore, and server details can each be turned off in setup or AI Settings. Apps, stacks and Diagnostics are always available; passwords, tokens and keys are always hidden.
-* **Picked for your server:** Manifexus reads your processor, memory, graphics card and disk space and recommends a quick helper (explanations, summaries) and a fixer (finding causes, planning fixes) that fit without squeezing your apps. Only one runs at a time, and it frees its memory a few minutes after you're done.
-* **Sees everything Manifexus sees:** apps, stacks, compose and `.env` files, logs, Activity, Restore, Diagnostics and the server itself. Passwords and tokens are always hidden from it.
-* **Fixes with your OK:** proposed changes show a before/after of every file. Making them takes a backup first, uses the same progress tracker as moves, is saved in Restore (Undo This Fix) and recorded in Activity.
-* **Choose what it may do:** Look Only, Ask Before Changes (default), Fix Routine Things (starts and restarts on its own), or Expert (may also propose commands, each shown first).
-* **Fix with AI** from Diagnostics' To Fix list opens its own screen: the problem, the AI working on it step by step, the proposed change as a before/after (Make Changes, Do It Myself or Not Now), then the checks run again to confirm it's fixed.
-* **Knows Manifexus:** for things Manifexus has a screen for (Move, New Stack, Restore, Diagnostics…) it offers a button that opens that screen ready to go, and asks a short question when it needs a detail.
-* **Chats:** every time Ask opens it's a new chat; earlier ones are under Previous Chats (kept in your browser). The message box only shows when it's your turn.
-* **Chooses automatically:** each request is sorted (question, fix or change) and gets the model and amount of thinking it needs. The obvious things are looked up before the AI starts, small file changes are one-line edits, and the fixer takes over if the quick helper gets stuck (only when there's memory free). Turn it off in AI Settings to always use the fixer.
-* **See it work:** every lookup, AI round (what it read and wrote, with a progress bar and time left from its measured speed on your server) and check is listed with how long it took. Answers appear all at once, formatted, when they're complete.
+### 8. Fixing problems: automatically, by hand, or with a built-in AI
+Every problem in Diagnostics' **To Fix** list has a **Fix This** button with three ways to fix it:
+* **Fix Automatically:** for problems Manifexus knows the answer to (a stacks folder setting without its leading `/`, an app listed in two stacks, an app that's stopped or failing its health check) it prepares the change itself, no AI involved. You review it first; it's backed up, run with the same progress tracker as moves, saved in Restore and recorded in Activity. The rules live in `server/fixCatalog.ts`.
+* **Fix It Myself:** step-by-step instructions for every problem, with the exact commands to copy and buttons for the Manifexus screens that do each step, then **Check Again**.
+* **Fix with AI:** a private AI (Ollama, built into Manifexus) looks into the problem and proposes a fix, shown as a before/after of every file (Make Changes, Do It Myself or Not Now); the checks run again afterwards to confirm it's fixed.
+
+About the built-in AI:
+* **Private and free:** models are downloaded once, on request, into `/data/ai`; nothing leaves your network and there are no keys or costs.
+* **Guided setup:** the first time you choose Fix with AI, a short setup picks the models, what it may do, what it may look at and how hard it thinks. The models download as one pipeline while you choose: one after another, smallest first, each checked, loaded into memory and tested (which also measures its speed on your server). Change it later in **Settings → Built-in AI**.
+* **Picked for your server:** Manifexus reads your processor, memory bandwidth, graphics card and disk space and recommends the smartest model that works in a reasonable time there (a second, faster one only when it's clearly faster). Estimates correct themselves from measured speeds.
+* **Choose what it sees and may do:** app logs, files, Activity and Restore, and server details can each be turned off; passwords, tokens and keys are always hidden. It may do: Look Only, Ask Before Changes (default), Fix Routine Things (starts and restarts on its own), or Expert (may also propose commands, each shown first).
+* **See it work:** every lookup, AI round (with a progress bar and time left) and check is listed with how long it took.
+
+A chat with the AI (Ask Manifexus) exists in the code (`src/components/AssistantSheet.tsx`, `/api/ai/chat`) but isn't offered in the app for now.
 
 ---
 

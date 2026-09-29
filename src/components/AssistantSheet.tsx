@@ -10,7 +10,9 @@ import { ACCESS, Answer, AiAction, Plan, PlanStep, WorkStep, Phase, newAnswer, a
 export { AssistantIcon };
 
 /**
- * Ask Manifexus: the built-in AI. First run sets it up (your server's specs, the models that fit,
+ * The built-in AI's setup and settings, and Ask Manifexus (a chat with it). In the app it only fixes
+ * problems Diagnostics finds (FixSheet); the chat views below are kept for later but nothing opens them.
+ * First run sets it up (your server's specs, the models that fit,
  * one-tap download). Then it's a chat that can look at everything and propose changes, which you
  * review (with a before/after of every file) and run with the same progress tracker as moves and
  * restores. Every change is backed up first and saved in Restore.
@@ -312,7 +314,7 @@ export const AssistantSheet: React.FC<{
   // First-time setup: which page, and the models picked on it
   const [setupPage, setSetupPage] = useState(0);
   const [choice, setChoice] = useState<ModelChoice>({});
-  const [stack, setStack] = useState<View[]>(['chat']);
+  const [stack, setStack] = useState<View[]>(['settings']);
   const view = stack[stack.length - 1];
   const [items, setItems] = useState<Item[]>([]);
   const [draft, setDraft] = useState('');
@@ -369,8 +371,9 @@ export const AssistantSheet: React.FC<{
         setChoice(freshChoice(s));
         setSetupPage(s.downloads.some((d) => ACTIVE_DL.includes(d.status)) ? 5 : 0);
         setStack(['wizard']);
-      } else if (initialView) setStack(s?.ready || initialView === 'settings' ? ['chat', initialView] : ['setup']);
-      else setStack(['chat']);
+      } else setStack(['settings']);
+      // Ask Manifexus (the chat below) isn't offered in the app for now; the built-in AI only fixes problems.
+      // To bring it back: open to ['chat'], or ['chat', initialView] when a view was asked for.
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -399,10 +402,10 @@ export const AssistantSheet: React.FC<{
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, status?.ready, status?.installed.length, downloading, view]);
 
-  // A download finished: the chat becomes available
+  // A download finished: back to its settings
   const prevReady = useRef(false);
   useEffect(() => {
-    if (status?.ready && !prevReady.current && view === 'setup' && !downloading) setStack(['chat']);
+    if (status?.ready && !prevReady.current && view === 'setup' && !downloading) setStack(['settings']);
     prevReady.current = Boolean(status?.ready);
   }, [status?.ready, view, downloading]);
 
@@ -516,7 +519,7 @@ export const AssistantSheet: React.FC<{
     if (!status) return { rec: [] as { m: CatalogEntry; role: 'quick' | 'fixer'; label: string; sub: string }[], toGet: [] as { m: CatalogEntry; role: 'quick' | 'fixer'; label: string; sub: string }[], pipeline: null as React.ReactNode, active: false };
     const rq = status.recommended.quick ? byId.get(status.recommended.quick) : undefined;
     const rf = status.recommended.fixer && status.recommended.fixer !== status.recommended.quick ? byId.get(status.recommended.fixer) : undefined;
-    const rec = [rq && { m: rq, role: 'quick' as const, label: 'Quick Helper', sub: 'Does most of the work: questions, lookups, simple fixes' }, rf && { m: rf, role: 'fixer' as const, label: 'Fixer', sub: 'Steps in for tricky problems' }].filter(Boolean) as {
+    const rec = [rq && { m: rq, role: 'quick' as const, label: 'Quick Helper', sub: 'Does most of the work: lookups and simple fixes' }, rf && { m: rf, role: 'fixer' as const, label: 'Fixer', sub: 'Steps in for tricky problems' }].filter(Boolean) as {
       m: CatalogEntry;
       role: 'quick' | 'fixer';
       label: string;
@@ -622,7 +625,7 @@ export const AssistantSheet: React.FC<{
   };
 
   // ---------------------------------------------------------------- views
-  let title = 'Ask Manifexus';
+  let title = 'Built-in AI';
   let body: React.ReactNode = null;
   let footer: React.ReactNode = null;
 
@@ -646,8 +649,7 @@ export const AssistantSheet: React.FC<{
       finish: () => {
         setting({ setupAt: true });
         if (afterSetup) return afterSetup();
-        setStack(['chat']);
-        fetch('/api/ai/warm', { method: 'POST' }).catch(() => undefined);
+        setStack(['settings']);
       },
       firstQuestion: initialQuestion || setupFor,
     });
@@ -754,9 +756,9 @@ export const AssistantSheet: React.FC<{
         {view === 'setup' && (
           <div className="flex flex-col items-center text-center pt-1">
             <AssistantIcon size={64} />
-            <h3 className="mt-4 text-[22px] leading-[27px] font-semibold text-white">Ask Manifexus</h3>
+            <h3 className="mt-4 text-[22px] leading-[27px] font-semibold text-white">Built-in AI</h3>
             <p className="mt-1.5 text-[14px] leading-[20px] max-w-[440px]" style={{ color: ios.secondary }}>
-              An assistant that can look at your apps, logs and files, and fix things with your OK. It runs on your server: free, private, nothing leaves your network.
+              It looks into problems Diagnostics finds and fixes them with your OK. It runs on your server: free, private, nothing leaves your network.
             </p>
           </div>
         )}
@@ -892,8 +894,8 @@ export const AssistantSheet: React.FC<{
                 : 'Almost there'}
           </span>
           {status.ready && (
-            <Button onClick={() => setStack(['chat'])} className="sm:min-w-[160px] flex-shrink-0">
-              Start Asking
+            <Button onClick={() => setStack(['settings'])} className="sm:min-w-[160px] flex-shrink-0">
+              Done
             </Button>
           )}
         </div>
@@ -901,14 +903,14 @@ export const AssistantSheet: React.FC<{
     } else if (view === 'setup' && status.ready && !downloading) {
       footer = (
         <div className="flex justify-end">
-          <Button onClick={() => setStack(['chat'])} className="sm:min-w-[200px]">
-            Start Asking
+          <Button onClick={() => setStack(['settings'])} className="sm:min-w-[200px]">
+            Done
           </Button>
         </div>
       );
     }
   } else if (view === 'settings') {
-    title = 'AI Settings';
+    title = 'Built-in AI';
     const installed = status.installed.map((i) => byId.get(i.id)).filter(Boolean) as CatalogEntry[];
     body = (
       <div className="space-y-7">
@@ -948,14 +950,14 @@ export const AssistantSheet: React.FC<{
           <Group>
             <Row
               title="Choose Automatically"
-              subtitle="For each request it picks the model, how much it thinks and what to look up first. Quick questions stay quick; tricky problems get the fixer and more thinking."
+              subtitle="For each problem it picks the model, how much it thinks and what to look up first. Simple problems stay quick; tricky ones get the fixer and more thinking."
               trailing={<Switch checked={status.settings.auto !== false} onChange={(v) => setting({ auto: v })} label="Choose automatically" />}
             />
           </Group>
           <SectionFooter>
             {status.settings.auto !== false
               ? 'The fixer only runs when there’s enough free memory at that moment, so your apps never run short. Each step shows which model did it and how long it took.'
-              : 'Off: every request uses the fixer, with the same settings each time.'}
+              : 'Off: every fix uses the fixer, with the same settings each time.'}
           </SectionFooter>
         </section>
         {(['quick', 'fixer'] as const).map((role) => {
@@ -978,7 +980,7 @@ export const AssistantSheet: React.FC<{
                 ))}
               </Group>
               {status.settings.auto !== false && installed.length > 0 && (
-                <SectionFooter>{role === 'quick' ? 'Does most of the work: questions, lookups and simple fixes.' : 'Takes tricky problems, and steps in when the quick helper gets stuck.'}</SectionFooter>
+                <SectionFooter>{role === 'quick' ? 'Does most of the work: lookups and simple fixes.' : 'Takes tricky problems, and steps in when the quick helper gets stuck.'}</SectionFooter>
               )}
             </section>
           );

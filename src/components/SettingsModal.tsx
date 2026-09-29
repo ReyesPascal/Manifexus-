@@ -247,7 +247,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <section>
             <SectionHeader>Built-in AI</SectionHeader>
             <Group>
-              <Row onClick={onOpenAssistant} title="AI Assistant" subtitle="Models, and what it may do on its own" chevron />
+              <Row onClick={onOpenAssistant} title="Built-in AI" subtitle="Fixes problems Diagnostics finds: its model, and what it may do" chevron />
             </Group>
           </section>
         )}

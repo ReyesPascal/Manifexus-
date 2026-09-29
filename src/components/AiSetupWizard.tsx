@@ -3,7 +3,7 @@ import { Button, Group, IconTile, Row, SectionFooter, SectionHeader, Switch, Che
 import { ACCESS, ACTIVE_DL, Access, AssistantIcon, CatalogEntry, FREEDOM, Freedom, Status, fmtGB, fmtLeft, fmtSecs } from './aiShared';
 
 /**
- * First-time setup for Ask Manifexus, shown when Ask or Fix with AI is opened before the AI is ready.
+ * First-time setup for the built-in AI, shown when Fix with AI is chosen before the AI is ready.
  * Six short pages: what it is, which models (the download starts right there and keeps going), what
  * it may do, what it may look at, how it thinks, and a summary that becomes the start button once the
  * everyday model is ready. Every choice saves as it's made and can be changed later in AI Settings.
@@ -29,12 +29,12 @@ interface Props {
   startDownload: (items: { model: string; role: 'quick' | 'fixer' | 'both' }[]) => Promise<boolean>;
   setting: (patch: Record<string, unknown>) => void;
   finish: () => void;
-  /** Opened from Fix with AI (or with a question): what it will do first once it's ready */
+  /** Opened from Fix with AI: the problem it will work on first once it's ready */
   firstQuestion?: string;
 }
 
 const FREEDOM_MORE: Record<Freedom, { example: string; icon: string; color: string }> = {
-  look: { example: 'Ask “Why did Sonarr stop?” and it explains the cause and what you could change. It never changes anything.', icon: 'M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Zm10 3a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z', color: '#64D2FF' },
+  look: { example: 'For “Sonarr keeps restarting” it explains the cause and what you could change. It never changes anything.', icon: 'M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Zm10 3a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z', color: '#64D2FF' },
   ask: { example: 'It finds the fix and shows you a before/after of every file. Nothing happens until you tap Make Changes.', icon: 'M9 12l2 2 4-4M12 3l7 3v5c0 4.5-3 8.5-7 10-4-1.5-7-5.5-7-10V6l7-3Z', color: '#30D158' },
   routine: { example: 'If restarting or starting an app is the fix, it just does it. Changes to files still wait for you.', icon: 'M20 12a8 8 0 1 1-2.3-5.7M20 4v4.5h-4.5', color: '#FF9F0A' },
   expert: { example: 'Like Ask Before Changes, and it may also propose commands to run on your server. Each is shown first; commands can’t be undone.', icon: 'M4 6l5 5-5 5M11 17h9', color: '#FF453A' },
@@ -111,12 +111,15 @@ export function setupWizard(p: Props): { title: string; subtitle?: string; body:
     // ------------------------------------------------------------ Welcome
     body = (
       <div className="space-y-7">
-        <Header title="Set Up Ask Manifexus" sub="A private assistant that can look into problems with your apps and fix them with your OK. Setting it up takes a minute; the download keeps going while you choose the rest." />
+        <Header
+          title="Set Up the Built-in AI"
+          sub="A private AI that looks into problems Diagnostics finds and fixes them with your OK. Setting it up takes a minute; the download keeps going while you choose the rest."
+        />
         {p.firstQuestion && (
           <Group>
             <Row
               leading={<AssistantIcon size={30} />}
-              title="Your question is saved"
+              title="The problem is saved"
               subtitle={<span className="whitespace-normal">When it’s ready, it starts on: “{p.firstQuestion.length > 110 ? `${p.firstQuestion.slice(0, 109)}…` : p.firstQuestion}”</span>}
             />
           </Group>
@@ -211,7 +214,7 @@ export function setupWizard(p: Props): { title: string; subtitle?: string; body:
                       title={
                         <span className="flex items-center gap-2 flex-wrap">
                           {m.name}
-                          {!r.single && <Badge>{id === r.quick ? 'Quick questions' : 'Harder problems'}</Badge>}
+                          {!r.single && <Badge>{id === r.quick ? 'Simple problems' : 'Harder problems'}</Badge>}
                         </span>
                       }
                       subtitle={
@@ -238,7 +241,7 @@ export function setupWizard(p: Props): { title: string; subtitle?: string; body:
         <section>
           <SectionHeader>Or Choose: Quick Helper</SectionHeader>
           <Group>{status.catalog.filter((m) => m.role === 'quick').map((m) => pick('quick', m))}</Group>
-          <SectionFooter>Does most of the work: questions, lookups and simple fixes.</SectionFooter>
+          <SectionFooter>Does most of the work: lookups and simple fixes.</SectionFooter>
         </section>
         <section>
           <SectionHeader>Second Model for Harder Problems (Optional)</SectionHeader>
@@ -340,23 +343,23 @@ export function setupWizard(p: Props): { title: string; subtitle?: string; body:
     const f = fixer && fixer.id !== quick?.id ? fixer : undefined;
     const rows: [string, string, string][] = f
       ? [
-          ['A quick question', `${q}, answering straight away`, fmtSecs(quick?.seconds || 60)],
+          ['A simple problem', `${q}, fixing it straight away`, fmtSecs(quick?.seconds || 60)],
           ['A fix Diagnostics found', `${q}; thinks harder only to correct itself, and ${f.name} steps in if it gets stuck`, 'usually one pass'],
           ['A tricky problem', `${f.name}, thinking it through, when there’s memory free`, fmtSecs((f.seconds || 90) * 1.6)],
         ]
       : [
-          ['A quick question', `${q}, answering straight away`, fmtSecs(quick?.seconds || 60)],
+          ['A simple problem', `${q}, fixing it straight away`, fmtSecs(quick?.seconds || 60)],
           ['A tricky problem', `${q}, thinking it through first`, 'takes longer'],
         ];
     body = (
       <div className="space-y-7">
         <Dots page={page} />
-        <Header title="How It Thinks" sub="Thinking harder gives better answers on tricky problems, but takes longer without a graphics card. Manifexus can choose for each question." />
+        <Header title="How It Thinks" sub="Thinking harder gives better answers on tricky problems, but takes longer without a graphics card. Manifexus can choose for each problem." />
         <section>
           <Group>
             <Row
               title="Choose Automatically"
-              subtitle="Picks the model, how much it thinks and what to look up first, for each question."
+              subtitle="Picks the model, how much it thinks and what to look up first, for each problem."
               trailing={<Switch checked={auto} onChange={(v) => p.setting({ auto: v })} label="Choose automatically" />}
             />
           </Group>
@@ -372,7 +375,7 @@ export function setupWizard(p: Props): { title: string; subtitle?: string; body:
             <SectionFooter>Each answer shows which model worked on it, what it looked at and how long each step took.</SectionFooter>
           </section>
         ) : (
-          <SectionFooter>Off: every question goes to {f?.name || q}, with the same settings each time.</SectionFooter>
+          <SectionFooter>Off: every problem goes to {f?.name || q}, with the same settings each time.</SectionFooter>
         )}
       </div>
     );
@@ -403,7 +406,7 @@ export function setupWizard(p: Props): { title: string; subtitle?: string; body:
               ? active
                 ? 'The quick helper is ready, so you can start now. The fixer finishes in the background.'
                 : 'Everything is downloaded and tested on your server.'
-              : 'It’s downloading, testing and loading the models on your server, so every question can use the right one. You can close this: it keeps going, and your settings are saved.'
+              : 'It’s downloading, testing and loading the models on your server, so every fix can use the right one. You can close this: it keeps going, and your settings are saved.'
           }
         />
         {p.pipeline}
@@ -415,7 +418,7 @@ export function setupWizard(p: Props): { title: string; subtitle?: string; body:
             <Row onClick={() => go(3)} title="May Look At" trailing={<span className="text-[14px] truncate max-w-[50vw] sm:max-w-[360px]">{seeing}</span>} chevron />
             <Row onClick={() => go(4)} title="Thinking" trailing={<span className="text-[14px]">{auto ? 'Chooses automatically' : 'Always the fixer'}</span>} chevron />
           </Group>
-          <SectionFooter>You can change any of these later: the gear in Ask opens AI Settings.</SectionFooter>
+          <SectionFooter>You can change any of these later in Settings → Built-in AI.</SectionFooter>
         </section>
       </div>
     );
@@ -425,7 +428,7 @@ export function setupWizard(p: Props): { title: string; subtitle?: string; body:
           {!ready ? status.setupBusy || bg || 'Getting it ready…' : ''}
         </span>
         <Button disabled={!ready} onClick={p.finish} className="sm:min-w-[200px] flex-shrink-0">
-          {!ready ? 'Finishing Setup…' : p.firstQuestion ? 'Start on My Question' : 'Start Asking'}
+          {!ready ? 'Finishing Setup…' : p.firstQuestion ? 'Start the Fix' : 'Done'}
         </Button>
       </div>
     );
