@@ -18,6 +18,7 @@
         "Activity → Commands. A learning log of every command behind your recent changes, and How It Was Done on every activity."
       ],
       "improved": [
+        "While Ask Manifexus works, you see what it's doing right now (starting up, reading logs, thinking, writing) and how long it's taken, instead of just dots.",
         "Updates now show version numbers and notes like these, instead of build codes.",
         "Activity has a new Fixes filter."
       ],

@@ -16,7 +16,7 @@ import { listRestorePoints } from './restoreService';
 import { getRegisteredCreatedStacks } from './stackService';
 import { resolveBackupDir, saveMergeHistoryRecord, MergeHistoryRecord } from './historyService';
 import { getSystemSpecs } from './systemSpecs';
-import { getAiSettings, modelFor, ollamaStream, catalogModel, Freedom } from './aiService';
+import { getAiSettings, modelFor, ollama, ollamaStream, catalogModel, Freedom } from './aiService';
 import type { DeepContainerMetadata } from '../src/types';
 import { explain, Explain } from './commandLog';
 
@@ -458,6 +458,47 @@ async function snapshotText(): Promise<string> {
   return lines.join('\n') || '(no apps found)';
 }
 
+/** What a tool is doing right now, for the progress line ("Reading sonarr’s logs…") */
+function doingLabel(name: string, args: Record<string, unknown>): string {
+  const a = (k: string) => String(args?.[k] ?? '').trim();
+  switch (name) {
+    case 'list_apps':
+      return 'Looking at your apps…';
+    case 'app_details':
+      return a('app') ? `Checking ${a('app')}…` : 'Checking an app…';
+    case 'app_logs':
+      return a('app') ? `Reading ${a('app')}’s logs…` : 'Reading logs…';
+    case 'list_stacks':
+      return 'Looking at your stacks…';
+    case 'read_file':
+      return a('path') ? `Reading ${a('path')}…` : 'Reading a file…';
+    case 'list_folder':
+      return a('path') ? `Looking in ${a('path')}…` : 'Looking in a folder…';
+    case 'diagnostics':
+      return 'Running Diagnostics…';
+    case 'activity':
+      return 'Looking at recent activity…';
+    case 'restore_points':
+      return 'Looking at Restore…';
+    case 'server_specs':
+      return 'Checking the server…';
+    case 'docker_overview':
+      return 'Looking at Docker networks, volumes and ports…';
+    default:
+      return 'Looking…';
+  }
+}
+
+/** Is the model already in memory? If not, the first answer waits for it to load */
+async function modelLoaded(model: string): Promise<boolean> {
+  try {
+    const r = await ollama<{ models?: { name?: string; model?: string }[] }>('/api/ps', undefined, 'GET', 3000);
+    return (r.models || []).some((m) => m.name === model || m.model === model || m.name === `${model}:latest`);
+  } catch {
+    return true;
+  }
+}
+
 /** Answer a question, looking things up with tools; may end with a plan to review */
 export async function chat(messages: ChatMessage[], opts: { focus?: string; role?: 'quick' | 'fixer' }, emit: Emit, signal?: AbortSignal): Promise<void> {
   const settings = getAiSettings();
@@ -475,6 +516,9 @@ export async function chat(messages: ChatMessage[], opts: { focus?: string; role
     ...messages.slice(-12).map((m) => ({ role: m.role, content: String(m.content).slice(0, 8000) })),
   ];
   emit({ type: 'model', model, name: info?.name || model });
+  // What it's doing, for the progress line under the question
+  const phase = (label: string, detail?: string) => emit({ type: 'phase', label, detail });
+  const loading = !(await modelLoaded(model));
   record('info', 'system', `Asked the AI: ${String(messages[messages.length - 1]?.content || '').slice(0, 160)}`, { model });
 
   for (let round = 0; round < 10; round++) {
@@ -482,14 +526,27 @@ export async function chat(messages: ChatMessage[], opts: { focus?: string; role
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let calls: any[] = [];
     emit({ type: 'thinking' });
-    for await (const chunk of ollamaStream<{ message?: { content?: string; tool_calls?: unknown[] }; done?: boolean; error?: string }>(
+    if (round === 0 && loading) phase(`Starting ${info?.name || 'the AI'}…`, 'Loading it into memory. The first answer takes longer.');
+    else phase(round === 0 ? 'Reading your question…' : 'Thinking about what it found…');
+    let thought = 0;
+    let wrote = false;
+    let arrived = false;
+    for await (const chunk of ollamaStream<{ message?: { content?: string; thinking?: string; tool_calls?: unknown[] }; done?: boolean; error?: string }>(
       '/api/chat',
       { model, messages: convo, tools, stream: true, think: info?.think ?? false, options: { num_ctx: 16384, temperature: 0.2 } },
       signal
     )) {
       if (chunk.error) throw new Error(chunk.error);
+      if (chunk.message?.thinking) {
+        const before = Math.floor(thought / 40);
+        thought += chunk.message.thinking.length;
+        if (thought < 40 || Math.floor(thought / 40) !== before) phase('Thinking…', `${Math.max(1, Math.round(thought / 5))} words so far`);
+      } else if (!arrived && round === 0 && loading) phase('Reading your question…');
+      arrived = true;
       const piece = chunk.message?.content || '';
       if (piece) {
+        if (!wrote) phase('Writing the answer…');
+        wrote = true;
         text += piece;
         emit({ type: 'text', delta: piece });
       }
@@ -512,6 +569,7 @@ export async function chat(messages: ChatMessage[], opts: { focus?: string; role
         }
       }
       if (name === 'propose_changes') {
+        phase('Preparing the changes for you to review…');
         const { plan, problem } = await buildPlan(args, freedom, model);
         if (plan) {
           emit({ type: 'plan', plan });
@@ -523,7 +581,8 @@ export async function chat(messages: ChatMessage[], opts: { focus?: string; role
         }
         continue;
       }
-      emit({ type: 'tool', label: 'Looking…', running: true, name });
+      emit({ type: 'tool', label: doingLabel(name, args), running: true, name });
+      phase(doingLabel(name, args));
       try {
         const r = await runTool(name, args);
         emit({ type: 'tool', label: r.label, ok: true, name });
@@ -534,6 +593,7 @@ export async function chat(messages: ChatMessage[], opts: { focus?: string; role
       }
     }
     if (planned) {
+      phase('Summing up…');
       // One short closing sentence, then stop
       let closing = '';
       let first = true;

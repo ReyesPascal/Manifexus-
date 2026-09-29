@@ -89,7 +89,7 @@ interface Plan {
 
 type Item =
   | { kind: 'user'; text: string }
-  | { kind: 'assistant'; text: string; tools: { label: string; ok?: boolean; running?: boolean }[]; plan?: Plan; planState?: 'new' | 'done' | 'self' | 'failed'; streaming?: boolean; error?: string };
+  | { kind: 'assistant'; text: string; tools: { label: string; ok?: boolean; running?: boolean }[]; plan?: Plan; planState?: 'new' | 'done' | 'self' | 'failed'; streaming?: boolean; error?: string; phase?: { label: string; detail?: string }; started?: number };
 
 type View = 'chat' | 'setup' | 'models' | 'settings' | 'review' | 'progress' | 'guide';
 
@@ -213,6 +213,35 @@ const StepTile: React.FC<{ type: string }> = ({ type }) => (
   </IconTile>
 );
 
+/** What the AI is doing right now, with a clock, so it's clear it's working */
+const WorkingLine: React.FC<{ phase: { label: string; detail?: string }; started?: number }> = ({ phase, started }) => {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const secs = started ? Math.max(0, Math.floor((now - started) / 1000)) : 0;
+  const time = secs >= 60 ? `${Math.floor(secs / 60)} min ${secs % 60} s` : `${secs} s`;
+  return (
+    <div className="flex items-start gap-2.5 py-1" role="status" aria-live="polite">
+      <span className="mt-[3px] w-3.5 h-3.5 flex-shrink-0 rounded-full border-2 border-t-transparent animate-spin motion-reduce:animate-none" style={{ borderColor: ios.blue, borderTopColor: 'transparent' }} />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-baseline gap-2 text-[14px]">
+          <span className="truncate text-white/90">{phase.label}</span>
+          <span className="flex-shrink-0 tabular-nums text-[12.5px]" style={{ color: ios.tertiary }} aria-hidden>
+            {time}
+          </span>
+        </div>
+        {phase.detail && (
+          <div className="text-[12.5px] leading-[17px]" style={{ color: ios.secondary }}>
+            {phase.detail}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
 const Bar: React.FC<{ value: number }> = ({ value }) => (
   <div className="h-[4px] rounded-full overflow-hidden" style={{ background: 'rgba(118,118,128,0.3)' }}>
     <div className="h-full rounded-full transition-[width] duration-500" style={{ width: `${Math.max(2, Math.min(100, value * 100))}%`, background: ios.blue }} />
@@ -310,7 +339,7 @@ export const AssistantSheet: React.FC<{
       const history = items
         .filter((i) => (i.kind === 'user' || (i.kind === 'assistant' && i.text)))
         .map((i) => ({ role: i.kind === 'user' ? 'user' : 'assistant', content: i.kind === 'user' ? i.text : i.text }));
-      setItems((list) => [...list, { kind: 'user', text: q }, { kind: 'assistant', text: '', tools: [], streaming: true }]);
+      setItems((list) => [...list, { kind: 'user', text: q }, { kind: 'assistant', text: '', tools: [], streaming: true, started: Date.now(), phase: { label: 'Sending your question…' } }]);
       setDraft('');
       setBusy(true);
       scrollDown();
@@ -356,6 +385,7 @@ export const AssistantSheet: React.FC<{
                 else tools.push({ label: ev.label, ok: ev.ok });
                 return { ...a, tools };
               });
+            else if (ev.type === 'phase') patch((a) => ({ ...a, phase: { label: ev.label, detail: ev.detail } }));
             else if (ev.type === 'plan') patch((a) => ({ ...a, plan: ev.plan, planState: 'new' }));
             else if (ev.type === 'error') patch((a) => ({ ...a, error: ev.message }));
             scrollDown();
@@ -921,9 +951,9 @@ export const AssistantSheet: React.FC<{
               <div key={i} className="flex gap-3">
                 <AssistantIcon size={26} />
                 <div className="flex-1 min-w-0 space-y-2.5 text-[15px] leading-[22px]" style={{ color: 'rgba(235,235,245,0.88)' }}>
-                  {it.tools.length > 0 && (
+                  {it.tools.some((t) => !t.running) && (
                     <ul className="space-y-1">
-                      {it.tools.map((t, k) => (
+                      {it.tools.filter((t) => !t.running).map((t, k) => (
                         <li key={k} className="flex items-center gap-2 text-[13px]" style={{ color: ios.secondary }}>
                           {t.running ? (
                             <span className="w-3 h-3 rounded-full border-2 border-current border-t-transparent animate-spin motion-reduce:animate-none" />
@@ -935,13 +965,8 @@ export const AssistantSheet: React.FC<{
                       ))}
                     </ul>
                   )}
-                  {it.text ? <RichText text={it.text} /> : it.streaming && !it.tools.some((t) => t.running) ? (
-                    <span className="inline-flex gap-1 py-2" aria-label="Thinking">
-                      {[0, 1, 2].map((d) => (
-                        <span key={d} className="w-1.5 h-1.5 rounded-full motion-safe:animate-pulse" style={{ background: ios.secondary, animationDelay: `${d * 180}ms` }} />
-                      ))}
-                    </span>
-                  ) : null}
+                  {it.text && <RichText text={it.text} />}
+                  {it.streaming && it.phase && !(it.phase.label.startsWith('Writing') && it.text) && <WorkingLine phase={it.phase} started={it.started} />}
                   {it.plan && (
                     <div className="rounded-[14px] overflow-hidden mt-1" style={{ background: ios.group, boxShadow: '0 0 0 0.5px rgba(255,255,255,0.08)' }}>
                       <div className="px-4 pt-3 pb-2.5">
