@@ -603,6 +603,9 @@ export default function App() {
       }
     }
 
+    // By name, numbers in order (test2 before test10)
+    const label = (c: DeepContainerMetadata) => (c.customName || c.friendlyName || c.cleanName).replace(/^\//, '');
+    standalone.sort((a, b) => label(a).localeCompare(label(b), undefined, { numeric: true, sensitivity: 'base' }));
     return { stacksMap, standalone };
   }, [filteredContainers, emptyStacks, searchQuery, config?.stackNames]);
 

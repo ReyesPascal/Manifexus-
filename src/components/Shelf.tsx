@@ -350,12 +350,11 @@ const CellCols = React.createContext<number | null>(null);
 
 type Cell = { i: number; w: number };
 
-function planRows(apps: number[], C: number, last: boolean[]): Cell[][] {
-  // Biggest first; equal sizes keep their order; "Not in a Stack" always comes last
+function planRows(apps: number[], C: number): Cell[][] {
+  // Biggest first (by app count, the same order on a phone as on a big screen); equal sizes keep their order
   const order = apps
     .map((n, i) => ({ i, n, w: Math.max(1, Math.min(C, n)) }))
-    // By app count (the same order on a phone as on a big screen)
-    .sort((a, b) => Number(last[a.i]) - Number(last[b.i]) || b.n - a.n || a.i - b.i)
+    .sort((a, b) => b.n - a.n || a.i - b.i)
     .map(({ i, w }) => ({ i, w }));
   const rows: { cells: Cell[]; left: number }[] = [];
   for (const it of order) {
@@ -383,10 +382,12 @@ export const ShelfGrid: React.FC<{ children: React.ReactNode }> = ({ children })
   }, []);
   const items = React.Children.toArray(children).filter(React.isValidElement) as React.ReactElement<{ span?: number; id?: string }>[];
   const C = Math.max(1, Math.floor((width + GAP) / (MIN_COL + GAP)));
+  // "Not in a Stack" isn't a stack: it sits on its own at the bottom, full width, and never changes how the stacks fit
+  const stacks = items.filter((c) => c.props.id !== 'stack:none');
+  const loose = items.filter((c) => c.props.id === 'stack:none');
   const rows = planRows(
-    items.map((c) => Math.max(0, c.props.span ?? 1)),
-    C,
-    items.map((c) => c.props.id === 'stack:none')
+    stacks.map((c) => Math.max(0, c.props.span ?? 1)),
+    C
   );
   const colPx = (width - GAP * (C - 1)) / C;
   return (
@@ -398,17 +399,22 @@ export const ShelfGrid: React.FC<{ children: React.ReactNode }> = ({ children })
           <div key={r} className="flex gap-3 sm:gap-4 items-stretch">
             {row.map(({ i, w }) => (
               <div
-                key={items[i].key ?? i}
+                key={stacks[i].key ?? i}
                 className="flex flex-col min-w-0"
                 // Natural size: w card columns (and the gaps between them); stretched rows share the full width
                 style={stretch || used === C ? { flex: `${w} 1 0px` } : { flex: `0 0 ${w * colPx + (w - 1) * GAP}px` }}
               >
-                <CellCols.Provider value={w}>{items[i]}</CellCols.Provider>
+                <CellCols.Provider value={w}>{stacks[i]}</CellCols.Provider>
               </div>
             ))}
           </div>
         );
       })}
+      {loose.map((c, i) => (
+        <div key={c.key ?? `loose${i}`} className="flex flex-col min-w-0 mt-2 sm:mt-3">
+          <CellCols.Provider value={C}>{c}</CellCols.Provider>
+        </div>
+      ))}
     </div>
   );
 };

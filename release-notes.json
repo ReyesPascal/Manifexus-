@@ -7,7 +7,8 @@
       "headline": "Your stacks fit together neatly, and a stack stays until you delete it.",
       "new": [],
       "improved": [
-        "Stacks fit together like tiles. Every app card is the same size everywhere, each stack is exactly as wide as its apps, and bigger stacks go first with smaller ones filling the space beside them, so there are no holes in the middle. When a stack gains or loses an app, or the window changes size, everything is re-fitted. A lone small stack stays small instead of stretching across the page."
+        "Stacks fit together like tiles. Every app card is the same size everywhere, each stack is exactly as wide as its apps, and bigger stacks go first with smaller ones filling the space beside them, so there are no holes in the middle. When a stack gains or loses an app, or the window changes size, everything is re-fitted. A lone small stack stays small instead of stretching across the page.",
+        "Not in a Stack sits on its own at the bottom, full width, with its apps in name order (test2 before test10). It never changes how your stacks fit together."
       ],
       "fixed": [
         "Moving the last app out of a stack no longer makes the stack disappear. It stays on your dashboard, empty and with an icon that fits its name, until you delete it."
