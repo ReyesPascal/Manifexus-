@@ -17,6 +17,10 @@ import path from 'path';
 import http from 'http';
 import https from 'https';
 import type { DeepContainerMetadata } from '../src/types';
+import { fetchOnHost } from './dataBackupService';
+
+/** For testing: pretend Manifexus can't reach apps directly, so everything goes through the host */
+const FORCE_HOST = process.env.MFX_FORCE_HOSTFETCH === '1';
 
 const DATA_DIR = fs.existsSync('/data') ? '/data' : path.join(process.cwd(), 'data');
 const DIR = path.join(DATA_DIR, 'apps');
@@ -25,7 +29,7 @@ const STATE_FILE = path.join(DIR, 'identity.json');
 
 const HOUR = 60 * 60 * 1000;
 const PROBE_EVERY = 30 * 60 * 1000;
-const PROBE_FAILED_EVERY = 3 * 60 * 1000;
+const PROBE_FAILED_EVERY = 10 * 60 * 1000;
 const PROJECT_EVERY = 24 * HOUR;
 const RELEASE_EVERY = 6 * HOUR;
 const ICON_RETRY = 24 * HOUR;
@@ -203,7 +207,7 @@ async function probePort(c: DeepContainerMetadata, privatePort: number, publicPo
     ...ips.map((ip) => `http://${ip}:${privatePort}`),
     ...hostCandidates.map((h) => `http://${h}:${publicPort}`),
   ];
-  for (const base of bases) {
+  for (const base of FORCE_HOST ? [] : bases) {
     for (const scheme of ['http', 'https']) {
       const b = scheme === 'https' ? base.replace(/^http:/, 'https:') : base;
       try {
@@ -223,6 +227,15 @@ async function probePort(c: DeepContainerMetadata, privatePort: number, publicPo
       }
     }
   }
+  // Manifexus's container can't reach it: ask from the server itself (its own address and port)
+  const body = await fetchOnHost(`http://127.0.0.1:${publicPort}/`, 512 * 1024);
+  if (body) {
+    const text = body.toString('utf8');
+    const html = /<html|<!doctype html|<head|<body/i.test(text.slice(0, 4000));
+    const base = `http://127.0.0.1:${publicPort}`;
+    const title = text.match(/<title[^>]*>([^<]{1,120})<\/title>/i)?.[1]?.trim();
+    return { web: html, reached: true, base, title, icons: html ? pageIcons(text, base + '/') : undefined, at: Date.now() };
+  }
   return { web: false, reached: false, at: Date.now() };
 }
 
@@ -239,7 +252,7 @@ export function refreshProbes(containers: DeepContainerMetadata[]) {
       const k = probeKey(c, p.privatePort);
       const prev = state.probes[k];
       const age = prev ? Date.now() - prev.at : Infinity;
-      if (probing.has(k) || age < (prev?.web ? PROBE_EVERY : PROBE_FAILED_EVERY)) continue;
+      if (probing.has(k) || age < (prev?.reached ? PROBE_EVERY : PROBE_FAILED_EVERY)) continue;
       probing.add(k);
       jobs.push(async () => {
         try {
@@ -516,21 +529,40 @@ function isImage(r: Got): string | undefined {
   if (r.status !== 200 || r.body.length < 60) return undefined;
   if (type.includes('svg') || r.body.slice(0, 200).toString().includes('<svg')) return 'svg';
   if (type.includes('png') || r.body.slice(1, 4).toString() === 'PNG') return 'png';
-  if (type.includes('webp')) return 'webp';
-  if (type.includes('jpeg') || type.includes('jpg')) return 'jpg';
+  if (type.includes('webp') || (r.body.slice(0, 4).toString() === 'RIFF' && r.body.slice(8, 12).toString() === 'WEBP')) return 'webp';
+  if (type.includes('jpeg') || type.includes('jpg') || (r.body[0] === 0xff && r.body[1] === 0xd8)) return 'jpg';
   if (type.includes('icon') || (r.body[0] === 0 && r.body[1] === 0 && r.body[2] === 1)) return 'ico';
   if (type.includes('gif')) return 'gif';
   return undefined;
 }
 
+const isLocalHost = (h: string) => h === '127.0.0.1' || h === 'localhost' || hostCandidates.includes(h);
+
 async function tryIcon(url: string): Promise<{ body: Buffer; ext: string } | undefined> {
+  let host = '';
   try {
-    const r = await get(url, { timeoutMs: 6000, maxBytes: 1024 * 1024 });
-    const ext = isImage(r);
-    return ext ? { body: r.body, ext } : undefined;
+    host = new URL(url).hostname;
   } catch {
     return undefined;
   }
+  if (!(FORCE_HOST && isLocalHost(host))) {
+    try {
+      const r = await get(url, { timeoutMs: 6000, maxBytes: 1024 * 1024 });
+      const ext = isImage(r);
+      if (ext) return { body: r.body, ext };
+      if (r.status === 404) return undefined;
+    } catch {
+      // not reachable from here: try from the server itself below
+    }
+  }
+  // An app on this server that Manifexus's container can't reach: read it from the server itself
+  if (!isLocalHost(host)) return undefined;
+  const u = new URL(url);
+  u.hostname = '127.0.0.1';
+  const body = await fetchOnHost(u.toString());
+  if (!body) return undefined;
+  const ext = isImage({ status: 200, headers: {}, body, url: u.toString() });
+  return ext ? { body, ext } : undefined;
 }
 
 const iconKey = (c: DeepContainerMetadata) => (imageSlug(c.image) || c.cleanName).replace(/[^a-z0-9-]/gi, '_');
@@ -586,7 +618,10 @@ async function findIcon(c: DeepContainerMetadata): Promise<IconInfo> {
   const bases = c.ports.map((p) => state.probes[probeKey(c, p.privatePort)]).filter((p) => p?.reached && p.base);
   let small: { got: { body: Buffer; ext: string }; url: string } | undefined;
   for (const p of bases) {
-    const urls = [...(p!.icons || []), ...['/apple-touch-icon.png', '/apple-touch-icon-180x180.png', '/favicon.svg', '/icon.svg', '/logo.svg', '/logo.png', '/favicon.png', '/favicon.ico'].map((f) => p!.base + f)];
+    // Read from the server itself (each try starts a small helper): just what the page names, plus favicon.ico
+    const viaHost = p!.base!.startsWith('http://127.0.0.1:');
+    const standard = viaHost ? ['/favicon.ico'] : ['/apple-touch-icon.png', '/apple-touch-icon-180x180.png', '/favicon.svg', '/icon.svg', '/logo.svg', '/logo.png', '/favicon.png', '/favicon.ico'];
+    const urls = [...(p!.icons || []), ...standard.map((f) => p!.base + f)];
     for (const url of Array.from(new Set(urls))) {
       const got = await tryIcon(url);
       if (!got) continue;

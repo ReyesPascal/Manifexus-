@@ -202,6 +202,32 @@ async function runHelperDetailed(
   }
 }
 
+/**
+ * Fetch an address the way the server itself sees it (host network), for when Manifexus's own
+ * container can't reach an app (a firewall like UFW, or a separate Docker network). A short-lived
+ * helper on the host's network downloads it into Manifexus's data folder; returns the bytes.
+ */
+export async function fetchOnHost(url: string, maxBytes = 1024 * 1024): Promise<Buffer | undefined> {
+  const dir = path.join(fs.existsSync('/data') ? '/data' : path.join(process.cwd(), 'data'), 'apps', '.fetch');
+  fs.mkdirSync(dir, { recursive: true });
+  const out = path.join(dir, `f_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
+  const q = shellQuote(url);
+  const o = shellQuote(out);
+  const script =
+    `(node -e 'fetch(process.argv[1],{signal:AbortSignal.timeout(6000),redirect:"follow"}).then(async r=>{if(!r.ok&&r.status!==401)process.exit(2);require("fs").writeFileSync(process.argv[2],Buffer.from(await r.arrayBuffer()))}).catch(()=>process.exit(3))' ${q} ${o} 2>/dev/null)` +
+    ` || wget -q -T 6 -O ${o} ${q} 2>/dev/null || curl -fsSL -m 6 -o ${o} ${q} 2>/dev/null; test -s ${o}`;
+  try {
+    const r = await runHelperDetailed(script, [], 30 * 1000, [], { purpose: `Read ${url} from the server`, probe: true, hostConfig: { NetworkMode: 'host' } });
+    if (r.code !== 0 || !fs.existsSync(out)) return undefined;
+    const buf = fs.readFileSync(out);
+    return buf.length && buf.length <= maxBytes ? buf : undefined;
+  } catch {
+    return undefined;
+  } finally {
+    fs.rmSync(out, { force: true });
+  }
+}
+
 function tmpFile(label: string): string {
   const dir = path.join(resolveBackupDir(), '.tmp');
   fs.mkdirSync(dir, { recursive: true });
