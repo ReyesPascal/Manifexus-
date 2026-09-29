@@ -1,5 +1,5 @@
 {
-  "_about": "What's new in each version of Manifexus, newest first. Shown in Updates. Write for people, not developers: short, plain sentences about what they can now do.",
+  "_about": "What's new in each version of Manifexus, newest first. Shown in Updates. Write for people, not developers: short, plain sentences about what they can now do. The newest entry's version is what gets built and tagged; older entries can give the \"commit\" they were released from.",
   "releases": [
     {
       "version": "1.1",
@@ -44,7 +44,8 @@
       ],
       "fixed": [
         "A leftover app entry in one stack can no longer break moving apps into it."
-      ]
+      ],
+      "commit": "6f41c26"
     }
   ]
 }

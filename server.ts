@@ -94,6 +94,7 @@ import { getSystemSpecs } from './server/systemSpecs';
 import { aiStatus, saveAiSettings, installModel, cancelDownload, removeModel, warmUpEngine, catalogModel, stopEngine, installEngineNow } from './server/aiService';
 import { chat as aiChat, runPlan, getPlan } from './server/aiAgent';
 import { learnActivity, recentCommands } from './server/commandLog';
+import { seedAiExample } from './server/aiExample';
 import {
   getSoftwareUpdateState,
   checkForUpdate,
@@ -1160,6 +1161,8 @@ async function startServer() {
   // Restore: one-time clean-up of old History entries, then the keep-for setting (hourly)
   freshStartOnce();
   warmUpEngine();
+  // The example problem for the built-in AI (once, when Docker is reachable)
+  setTimeout(() => seedAiExample().catch((e) => console.warn('[AI example]', (e as Error).message)), 5000);
   process.on('exit', () => stopEngine());
   enforceBackupRetention();
   setInterval(() => enforceBackupRetention(), 60 * 60 * 1000);

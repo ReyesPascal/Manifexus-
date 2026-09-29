@@ -3,6 +3,7 @@
  * resource use and container logs. Each check says what's fine, what isn't, and what to do.
  */
 import fs from 'fs';
+import { getConfig } from './storageService';
 import { queryDockerEngine, fetchContainerLogs } from './dockerService';
 import { checkPrivilegeStatus } from './automationService';
 import { getSelfContainerId, formatBytes } from './dataBackupService';
@@ -339,6 +340,18 @@ export async function systemDiagnostics() {
     checks.push({ id: 'data', level: 'error', title: 'Your data isn’t saved outside Manifexus', detail: 'Settings, history, backups and AI models would be lost when Manifexus is recreated. Add a volume for /data (for example ./data:/data) to its compose file.' });
   } else if (dataMount?.type === 'volume' && /^[0-9a-f]{64}$/.test(dataMount.source.split('/').filter(Boolean).slice(-2, -1)[0] || dataMount.source)) {
     checks.push({ id: 'data', level: 'info', title: 'Data is in an unnamed Docker volume', detail: 'Manifexus keeps it across its own updates, but removing the container by hand would lose it. Adding ./data:/data to its compose file makes it permanent.' });
+  }
+
+  // The New stacks folder setting must be a full path, or Manifexus can't use it
+  const stacksSetting = (getConfig().stacksDir || '').trim();
+  if (stacksSetting && !stacksSetting.startsWith('/')) {
+    const settingsFile = dataMount ? `${dataMount.source.replace(/\/+$/, '')}/config.json` : 'config.json in Manifexus’s data folder';
+    checks.push({
+      id: 'stacks-dir',
+      level: 'error',
+      title: 'New stacks folder setting is broken',
+      detail: `It’s saved as “${stacksSetting}”, which isn’t a full path (it should start with /), so Manifexus ignores it. It’s the "stacksDir" line in Manifexus’s settings file: ${settingsFile}.`,
+    });
   }
 
   // Apps listed in two stacks
