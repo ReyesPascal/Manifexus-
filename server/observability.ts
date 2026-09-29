@@ -224,6 +224,7 @@ const ROUTES: [string, RegExp, Describer][] = [
   ['POST', /^\/api\/restore\/([^/]+)\/run$/, () => ({ type: 'undo', title: 'Restore' })],
   ['POST', /^\/api\/ai\/plans\/([^/]+)\/run$/, () => ({ type: 'fix', title: 'Fix with the built-in AI' })],
   ['POST', /^\/api\/ai\/settings$/, () => ({ type: 'settings', title: 'Change AI settings' })],
+  ['POST', /^\/api\/ai\/engine\/install$/, () => ({ type: 'settings', title: 'Install the AI engine' })],
   ['POST', /^\/api\/ai\/models\/install$/, (_r, b) => ({ type: 'settings', title: `Download AI model ${b?.model || ''}`.trim() })],
   ['POST', /^\/api\/ai\/models\/remove$/, (_r, b) => ({ type: 'settings', title: `Remove AI model ${b?.model || ''}`.trim() })],
   ['POST', /^\/api\/restore\/([^/]+)\/copy$/, () => ({ type: 'undo', title: 'Restore a backup to another folder' })],

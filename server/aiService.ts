@@ -9,12 +9,17 @@ import path from 'path';
 import { spawn, ChildProcess } from 'child_process';
 import { getSystemSpecs, SystemSpecs } from './systemSpecs';
 import { record } from './activityLog';
+import { installEngine, engineInstallState, ENGINE_VERSION } from './aiEngineInstaller';
 
 const DATA_DIR = process.env.DATA_DIR && fs.existsSync(process.env.DATA_DIR) ? process.env.DATA_DIR : fs.existsSync('/data') ? '/data' : path.join(process.cwd(), 'data');
 export const AI_DIR = path.join(DATA_DIR, 'ai');
 const SETTINGS_FILE = path.join(AI_DIR, 'settings.json');
 const MODELS_DIR = path.join(AI_DIR, 'models');
-const PORT = 11434;
+/** Where Manifexus installs the engine itself when the image doesn't include it */
+const ENGINE_DIR = path.join(AI_DIR, 'engine');
+const DOWNLOADS_FILE = path.join(AI_DIR, 'downloads.json');
+/** A private port, so it never collides with an Ollama you already run */
+const PORT = 11439;
 
 /** Set OLLAMA_URL to use an Ollama that's already running elsewhere (also how tests plug in a stand-in) */
 const EXTERNAL = process.env.OLLAMA_URL?.replace(/\/+$/, '');
@@ -137,8 +142,39 @@ let lastEngineError: string | undefined;
 const engineLog: string[] = [];
 
 function ollamaBinary(): string | undefined {
-  for (const p of [process.env.OLLAMA_BIN, '/usr/bin/ollama', '/usr/local/bin/ollama']) if (p && fs.existsSync(p)) return p;
+  for (const p of [process.env.OLLAMA_BIN, '/usr/bin/ollama', '/usr/local/bin/ollama', path.join(ENGINE_DIR, 'bin', 'ollama')]) if (p && fs.existsSync(p)) return p;
   return undefined;
+}
+
+/** Runs `bin --help` to make sure the engine works on this machine */
+function engineRuns(bin: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    try {
+      const p = spawn(bin, ['--help'], { stdio: 'ignore' });
+      const t = setTimeout(() => {
+        p.kill('SIGKILL');
+        resolve(false);
+      }, 20000);
+      p.on('exit', (code) => {
+        clearTimeout(t);
+        resolve(code === 0);
+      });
+      p.on('error', () => {
+        clearTimeout(t);
+        resolve(false);
+      });
+    } catch {
+      resolve(false);
+    }
+  });
+}
+
+/** Download the engine into the data folder (when this build doesn't include it) */
+export async function installEngineNow(): Promise<void> {
+  const specs = await getSystemSpecs(true);
+  void installEngine(ENGINE_DIR, specs.disk.freeBytes, engineRuns).then(() => {
+    if (engineInstallState().status === 'done') ensureEngine().catch(() => undefined);
+  });
 }
 
 /** The engine ships with this build (or an external one is configured) */
@@ -189,7 +225,9 @@ export async function ensureEngine(): Promise<void> {
       }
       proc = undefined;
     });
-    for (let i = 0; i < 40; i++) {
+    // First start on a slow machine can take a while
+    for (let i = 0; i < 240; i++) {
+      if (!proc) throw new Error(lastEngineError || 'The AI engine stopped while starting.');
       if (await ping()) {
         lastEngineError = undefined;
         return;
@@ -207,9 +245,10 @@ export function stopEngine() {
   proc?.kill('SIGTERM');
 }
 
-export async function ollama<T>(p: string, body?: unknown, method = body ? 'POST' : 'GET'): Promise<T> {
+export async function ollama<T>(p: string, body?: unknown, method = body ? 'POST' : 'GET', timeoutMs?: number): Promise<T> {
   await ensureEngine();
   const r = await fetch(`${BASE}${p}`, {
+    signal: timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined,
     method,
     headers: body ? { 'Content-Type': 'application/json' } : undefined,
     body: body ? JSON.stringify(body) : undefined,
@@ -246,7 +285,7 @@ export async function* ollamaStream<T>(p: string, body: unknown, signal?: AbortS
 
 export interface Download {
   model: string;
-  status: 'downloading' | 'done' | 'failed' | 'cancelled';
+  status: 'downloading' | 'verifying' | 'done' | 'failed' | 'cancelled';
   completed: number;
   total: number;
   message?: string;
@@ -265,45 +304,103 @@ export async function installedModels(): Promise<{ id: string; bytes: number }[]
   }
 }
 
-/** Downloads in the background; progress is read from aiStatus() */
+function plainPullError(raw: string): string {
+  if (/timeout|dial tcp|ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|no such host|network is unreachable|fetch failed|stalled|connection reset|EOF/i.test(raw))
+    return 'Couldn’t reach the model library (registry.ollama.ai). Check that your server can reach the internet, then try again.';
+  if (/no space left|ENOSPC/i.test(raw)) return 'Not enough disk space for this model.';
+  if (/file does not exist|manifest unknown|not found/i.test(raw)) return 'That model isn’t in the library anymore.';
+  if (/requires more system memory|out of memory|insufficient memory/i.test(raw)) return 'This model needs more free memory than the server has right now. Try a smaller one.';
+  return raw;
+}
+const retryable = (raw: string) => /timeout|dial tcp|ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|no such host|unreachable|fetch failed|stalled|connection reset|EOF|max retries|TLS/i.test(raw);
+
+/** Downloads in progress are remembered, so they continue after Manifexus restarts */
+function rememberDownloads() {
+  try {
+    fs.mkdirSync(AI_DIR, { recursive: true });
+    fs.writeFileSync(DOWNLOADS_FILE, JSON.stringify(Array.from(downloads.values()).filter((d) => d.status === 'downloading').map((d) => d.model)));
+  } catch {
+    // best effort
+  }
+}
+
+/**
+ * Downloads a model in the background; progress is read from aiStatus(). Checks disk space and the
+ * connection first, retries dropped connections (the engine continues partial files), treats a
+ * download that stops moving as dropped, then asks the model a tiny question before calling it Ready.
+ */
 export function installModel(model: string): Download {
   const existing = downloads.get(model);
-  if (existing?.status === 'downloading') return existing;
-  const d: Download = { model, status: 'downloading', completed: 0, total: catalogModel(model)?.downloadBytes || 0, startedAt: new Date().toISOString() };
+  if (existing?.status === 'downloading' || existing?.status === 'verifying') return existing;
+  const d: Download = { model, status: 'downloading', completed: 0, total: catalogModel(model)?.downloadBytes || 0, startedAt: new Date().toISOString(), message: 'Getting ready…' };
   downloads.set(model, d);
+  rememberDownloads();
   const ac = new AbortController();
   aborts.set(model, ac);
   record('info', 'system', `Downloading AI model ${model}`, { model });
   (async () => {
+    const MAX = 6;
     try {
-      // Layers download one after another: add up what's done across all of them
-      const layers = new Map<string, { total: number; completed: number }>();
-      for await (const ev of ollamaStream<{ status: string; digest?: string; total?: number; completed?: number; error?: string }>('/api/pull', { model, stream: true }, ac.signal)) {
-        if (ev.error) throw new Error(ev.error);
-        if (ev.digest && ev.total) layers.set(ev.digest, { total: ev.total, completed: ev.completed || 0 });
-        const total = Array.from(layers.values()).reduce((n, l) => n + l.total, 0);
-        d.total = Math.max(total, d.total && !layers.size ? d.total : total);
-        d.completed = Array.from(layers.values()).reduce((n, l) => n + l.completed, 0);
-        d.message = ev.status;
+      // Before starting: room on disk, and a way to the model library
+      const specs = await getSystemSpecs(true);
+      const size = catalogModel(model)?.downloadBytes || 0;
+      if (size && specs.disk.freeBytes && specs.disk.freeBytes < size + 2e9) throw new Error(`no space left: needs about ${((size + 2e9) / 1e9).toFixed(0)} GB free`);
+      if (!EXTERNAL) {
+        try {
+          await fetch('https://registry.ollama.ai/v2/', { method: 'HEAD', signal: AbortSignal.timeout(15000) });
+        } catch (e) {
+          throw new Error(`fetch failed: ${(e as Error).message}`);
+        }
       }
-      d.status = 'done';
+      for (let attempt = 1; ; attempt++) {
+        const round = new AbortController();
+        const stopRound = () => round.abort();
+        ac.signal.addEventListener('abort', stopRound);
+        let lastMove = Date.now();
+        const watchdog = setInterval(() => {
+          if (Date.now() - lastMove > 90_000) round.abort(new Error('stalled'));
+        }, 5000);
+        try {
+          const layers = new Map<string, { total: number; completed: number }>();
+          for await (const ev of ollamaStream<{ status: string; digest?: string; total?: number; completed?: number; error?: string }>('/api/pull', { model, stream: true }, round.signal)) {
+            if (ev.error) throw new Error(ev.error);
+            if (ev.digest && ev.total) {
+              const prev = layers.get(ev.digest);
+              if (!prev || (ev.completed || 0) !== prev.completed) lastMove = Date.now();
+              layers.set(ev.digest, { total: ev.total, completed: ev.completed || 0 });
+            } else lastMove = Date.now();
+            const total = Array.from(layers.values()).reduce((n, l) => n + l.total, 0);
+            if (total) d.total = total;
+            d.completed = Array.from(layers.values()).reduce((n, l) => n + l.completed, 0);
+            d.message = ev.status === 'success' ? undefined : attempt > 1 && d.completed ? `Continuing (try ${attempt} of ${MAX})` : undefined;
+          }
+          break;
+        } catch (e) {
+          if (ac.signal.aborted) throw e;
+          const raw = round.signal.aborted ? 'stalled' : (e as Error).message || '';
+          if (attempt >= MAX || !retryable(raw)) throw new Error(raw);
+          d.message = `Connection dropped. Trying again (${attempt + 1} of ${MAX})…`;
+          await new Promise((r) => setTimeout(r, Math.min(60_000, 4000 * 2 ** (attempt - 1))));
+        } finally {
+          clearInterval(watchdog);
+          ac.signal.removeEventListener('abort', stopRound);
+        }
+      }
+      // Downloaded: make sure it actually runs here before calling it Ready
+      d.status = 'verifying';
       d.completed = d.total;
+      d.message = 'Making sure it works on your server…';
+      await ollama('/api/generate', { model, prompt: 'Reply with the single word OK.', stream: false, think: catalogModel(model)?.think ?? false, options: { num_predict: 16 } }, 'POST', 10 * 60 * 1000);
+      d.status = 'done';
+      d.message = undefined;
       record('info', 'system', `AI model ${model} is ready`, { model });
     } catch (e) {
       d.status = ac.signal.aborted ? 'cancelled' : 'failed';
-      const raw = (e as Error).message || '';
-      d.message = ac.signal.aborted
-        ? 'Cancelled'
-        : /timeout|dial tcp|ENOTFOUND|EAI_AGAIN|ECONNREFUSED|no such host|network is unreachable|fetch failed/i.test(raw)
-          ? 'Couldn’t reach the model library (registry.ollama.ai). Check that your server can reach the internet, then try again.'
-          : /no space left/i.test(raw)
-            ? 'Not enough disk space for this model.'
-            : /file does not exist|not found/i.test(raw)
-              ? 'That model isn’t in the library anymore.'
-              : raw;
-      if (!ac.signal.aborted) record('warn', 'system', `Couldn’t download AI model ${model}`, { model, error: d.message });
+      d.message = ac.signal.aborted ? 'Cancelled' : plainPullError((e as Error).message || '');
+      if (!ac.signal.aborted) record('warn', 'system', `Couldn’t get AI model ${model} ready`, { model, error: (e as Error).message });
     } finally {
       aborts.delete(model);
+      rememberDownloads();
     }
   })();
   return d;
@@ -342,8 +439,16 @@ export async function aiStatus() {
   if (included) running = await ping();
   const installed = running ? await installedModels() : [];
   const settings = getAiSettings();
+  const install = engineInstallState();
   return {
-    engine: { included, running, error: lastEngineError },
+    engine: {
+      included,
+      running,
+      error: lastEngineError,
+      version: ENGINE_VERSION,
+      canInstall: !included && (process.arch === 'x64' || process.arch === 'arm64'),
+      install,
+    },
     specs,
     budgetBytes: aiMemoryBudget(specs),
     recommended: recommend(specs),
@@ -355,9 +460,15 @@ export async function aiStatus() {
   };
 }
 
-/** Wake the engine in the background when models exist, so the first question isn't slow */
+/** On startup: continue downloads that were cut off by a restart, and wake the engine if models exist */
 export function warmUpEngine() {
   if (!engineIncluded()) return;
-  if (!fs.existsSync(MODELS_DIR) || !fs.readdirSync(MODELS_DIR).length) return;
-  ensureEngine().catch(() => undefined);
+  let pending: string[] = [];
+  try {
+    pending = JSON.parse(fs.readFileSync(DOWNLOADS_FILE, 'utf8'));
+  } catch {
+    // none
+  }
+  for (const m of pending) if (catalogModel(m)) installModel(m);
+  if (pending.length || (fs.existsSync(MODELS_DIR) && fs.readdirSync(MODELS_DIR).length)) ensureEngine().catch(() => undefined);
 }

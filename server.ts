@@ -91,7 +91,7 @@ import {
 } from './server/restoreService';
 import { systemDiagnostics, systemReport, appDiagnostics, appLogs } from './server/diagnosticsService';
 import { getSystemSpecs } from './server/systemSpecs';
-import { aiStatus, saveAiSettings, installModel, cancelDownload, removeModel, warmUpEngine, catalogModel, stopEngine } from './server/aiService';
+import { aiStatus, saveAiSettings, installModel, cancelDownload, removeModel, warmUpEngine, catalogModel, stopEngine, installEngineNow } from './server/aiService';
 import { chat as aiChat, runPlan, getPlan } from './server/aiAgent';
 import {
   getSoftwareUpdateState,
@@ -866,6 +866,11 @@ async function startServer() {
     if (req.body?.role === 'fixer') saveAiSettings({ fixerModel: model });
     if (req.body?.role === 'both') saveAiSettings({ quickModel: model, fixerModel: model });
     res.json(installModel(model));
+  });
+
+  app.post('/api/ai/engine/install', async (_req, res) => {
+    await installEngineNow();
+    res.json({ ok: true });
   });
 
   app.post('/api/ai/models/cancel', (req, res) => {

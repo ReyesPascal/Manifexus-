@@ -32,7 +32,7 @@ interface CatalogEntry {
 
 interface Download {
   model: string;
-  status: 'downloading' | 'done' | 'failed' | 'cancelled';
+  status: 'downloading' | 'verifying' | 'done' | 'failed' | 'cancelled';
   completed: number;
   total: number;
   message?: string;
@@ -49,7 +49,14 @@ interface Specs {
 }
 
 interface Status {
-  engine: { included: boolean; running: boolean; error?: string };
+  engine: {
+    included: boolean;
+    running: boolean;
+    error?: string;
+    version: string;
+    canInstall: boolean;
+    install: { status: 'idle' | 'checking' | 'downloading' | 'verifying' | 'unpacking' | 'done' | 'failed'; completed: number; total: number; message?: string };
+  };
   specs: Specs;
   budgetBytes: number;
   recommended: { quick?: string; fixer?: string; note?: string };
@@ -275,7 +282,8 @@ export const AssistantSheet: React.FC<{
   }, [open]);
 
   // Keep download progress fresh while anything is downloading
-  const downloading = status?.downloads.some((d) => d.status === 'downloading');
+  const engineBusy = ['checking', 'downloading', 'verifying', 'unpacking'].includes(status?.engine.install?.status || '');
+  const downloading = status?.downloads.some((d) => d.status === 'downloading' || d.status === 'verifying') || engineBusy;
   useEffect(() => {
     if (!open || !downloading) return;
     const t = setInterval(load, 1000);
@@ -400,7 +408,7 @@ export const AssistantSheet: React.FC<{
   }, [items, status?.settings.freedom]);
 
   const byId = useMemo(() => new Map((status?.catalog || []).map((m) => [m.id, m])), [status]);
-  const dl = (id: string) => status?.downloads.find((d) => d.model === id && d.status === 'downloading');
+  const dl = (id: string) => status?.downloads.find((d) => d.model === id && (d.status === 'downloading' || d.status === 'verifying'));
   const failedDl = (id: string) => status?.downloads.find((d) => d.model === id && d.status === 'failed');
 
   // ---------------------------------------------------------------- views
@@ -445,9 +453,11 @@ export const AssistantSheet: React.FC<{
           subtitle={
             d ? (
               <span className="block pt-1 pr-2 space-y-1.5">
-                <Bar value={d.total ? d.completed / d.total : 0} />
-                <span className="block tabular-nums">
-                  {d.total ? `${fmtGB(d.completed)} of ${fmtGB(d.total)}` : d.message || 'Starting…'}
+                <Bar value={d.status === 'verifying' ? 1 : d.total ? d.completed / d.total : 0} />
+                <span className="block tabular-nums" style={{ color: d.message?.startsWith('Connection') ? ios.orange : undefined }}>
+                  {d.status === 'verifying'
+                    ? d.message || 'Making sure it works…'
+                    : [d.completed ? `${fmtGB(d.completed)} of ${fmtGB(d.total)}` : '', d.message || (d.completed ? '' : 'Starting…')].filter(Boolean).join(' · ')}
                 </span>
               </span>
             ) : failed ? (
@@ -474,7 +484,8 @@ export const AssistantSheet: React.FC<{
             ) : (
               <button
                 type="button"
-                disabled={m.fit === 'no'}
+                disabled={m.fit === 'no' || !status.engine.included}
+                title={!status.engine.included ? 'Install the AI engine first' : undefined}
                 onClick={() => install(m.id, extra ? (extra.label === 'Fixer' ? 'fixer' : 'quick') : undefined)}
                 className="h-[28px] px-3.5 rounded-full text-[14px] font-semibold disabled:opacity-35"
                 style={{ background: 'rgba(10,132,255,0.18)', color: ios.blue }}
@@ -499,9 +510,56 @@ export const AssistantSheet: React.FC<{
           </div>
         )}
 
-        {!status.engine.included && (
+        {!status.engine.included && (() => {
+          const ei = status.engine.install;
+          const busy = ['checking', 'downloading', 'verifying', 'unpacking'].includes(ei.status);
+          return (
+            <section>
+              <SectionHeader>AI Engine</SectionHeader>
+              <Group>
+                <Row
+                  leading={<IconTile color={ei.status === 'failed' ? ios.orange : '#636366'}><span className="text-white font-bold text-[14px]">{ei.status === 'failed' ? '!' : '⚙'}</span></IconTile>}
+                  title={busy ? (ei.status === 'unpacking' ? 'Unpacking the AI engine' : ei.status === 'verifying' ? 'Checking the download' : 'Downloading the AI engine') : status.engine.canInstall ? 'The AI engine isn’t installed yet' : 'Update Manifexus to use the built-in AI'}
+                  subtitle={
+                    busy ? (
+                      <span className="block pt-1 pr-2 space-y-1.5">
+                        <Bar value={ei.total ? ei.completed / ei.total : 0} />
+                        <span className="block tabular-nums">
+                          {[ei.total && ei.status === 'downloading' ? `${fmtGB(ei.completed)} of ${fmtGB(ei.total)}` : '', ei.message].filter(Boolean).join(' · ') || 'Starting…'}
+                        </span>
+                      </span>
+                    ) : ei.status === 'failed' ? (
+                      <span style={{ color: ios.orange }}>{ei.message}</span>
+                    ) : status.engine.canInstall ? (
+                      'This copy of Manifexus came without it. Manifexus can download it for you (about 1.5 GB, once), check it, and set it up.'
+                    ) : (
+                      'This version doesn’t include the AI engine.'
+                    )
+                  }
+                  trailing={
+                    !busy && status.engine.canInstall ? (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          await fetch('/api/ai/engine/install', { method: 'POST' });
+                          load();
+                        }}
+                        className="h-[28px] px-3.5 rounded-full text-[14px] font-semibold"
+                        style={{ background: 'rgba(10,132,255,0.18)', color: ios.blue }}
+                      >
+                        {ei.status === 'failed' ? 'Try Again' : 'Install'}
+                      </button>
+                    ) : undefined
+                  }
+                />
+              </Group>
+            </section>
+          );
+        })()}
+
+        {status.engine.included && status.engine.error && (
           <Group>
-            <Row leading={<IconTile color={ios.orange}><span className="text-white font-bold">!</span></IconTile>} title="Update Manifexus to use the built-in AI" subtitle="This version doesn’t include the AI engine yet." />
+            <Row leading={<IconTile color={ios.orange}><span className="text-white font-bold">!</span></IconTile>} title="The AI engine had a problem" subtitle={status.engine.error} />
           </Group>
         )}
 

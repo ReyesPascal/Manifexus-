@@ -49,8 +49,10 @@ RUN mkdir -p /data /app/backups
 ARG TARGETARCH
 ARG OLLAMA_VERSION=0.34.4
 RUN set -u; \
-    if curl -fsSL --retry 3 --retry-delay 5 -o /tmp/ollama.tar.zst \
-         "https://github.com/ollama/ollama/releases/download/v${OLLAMA_VERSION}/ollama-linux-${TARGETARCH}.tar.zst" \
+    base="https://github.com/ollama/ollama/releases/download/v${OLLAMA_VERSION}"; \
+    if curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 -o /tmp/ollama.tar.zst "$base/ollama-linux-${TARGETARCH}.tar.zst" \
+       && curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 -o /tmp/ollama.sha256 "$base/sha256sum.txt" \
+       && (cd /tmp && grep "ollama-linux-${TARGETARCH}.tar.zst\$" ollama.sha256 | sed 's#\./##' | sed "s#ollama-linux-${TARGETARCH}.tar.zst#ollama.tar.zst#" | sha256sum -c -) \
        && mkdir -p /tmp/ollama \
        && tar --use-compress-program=unzstd -xf /tmp/ollama.tar.zst -C /tmp/ollama --wildcards \
             --exclude='lib/ollama/cuda_*' --exclude='lib/ollama/rocm*' --exclude='lib/ollama/vulkan*' --exclude='lib/ollama/mlx*' \
@@ -62,7 +64,7 @@ RUN set -u; \
       echo "WARNING: built-in AI engine could not be included in this build; continuing without it"; \
       rm -rf /usr/bin/ollama /usr/lib/ollama; \
     fi; \
-    rm -rf /tmp/ollama /tmp/ollama.tar.zst
+    rm -rf /tmp/ollama /tmp/ollama.tar.zst /tmp/ollama.sha256
 
 # Copy production artifacts from builder
 COPY --from=builder /app/package.json ./
