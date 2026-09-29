@@ -99,7 +99,7 @@ export function updateRestoreSettings(patch: Partial<RestoreSettings>): RestoreS
 // Restore points
 // ----------------------------------------------------------------------------
 
-export type RestoreKind = 'move' | 'delete' | 'install' | 'restore';
+export type RestoreKind = 'move' | 'delete' | 'install' | 'restore' | 'fix';
 export type RestoreState = 'available' | 'restored' | 'failed' | 'archived';
 
 export interface RestorePoint {
@@ -139,8 +139,12 @@ export interface RestorePoint {
 
 const norm = (p?: string) => (p ? path.posix.normalize(p).replace(/\/+$/, '') : '');
 
+/** Restores and fixes both record how things looked just before them */
+const isSnapshotRecord = (r: MergeHistoryRecord) => r.type === 'RESTORE' || r.type === 'FIX';
+
 function kindOf(r: MergeHistoryRecord): RestoreKind {
   if (r.type === 'RESTORE') return 'restore';
+  if (r.type === 'FIX') return 'fix';
   if (r.type === 'STACK_DELETE' || r.id.startsWith('delete_')) return 'delete';
   if (r.type === 'COMPOSE_INSTALL') return 'install';
   return 'move';
@@ -149,7 +153,7 @@ function kindOf(r: MergeHistoryRecord): RestoreKind {
 /** Stack folders a change touched */
 function touchedDirs(r: MergeHistoryRecord): Set<string> {
   const s = new Set<string>();
-  if (r.type === 'RESTORE') {
+  if (isSnapshotRecord(r)) {
     for (const d of r.dirSnapshots || []) s.add(norm(d.dir));
     return s;
   }
@@ -160,7 +164,7 @@ function touchedDirs(r: MergeHistoryRecord): Set<string> {
 }
 
 function stackNames(r: MergeHistoryRecord): string[] {
-  if (r.type === 'RESTORE') return Array.from(new Set((r.dirSnapshots || []).map((d) => d.project)));
+  if (isSnapshotRecord(r)) return Array.from(new Set((r.dirSnapshots || []).map((d) => d.project)));
   const names = [r.targetStackName, ...(r.movedServices || []).map((m) => m.project), ...(r.sourceConfigs || []).map((s) => s.project)];
   return Array.from(new Set(names.filter((n) => n && n !== 'standalone')));
 }
@@ -176,6 +180,7 @@ const joinNames = (a: string[]) => (a.length <= 1 ? a.join('') : a.length === 2 
 
 function titleOf(r: MergeHistoryRecord): { title: string; detail?: string } {
   const kind = kindOf(r);
+  if (kind === 'fix') return { title: r.summary || 'Fixed a problem', detail: r.sourceUrl || undefined };
   if (kind === 'restore') {
     const stacks = joinNames(stackNames(r)) || 'stacks';
     if (r.summary?.startsWith('undid')) return { title: `Undid a restore of ${stacks}`, detail: r.summary };
@@ -319,7 +324,7 @@ function projectVolumesIn(archives: DataArchiveEntry[], project: string, dir: st
 function beforeOf(r: MergeHistoryRecord, dir: string): StackTarget {
   const at = r.timestamp;
   const archives = r.dataArchives || [];
-  if (r.type === 'RESTORE') {
+  if (isSnapshotRecord(r)) {
     const snap = (r.dirSnapshots || []).find((d) => norm(d.dir) === dir)!;
     return { dir, project: snap.project, exists: snap.existed, compose: snap.compose, env: snap.env, data: projectVolumesIn(archives, snap.project, dir), losesApps: false, from: at };
   }
@@ -551,7 +556,13 @@ export async function executeRestore(id: string, emit: Emit, opts: { filesOnly?:
   const resultFiles: { path: string; content: string | null }[] = [];
   const recreated: string[] = [];
 
+  // Other files a fix (or a restore of one) changed: put back the oldest saved copy of each
+  const fileTargets = new Map<string, string | null>();
+  for (const r of [...chain].reverse()) for (const f of r.fileSnapshots || []) if (!fileTargets.has(f.path)) fileTargets.set(f.path, f.content);
+  const fileSnapshots: { path: string; content: string | null }[] = [];
+
   const steps = [
+    ...(fileTargets.size ? [{ name: `Putting back ${fileTargets.size === 1 ? path.posix.basename([...fileTargets.keys()][0]) : `${fileTargets.size} files`}` }] : []),
     ...targets.map((t) => ({ name: !t.exists ? `Removing ${t.project}` : `Restoring ${t.project}` })),
     ...(standalone.length ? [{ name: `Recreating ${joinNames(standalone.map((a) => a.name))}` }] : []),
   ];
@@ -580,6 +591,20 @@ export async function executeRestore(id: string, emit: Emit, opts: { filesOnly?:
 
   let failure: string | undefined;
   try {
+    if (fileTargets.size) {
+      await run(async (log) => {
+        for (const [file, content] of fileTargets) {
+          fileSnapshots.push({ path: file, content: await readHostFile(file).catch(() => null) });
+          if (content === null) {
+            log(`${file} didn’t exist before; it was left in place.`);
+            continue;
+          }
+          if (!(await writeHostFile(file, content))) throw new Error(`Couldn’t write ${file}.`);
+          resultFiles.push({ path: file, content });
+          log(`Put back ${file}.`);
+        }
+      });
+    }
     for (const t of targets) {
       await run(async (log) => {
         const file = path.posix.join(t.dir, 'docker-compose.yml');
@@ -677,7 +702,7 @@ export async function executeRestore(id: string, emit: Emit, opts: { filesOnly?:
   }
 
   // Save this restore as a change of its own (even a partial one, so it can be put back)
-  if (snapshots.length) {
+  if (snapshots.length || fileSnapshots.length) {
     const titles = plan.changes.map((c) => c.title);
     const rec: MergeHistoryRecord = {
       id: restoreId,
@@ -698,6 +723,7 @@ export async function executeRestore(id: string, emit: Emit, opts: { filesOnly?:
             : `to before ${titles.length} changes`,
       type: 'RESTORE',
       dirSnapshots: snapshots,
+      fileSnapshots: fileSnapshots.length ? fileSnapshots : undefined,
       dataArchives: archives,
       resultFiles,
       revertedIds: failure ? [] : chain.map((r) => r.id),

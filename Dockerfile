@@ -13,6 +13,11 @@ COPY . .
 # Build Vite client and bundle server into dist/server.cjs
 RUN npm run build
 
+# Built-in AI engine: take Ollama from its official multi-arch image, keeping only the CPU engine
+# (graphics-card libraries are gigabytes). Models are downloaded later, on request, into /data/ai.
+FROM ollama/ollama:0.34.4 AS ollama
+RUN rm -rf /usr/lib/ollama/cuda_* /usr/lib/ollama/rocm* /usr/lib/ollama/vulkan* /usr/lib/ollama/mlx* 2>/dev/null; ls -la /usr/lib/ollama || true
+
 # Production runtime stage (glibc Node 22 ensures total compatibility across amd64 and arm64)
 FROM node:22-bookworm-slim AS runner
 
@@ -21,6 +26,7 @@ WORKDIR /app
 # Install docker-cli and docker compose plugin so Manifexus can orchestrate host stacks
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
+    libgomp1 \
     curl \
     gnupg \
     && install -m 0755 -d /etc/apt/keyrings \
@@ -39,6 +45,10 @@ ENV HOST_ROOT=/host
 
 # Create persistent storage directories
 RUN mkdir -p /data /app/backups
+
+# The built-in AI engine
+COPY --from=ollama /usr/bin/ollama /usr/bin/ollama
+COPY --from=ollama /usr/lib/ollama /usr/lib/ollama
 
 # Copy production artifacts from builder
 COPY --from=builder /app/package.json ./

@@ -90,6 +90,9 @@ import {
   freshStartOnce,
 } from './server/restoreService';
 import { systemDiagnostics, systemReport, appDiagnostics, appLogs } from './server/diagnosticsService';
+import { getSystemSpecs } from './server/systemSpecs';
+import { aiStatus, saveAiSettings, installModel, cancelDownload, removeModel, warmUpEngine, catalogModel, stopEngine } from './server/aiService';
+import { chat as aiChat, runPlan, getPlan } from './server/aiAgent';
 import {
   getSoftwareUpdateState,
   checkForUpdate,
@@ -843,6 +846,93 @@ async function startServer() {
   });
 
   // Diagnostics: health checks for Manifexus and for each app, resources and logs
+  // ---------------------------------------------------------------- Server specs and the built-in AI
+  app.get('/api/system/specs', async (_req, res) => res.json(await getSystemSpecs(true)));
+
+  app.get('/api/ai/status', async (_req, res) => res.json(await aiStatus()));
+
+  app.post('/api/ai/settings', (req, res) => {
+    const b = req.body || {};
+    const patch: Record<string, unknown> = {};
+    for (const k of ['quickModel', 'fixerModel', 'freedom']) if (k in b) patch[k] = b[k] || undefined;
+    res.json(saveAiSettings(patch));
+  });
+
+  app.post('/api/ai/models/install', (req, res) => {
+    const model = String(req.body?.model || '');
+    if (!catalogModel(model)) return res.status(400).json({ error: 'Unknown model.' });
+    // Choosing a model for a role at install time
+    if (req.body?.role === 'quick') saveAiSettings({ quickModel: model });
+    if (req.body?.role === 'fixer') saveAiSettings({ fixerModel: model });
+    if (req.body?.role === 'both') saveAiSettings({ quickModel: model, fixerModel: model });
+    res.json(installModel(model));
+  });
+
+  app.post('/api/ai/models/cancel', (req, res) => {
+    cancelDownload(String(req.body?.model || ''));
+    res.json({ ok: true });
+  });
+
+  app.post('/api/ai/models/remove', async (req, res) => {
+    try {
+      await removeModel(String(req.body?.model || ''));
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(500).json({ error: (e as Error).message });
+    }
+  });
+
+  // Ask Manifexus: streams what the assistant looks at, its answer, and any plan to review
+  app.post('/api/ai/chat', async (req, res) => {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    // @ts-ignore
+    if (res.flushHeaders) res.flushHeaders();
+    const ac = new AbortController();
+    res.on('close', () => ac.abort());
+    const send = (data: unknown) => {
+      if (!res.writableEnded) res.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+    try {
+      await aiChat(Array.isArray(req.body?.messages) ? req.body.messages : [], { focus: req.body?.focus, role: req.body?.role }, send, ac.signal);
+    } catch (e) {
+      if (!ac.signal.aborted) send({ type: 'error', message: (e as Error).message });
+    } finally {
+      res.end();
+    }
+  });
+
+  app.get('/api/ai/plans/:id', (req, res) => {
+    const p = getPlan(req.params.id);
+    if (!p) return res.status(404).json({ error: 'This plan has expired.' });
+    res.json(p);
+  });
+
+  app.post('/api/ai/plans/:id/run', async (req, res) => {
+    const p = getPlan(req.params.id);
+    if (p) setActivityTitle(p.title);
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    // @ts-ignore
+    if (res.flushHeaders) res.flushHeaders();
+    const recorder = pipelineRecorder(currentActivityId());
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const send = (data: any) => {
+      recorder.onEvent(data);
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+    try {
+      await runPlan(req.params.id, send);
+    } catch (err) {
+      send({ type: 'failed', log: (err as Error).message });
+    } finally {
+      recorder.finish();
+      res.end();
+    }
+  });
+
   app.get('/api/diagnostics', async (req, res) => {
     res.json(await systemDiagnostics());
   });
@@ -1055,6 +1145,8 @@ async function startServer() {
 
   // Restore: one-time clean-up of old History entries, then the keep-for setting (hourly)
   freshStartOnce();
+  warmUpEngine();
+  process.on('exit', () => stopEngine());
   enforceBackupRetention();
   setInterval(() => enforceBackupRetention(), 60 * 60 * 1000);
 

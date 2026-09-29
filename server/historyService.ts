@@ -28,7 +28,7 @@ export interface MergeHistoryRecord {
   archiveSizeBytes: number;
   summary: string;
   logs?: string[];
-  type?: 'MERGE' | 'COMPOSE_INSTALL' | 'STACK_DELETE' | 'RESTORE';
+  type?: 'MERGE' | 'COMPOSE_INSTALL' | 'STACK_DELETE' | 'RESTORE' | 'FIX';
   // Present on STACK_DELETE records: what is needed to re-provision and re-register the stack on revert
   deletedStack?: {
     project: string;
@@ -49,6 +49,8 @@ export interface MergeHistoryRecord {
   resultFiles?: { path: string; content: string | null }[];
   /** RESTORE records: how each stack looked just before the restore, so the restore itself can be undone */
   dirSnapshots?: { dir: string; project: string; existed: boolean; compose?: string | null; env?: string | null }[];
+  /** FIX and RESTORE records: other files as they were before (null = the file didn't exist) */
+  fileSnapshots?: { path: string; content: string | null }[];
   /** RESTORE records: the changes this restore put back */
   revertedIds?: string[];
   /** RESTORE records: standalone apps it recreated (removed again if the restore is undone) */

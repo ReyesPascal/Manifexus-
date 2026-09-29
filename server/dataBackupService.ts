@@ -112,7 +112,7 @@ async function runHelperDetailed(
   timeoutMs: number = DEFAULT_HELPER_TIMEOUT_MS,
   env: string[] = [],
   /** What this helper does, in plain words; `probe` helpers are low-detail and non-zero exits are expected */
-  meta: { purpose: string; probe?: boolean } = { purpose: 'Helper container' }
+  meta: { purpose: string; probe?: boolean; hostConfig?: Record<string, unknown> } = { purpose: 'Helper container' }
 ): Promise<{ code: number; output: string }> {
   const startedAt = Date.now();
   let captured = '';
@@ -121,7 +121,7 @@ async function runHelperDetailed(
   const selfId = await getSelfContainerId();
 
   // json-file logging so the output can always be read back, whatever the daemon's default log driver is
-  const hostConfig: Record<string, unknown> = { Binds: [...binds], LogConfig: { Type: 'json-file', Config: {} } };
+  const hostConfig: Record<string, unknown> = { Binds: [...binds], LogConfig: { Type: 'json-file', Config: {} }, ...(meta.hostConfig || {}) };
   if (selfId) {
     hostConfig.VolumesFrom = [selfId];
   } else {
@@ -512,6 +512,22 @@ export async function restoreStackData(
  * slow shutdowns are not cut off). Returns true on exit code 0. The helper reaches the Docker
  * daemon through the socket it inherits from Manifexus.
  */
+/**
+ * Run a shell command directly on the server (not in a container): a privileged helper enters the
+ * host's namespaces. Only used for commands the person approved one by one.
+ */
+export async function runHostCommand(command: string, timeoutMs = 2 * 60 * 1000): Promise<{ code: number; output: string }> {
+  return runHelperDetailed(`nsenter -t 1 -m -u -i -n -p -- sh -c ${shellQuote(command)}`, [], timeoutMs, [], {
+    purpose: `Run on the server: ${command}`,
+    hostConfig: { Privileged: true, PidMode: 'host' },
+  });
+}
+
+/** Run a script in a helper with the given folders mounted, returning its output */
+export async function runHelperScript(script: string, binds: string[], purpose: string, timeoutMs = 60 * 1000): Promise<{ code: number; output: string }> {
+  return runHelperDetailed(script, binds, timeoutMs, [], { purpose });
+}
+
 export async function runComposeInDir(hostDir: string, args: string, timeoutMs = 10 * 60 * 1000): Promise<boolean> {
   const script =
     `cd ${shellQuote(hostDir)} || exit 3; ` +
