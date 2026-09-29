@@ -156,8 +156,8 @@ export const AppCard: React.FC<AppCardProps> = ({ container, inStack, hostAddres
         }
       }}
       aria-label={`${name}, ${st.label}. Show details`}
-      className={`group relative flex flex-col gap-4 rounded-2xl p-4 cursor-pointer text-left transition-colors border focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0A84FF] ${
-        running ? 'bg-[#0f1422] border-white/[0.07] hover:border-white/[0.14] hover:bg-[#121827]' : 'bg-[#0c101b] border-white/[0.05] hover:border-white/[0.1]'
+      className={`group relative flex flex-col gap-4 rounded-[18px] p-4 cursor-pointer text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0A84FF] ${
+        running ? 'bg-white/[0.045] hover:bg-white/[0.07]' : 'bg-white/[0.025] hover:bg-white/[0.05]'
       }`}
       style={{ fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", Roboto, sans-serif' }}
     >
@@ -245,7 +245,7 @@ export const AppCard: React.FC<AppCardProps> = ({ container, inStack, hostAddres
               {acting === 'start' ? 'Starting…' : 'Start'}
             </button>
           ) : (
-            <div className="h-[38px] rounded-[11px] flex items-center justify-center text-[13.5px]" style={{ background: 'rgba(255,255,255,0.04)', color: 'rgba(235,235,245,0.45)' }}>
+            <div className="h-[38px] rounded-[11px] flex items-center justify-center text-[13.5px]" style={{ boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.06)', color: 'rgba(235,235,245,0.4)' }}>
               {container.state === 'restarting' ? 'Restarting…' : 'No web page'}
             </div>
           )}

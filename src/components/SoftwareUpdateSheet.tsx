@@ -3,6 +3,8 @@ import { BackButton, Button, Group, LinkButton, Row, SectionFooter, SectionHeade
 
 // Mirrors server/updateService.ts
 export interface BuildInfo {
+  /** "1.1" when this build has a version number */
+  version?: string;
   revision?: string;
   created?: string;
   label: string;

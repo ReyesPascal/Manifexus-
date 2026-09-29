@@ -6,6 +6,8 @@
       "date": "2026-09-28",
       "headline": "Fix problems in one tap: automatically, step by step yourself, or with a private AI built into Manifexus.",
       "new": [
+        "A fresh, calmer dashboard. Every stack is one clean panel with its apps inside, showing at a glance whether everything is running. Tap a stack's name to fold it away.",
+        "Stack actions. Each stack's ⋯ menu can Start, Restart or Stop all its apps, edit its compose file, or open the new Stack Details screen.",
         "Cleaner app cards. Each card shows the app's icon, name and whether it's running, with Open, Restart and Stop right there. Moving and groups are in the ⋯ menu, and tapping a card opens its details.",
         "Open goes straight to the app's web page. Manifexus checks each port and picks the one that is really a web page (never a peer or database port). If there are several, the arrow next to Open lists them and lets you pick the default.",
         "Real icons and names. Manifexus finds each app's icon (from the big icon sets, the app's own web page, or its GitHub project) and uses its real name, like Usenet Ultimate instead of usenet-ultimate.",
@@ -23,6 +25,8 @@
         "Activity → Commands. A learning log of every command behind your recent changes, and Show Commands on every activity puts them right under each step."
       ],
       "improved": [
+        "Running, Stopped, Stacks and Ports now live in the header. Tap Running or Stopped to show only those apps, or Ports to see which app uses each port.",
+        "Stacks and Groups are now two big titles you tap between, with search beside them and one + button for New Stack and New Group.",
         "Fixing has its own screen. It shows the problem, works on it step by step, then shows the change with a before and after of every file: Make Changes, Do It Myself or Not Now. After the change it runs the checks again to confirm the problem is gone. One problem, start to finish.",
         "The AI knows what Manifexus can do: when a screen does the job (Move, Restore, Settings…) it offers a button that opens it, instead of terminal steps.",
         "The AI chooses the model for each problem by its real speed on your server: when the smarter model is about as fast, it does everything. Thinking is kept short on slow processors unless the problem needs it.",

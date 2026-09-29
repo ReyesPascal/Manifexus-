@@ -23,7 +23,6 @@ import {
   AppOverride,
   EmptyComposeStack,
 } from './types';
-import { StatsBar } from './components/StatsBar';
 import { PortsSheet } from './components/PortsSheet';
 import { SoftwareUpdateSheet, SoftwareUpdateState } from './components/SoftwareUpdateSheet';
 import { ActivitySheet } from './components/ActivitySheet';
@@ -40,8 +39,11 @@ import { MoveAppsModal } from './components/MoveAppsModal';
 import { DeleteStackDialog, DeleteStackTarget } from './components/DeleteStackDialog';
 import { HostAutomationModal } from './components/HostAutomationModal';
 import { ManifexusHeroHeader } from './components/ManifexusHeroHeader';
-import { ViewBar } from './components/ViewBar';
+import { LibraryBar, Shelf, FolderIcon, Health, TileGrid, ShelfNote, panelStyle, displayFont } from './components/Shelf';
+import type { MenuItem } from './components/ui/ios';
+import { ios } from './components/ui/ios';
 import { RestoreSheet } from './components/RestoreSheet';
+import { StackDetailsSheet } from './components/StackDetailsSheet';
 import { CreateStackModal } from './components/CreateStackModal';
 import { WebTerminalModal } from './components/WebTerminalModal';
 import { AutomationPrivileges } from './types';
@@ -471,6 +473,7 @@ export default function App() {
     return { running, stopped: visibleApps.length - running, total: visibleApps.length, stacks: stackNames.size, ports: ports.size };
   }, [visibleApps, emptyStacks, containers]);
   const [isPortsOpen, setIsPortsOpen] = useState(false);
+  const [stackDetails, setStackDetails] = useState<string | null>(null);
 
   // Grouped containers by Custom User Groups
   const groupedByUserCategories = useMemo(() => {
@@ -553,6 +556,40 @@ export default function App() {
 
   const hostAddress = config?.hostAddress || 'localhost';
 
+  // One app card, the same everywhere
+  const card = (c: DeepContainerMetadata, inStack = false) => (
+    <AppCard
+      key={c.id}
+      inStack={inStack}
+      container={c}
+      hostAddress={hostAddress}
+      groups={config?.groups || []}
+      onInspect={setInspectContainer}
+      onAssignGroup={handleAssignGroup}
+      onAction={handleContainerAction}
+      onSetPrimaryPort={handleSetPrimaryPort}
+      onMoveApp={openMoveForApp}
+    />
+  );
+
+  // Start, restart or stop every app in a stack or group
+  const stackActionItems = (apps: DeepContainerMetadata[]): MenuItem[] => {
+    if (!apps.length) return [];
+    const run = (action: 'start' | 'stop' | 'restart', only: (c: DeepContainerMetadata) => boolean) =>
+      void Promise.all(apps.filter(only).map((c) => handleContainerAction(c.id, action)));
+    const anyStopped = apps.some((c) => c.state !== 'running');
+    const anyRunning = apps.some((c) => c.state === 'running');
+    return [
+      ...(anyStopped ? [{ key: 'start-all', label: apps.length === 1 ? 'Start' : 'Start All', onSelect: () => run('start', (c) => c.state !== 'running') }] : []),
+      ...(anyRunning
+        ? [
+            { key: 'restart-all', label: apps.length === 1 ? 'Restart' : 'Restart All', onSelect: () => run('restart', (c) => c.state === 'running') },
+            { key: 'stop-all', label: apps.length === 1 ? 'Stop' : 'Stop All', destructive: true, onSelect: () => run('stop', (c) => c.state === 'running') },
+          ]
+        : []),
+    ];
+  };
+
   // Screens opened on top of Diagnostics: Back returns to it, Done closes both
   const detailsLabel = inspectContainer && manifexusHeroContainer && inspectContainer.id === manifexusHeroContainer.id ? 'Diagnostics' : 'App Details';
   const backProps = (which: 'activity' | 'restore' | 'updates' | 'settings' | 'assistant', close: () => void) =>
@@ -572,7 +609,7 @@ export default function App() {
       : { onClose: close };
 
   return (
-    <div className="min-h-screen bg-[#07090e] text-slate-100 flex flex-col font-sans selection:bg-cyan-500/30 selection:text-cyan-200">
+    <div className="min-h-screen bg-[#09090b] text-slate-100 flex flex-col font-sans selection:bg-[#0A84FF]/40">
 
       {/* Main Dashboard Canvas */}
       <main data-dashboard className="flex-1 max-w-7xl w-full mx-auto px-4 lg:px-6 py-6">
@@ -589,6 +626,17 @@ export default function App() {
             refreshSoftwareUpdate();
           }}
           stackCount={stats.stacks}
+          running={stats.running}
+          stopped={stats.stopped}
+          total={stats.total}
+          portsInUse={stats.ports}
+          statusFilter={statusFilter}
+          onStatusFilterChange={setStatusFilter}
+          onShowPorts={() => setIsPortsOpen(true)}
+          onShowStacks={() => {
+            setStatusFilter('all');
+            setViewMode('compose');
+          }}
           onOpenActivity={() => {
             setActivity({ open: true });
             markFailuresSeen(lastFailureAt.current);
@@ -632,358 +680,260 @@ export default function App() {
           </div>
         )}
 
-        {/* Central Fleet Telemetry Metric Cards */}
-        <StatsBar
-          running={stats.running}
-          stopped={stats.stopped}
-          total={stats.total}
-          stacks={stats.stacks}
-          portsInUse={stats.ports}
-          statusFilter={statusFilter}
-          onStatusFilterChange={setStatusFilter}
-          onShowStacks={() => {
-            setStatusFilter('all');
-            setViewMode('compose');
-          }}
-          onShowPorts={() => setIsPortsOpen(true)}
-        />
-
-        {/* Arrange apps by stack or by group */}
-        <ViewBar
-          viewMode={viewMode}
-          onViewModeChange={setViewMode}
-          onOpenGroupManager={() => setIsGroupManagerOpen(true)}
-          onOpenCreateStack={() => setIsCreateStackModalOpen(true)}
+        {/* Stacks | Groups, search, and + for creating */}
+        <LibraryBar
+          view={viewMode}
+          onView={setViewMode}
+          search={searchQuery}
+          onSearch={setSearchQuery}
+          filter={statusFilter}
+          onClearFilter={() => setStatusFilter('all')}
+          addItems={[
+            { key: 'stack', label: 'New Stack…', onSelect: () => setIsCreateStackModalOpen(true) },
+            { key: 'group', label: 'New Group…', onSelect: () => setIsGroupManagerOpen(true) },
+            ...(viewMode === 'groups' ? [{ key: 'edit', label: 'Edit Groups…', divider: true, onSelect: () => setIsGroupManagerOpen(true) }] : []),
+          ]}
         />
 
         {/* Error Notification */}
         {error && (
-          <div className="mb-6 p-4 rounded-xl bg-rose-950/50 border border-rose-500/40 text-rose-300 text-xs font-mono flex items-center gap-3">
-            <AlertCircle className="w-5 h-5 text-rose-400 flex-shrink-0" />
-            <span>Connection Warning: {error}</span>
+          <div className="mb-5 px-4 py-3 rounded-[16px] flex items-center gap-3 text-[14px]" style={{ ...panelStyle, color: '#FF8A80' }}>
+            <AlertCircle className="w-5 h-5 flex-shrink-0" />
+            <span>Can’t reach Docker right now: {error}</span>
           </div>
         )}
 
         {/* LOADING STATE */}
         {isLoading && (
-          <div className="py-20 flex flex-col items-center justify-center space-y-3 font-mono">
-            <div className="w-10 h-10 border-2 border-cyan-500/20 border-t-cyan-400 rounded-full animate-spin"></div>
-            <p className="text-xs text-slate-400">Querying Docker Daemon socket...</p>
+          <div className="py-24 flex flex-col items-center justify-center gap-3" style={{ color: 'rgba(235,235,245,0.6)' }}>
+            <div className="w-7 h-7 border-2 border-white/15 border-t-white/70 rounded-full animate-spin" />
+            <p className="text-[14px]">Loading your apps…</p>
           </div>
         )}
 
-        {/* EMPTY STATE */}
-        {!isLoading && filteredContainers.length === 0 && (
-          <div className="py-16 text-center rounded-2xl bg-slate-900/40 border border-slate-800 p-8 font-mono">
-            <Server className="w-12 h-12 text-slate-600 mx-auto mb-3" />
-            <h3 className="text-base font-bold text-slate-200">No Containers Detected</h3>
-            <p className="text-xs text-slate-500 max-w-md mx-auto mt-1 mb-4">
-              {searchQuery
-                ? `No containers match your search query "${searchQuery}".`
-                : 'No running or exited containers found on the Docker daemon.'}
+        {/* Nothing matches */}
+        {!isLoading && filteredContainers.length === 0 && (searchQuery || statusFilter !== 'all') && (
+          <div className="py-16 text-center rounded-[22px] px-6" style={panelStyle}>
+            <h3 className="text-[19px] font-semibold text-white" style={{ fontFamily: displayFont }}>
+              No Results
+            </h3>
+            <p className="mt-1 text-[14px]" style={{ color: 'rgba(235,235,245,0.6)' }}>
+              {searchQuery ? `No apps match “${searchQuery}”.` : `No ${statusFilter} apps.`}
+            </p>
+          </div>
+        )}
+        {!isLoading && visibleApps.length === 0 && !searchQuery && statusFilter === 'all' && (
+          <div className="py-16 text-center rounded-[22px] px-6 mb-4" style={panelStyle}>
+            <h3 className="text-[19px] font-semibold text-white" style={{ fontFamily: displayFont }}>
+              No Apps Yet
+            </h3>
+            <p className="mt-1 text-[14px]" style={{ color: 'rgba(235,235,245,0.6)' }}>
+              Docker isn’t running any apps on this server yet.
             </p>
             {systemStatus?.isDemoMode && (
-              <button
-                onClick={() => setIsSimulateOpen(true)}
-                className="px-4 py-2 rounded-xl bg-cyan-500 text-slate-950 font-bold text-xs hover:bg-cyan-400 transition-colors"
-              >
-                + Spawn Sample Container
+              <button onClick={() => setIsSimulateOpen(true)} className="mt-4 h-9 px-4 rounded-full text-[14px] font-semibold text-white" style={{ background: '#0A84FF' }}>
+                Add a Sample App
               </button>
             )}
           </div>
         )}
 
-        {/* VIEW MODE 1: CUSTOM USER GROUPS */}
+        {/* BY GROUP */}
         {!isLoading && viewMode === 'groups' && (
-          <div className="space-y-8">
-            {/* User defined categories */}
+          <div className="space-y-4">
             {(config?.groups || []).map((group) => {
               const items = groupedByUserCategories.groupsMap[group.id] || [];
-              if (items.length === 0 && searchQuery) return null;
-
+              if (items.length === 0 && (searchQuery || statusFilter !== 'all')) return null;
               return (
-                <section key={group.id} className="space-y-4">
-                  {/* Category Header */}
-                  <div className="flex items-center justify-between pb-2 border-b border-slate-800/80">
-                    <div className="flex items-center gap-2.5">
-                      <span
-                        className="w-3.5 h-3.5 rounded-md shadow-sm"
-                        style={{ backgroundColor: group.color }}
-                      ></span>
-                      <h2 className="text-base font-bold font-mono tracking-tight text-white flex items-center gap-2">
-                        {group.name}
-                        <span className="text-xs font-normal text-slate-500 font-mono px-2 py-0.5 rounded-full bg-slate-900 border border-slate-800">
-                          {items.length} {items.length === 1 ? 'service' : 'services'}
-                        </span>
-                      </h2>
-                    </div>
-
-                    {group.description && (
-                      <span className="text-xs text-slate-500 font-mono hidden md:block">
-                        {group.description}
-                      </span>
-                    )}
-                  </div>
-
-                  {/* Grid of App Cards */}
+                <Shelf
+                  key={group.id}
+                  id={`group:${group.id}`}
+                  title={group.name}
+                  icon={<FolderIcon apps={items} tint={group.color} />}
+                  status={<Health apps={items} empty={group.description || 'No apps yet'} />}
+                  forceOpen={items.some((c) => c.state === 'restarting')}
+                  menu={[
+                    ...stackActionItems(items),
+                    { key: 'edit', label: 'Edit Groups…', divider: items.length > 0, onSelect: () => setIsGroupManagerOpen(true) },
+                  ]}
+                >
                   {items.length > 0 ? (
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                      {items.map((container) => (
-                        <AppCard
-                          key={container.id}
-                          container={container}
-                          hostAddress={hostAddress}
-                          groups={config?.groups || []}
-                          onInspect={setInspectContainer}
-                          onAssignGroup={handleAssignGroup}
-                          onAction={handleContainerAction}
-                          onSetPrimaryPort={handleSetPrimaryPort}
-                          onMoveApp={openMoveForApp}
-                        />
-                      ))}
-                    </div>
+                    <TileGrid>{items.map((c) => card(c))}</TileGrid>
                   ) : (
-                    <div className="p-6 rounded-xl border border-dashed border-slate-800 text-center font-mono text-xs text-slate-500">
-                      No services assigned to this category yet. Use the category icon on any app card to assign it here.
-                    </div>
+                    <ShelfNote>No apps in this group yet. Choose ⋯ on any app and pick {group.name}.</ShelfNote>
                   )}
-                </section>
+                </Shelf>
               );
             })}
-
-            {/* Uncategorized Services */}
             {groupedByUserCategories.uncategorized.length > 0 && (
-              <section className="space-y-4 pt-4">
-                <div className="flex items-center justify-between pb-2 border-b border-slate-800/80">
-                  <div className="flex items-center gap-2.5">
-                    <span className="w-3.5 h-3.5 rounded-md bg-slate-600"></span>
-                    <h2 className="text-base font-bold font-mono tracking-tight text-white flex items-center gap-2">
-                      Uncategorized Services
-                      <span className="text-xs font-normal text-slate-500 font-mono px-2 py-0.5 rounded-full bg-slate-900 border border-slate-800">
-                        {groupedByUserCategories.uncategorized.length}
-                      </span>
-                    </h2>
-                  </div>
-                  <span className="text-xs text-slate-500 font-mono hidden sm:block">
-                    Auto-discovered containers awaiting category assignment
-                  </span>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {groupedByUserCategories.uncategorized.map((container) => (
-                    <AppCard
-                      key={container.id}
-                      container={container}
-                      hostAddress={hostAddress}
-                      groups={config?.groups || []}
-                      onInspect={setInspectContainer}
-                      onAssignGroup={handleAssignGroup}
-                      onAction={handleContainerAction}
-                      onSetPrimaryPort={handleSetPrimaryPort}
-                      onMoveApp={openMoveForApp}
-                    />
-                  ))}
-                </div>
-              </section>
+              <Shelf
+                id="group:none"
+                title="Not in a Group"
+                icon={<FolderIcon apps={groupedByUserCategories.uncategorized} />}
+                status={<Health apps={groupedByUserCategories.uncategorized} />}
+                menu={stackActionItems(groupedByUserCategories.uncategorized)}
+              >
+                <TileGrid>{groupedByUserCategories.uncategorized.map((c) => card(c))}</TileGrid>
+              </Shelf>
             )}
           </div>
         )}
 
-        {/* VIEW MODE 2: COMPOSE STACKS */}
+        {/* BY STACK */}
         {!isLoading && viewMode === 'compose' && (
-          <div className="space-y-8">
-            {/* Visual Compose Stacks */}
-            {Object.entries(groupedByComposeStacks.stacksMap).map(([projectName, stackData]) => (
-              <section
-                key={projectName}
-                className="space-y-4 rounded-2xl bg-[#0a0e1a]/60 border border-purple-500/20 p-5 shadow-lg relative overflow-hidden"
-              >
-                {/* Compose Stack Header Banner */}
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-purple-500/20">
-                  <div className="flex items-center gap-3">
-                    <div className="p-2 rounded-xl bg-purple-950/60 border border-purple-500/40 text-purple-300">
-                      <Layers className="w-5 h-5" />
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <h2 className="text-base font-bold font-mono text-white tracking-tight">
-                          {projectName}
-                        </h2>
-                        <span className={`px-2 py-0.5 rounded-full text-[11px] font-mono border ${
-                          stackData.containers.length === 0
-                            ? 'bg-cyan-950/80 border-cyan-500/40 text-cyan-300'
-                            : 'bg-purple-950/80 border-purple-500/40 text-purple-300'
-                        }`}>
-                          {stackData.containers.length === 0 ? 'Empty Stack (0 services)' : `${stackData.containers.length} ${stackData.containers.length === 1 ? 'service' : 'services'}`}
-                        </span>
-                      </div>
-                      {stackData.workingDir && (
-                        <div className="flex items-center gap-1.5 text-xs text-slate-400 font-mono mt-0.5 truncate max-w-xl">
-                          <FolderOpen className="w-3.5 h-3.5 text-purple-400 flex-shrink-0" />
-                          <span className="truncate">{stackData.workingDir}</span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-2 self-start sm:self-center">
-                    {/* Directive 3: Open Compose in Terminal Button next to Compose File Path */}
-                    {(() => {
-                      const composePath =
-                        stackData.configFiles ||
-                        (stackData.workingDir ? `${stackData.workingDir}/docker-compose.yml` : undefined);
-                      if (!composePath) return null;
-                      return (
-                        <div className="flex items-center gap-1.5 bg-slate-950/80 px-2.5 py-1 rounded-lg border border-slate-800/80">
-                          <span
-                            className="text-[11px] font-mono text-slate-400 truncate max-w-xs hidden md:inline"
-                            title={composePath}
-                          >
-                            {composePath}
-                          </span>
-                          <button
-                            onClick={() => {
-                              setTerminalTargetFile(composePath);
-                              setTerminalStackName(projectName);
-                              setIsTerminalModalOpen(true);
-                            }}
-                            className="px-2 py-0.5 rounded bg-slate-900 hover:bg-cyan-950 hover:border-cyan-500/50 border border-slate-700/80 text-cyan-300 text-[11px] font-mono transition-all flex items-center gap-1.5 cursor-pointer shadow-sm"
-                            title={`Open ${composePath} in Host Web Terminal (nano)`}
-                          >
-                            <Terminal className="w-3.5 h-3.5 text-cyan-400" />
-                            <span className="hidden sm:inline">Open in Terminal</span>
-                          </button>
-                        </div>
-                      );
-                    })()}
-
-                    {projectName.toLowerCase() !== 'manifexus' && (
-                      <button
-                        onClick={() => openMoveForStack(projectName)}
-                        className="px-2.5 py-1 rounded-lg bg-purple-950/80 hover:bg-purple-900 border border-purple-500/40 text-purple-200 text-xs transition-colors flex items-center gap-1.5 cursor-pointer"
-                        title={`Move apps from other stacks into ${projectName}`}
-                      >
-                        <Plus className="w-3.5 h-3.5 text-purple-400" />
-                        <span>Add apps</span>
-                      </button>
+          <div className="space-y-4">
+            {Object.entries(groupedByComposeStacks.stacksMap)
+              .filter(([, d]) => d.containers.length > 0 || statusFilter === 'all')
+              .map(([projectName, stackData]) => {
+                const apps = stackData.containers;
+                const composePath = stackData.configFiles?.split(',')[0] || (stackData.workingDir ? `${stackData.workingDir}/docker-compose.yml` : undefined);
+                const own = projectName.toLowerCase() === 'manifexus';
+                return (
+                  <Shelf
+                    key={projectName}
+                    id={`stack:${projectName}`}
+                    title={projectName}
+                    icon={<FolderIcon apps={apps} />}
+                    status={<Health apps={apps} />}
+                    forceOpen={apps.some((c) => c.state === 'restarting' || c.state === 'dead')}
+                    action={own ? undefined : { label: 'Add App', onClick: () => openMoveForStack(projectName), title: `Move apps into ${projectName}` }}
+                    menu={[
+                      ...stackActionItems(apps),
+                      ...(composePath
+                        ? [
+                            {
+                              key: 'compose',
+                              label: 'Edit Compose File…',
+                              divider: apps.length > 0,
+                              onSelect: () => {
+                                setTerminalTargetFile(composePath);
+                                setTerminalStackName(projectName);
+                                setIsTerminalModalOpen(true);
+                              },
+                            },
+                          ]
+                        : []),
+                      { key: 'details', label: 'Stack Details', divider: !composePath && apps.length > 0, onSelect: () => setStackDetails(projectName) },
+                      ...(own
+                        ? []
+                        : [
+                            {
+                              key: 'delete',
+                              label: 'Delete Stack…',
+                              destructive: true,
+                              divider: true,
+                              onSelect: () =>
+                                setDeleteStackTarget({
+                                  projectName,
+                                  targetDirectory: stackData.workingDir,
+                                  servicesCount: apps.length,
+                                  apps: apps.map((c) => ({ id: c.id, name: (c.customName || c.friendlyName || c.cleanName).replace(/^\//, ''), iconUrl: c.iconUrl })),
+                                }),
+                            },
+                          ]),
+                    ]}
+                  >
+                    {apps.length > 0 ? (
+                      <TileGrid>{apps.map((c) => card(c, true))}</TileGrid>
+                    ) : (
+                      <ShelfNote>
+                        No apps yet.{' '}
+                        <button type="button" onClick={() => openMoveForStack(projectName)} className="font-medium hover:opacity-80" style={{ color: '#0A84FF' }}>
+                          Add an app
+                        </button>{' '}
+                        or move one here from another stack.
+                      </ShelfNote>
                     )}
+                  </Shelf>
+                );
+              })}
 
-                    {/* Directive 4: Red Trash-Can Safe Delete Stack Button */}
-                    {projectName.toLowerCase() !== 'manifexus' && (
-                      <button
-                        onClick={() => {
-                          setDeleteStackTarget({
-                            projectName,
-                            targetDirectory: stackData.workingDir,
-                            servicesCount: stackData.containers.length,
-                            apps: stackData.containers.map((c) => ({
-                              id: c.id,
-                              name: (c.customName || c.cleanName).replace(/^\//, ''),
-                              iconUrl: c.iconUrl,
-                            })),
-                          });
-                        }}
-                        className="px-2.5 py-1 rounded-lg bg-rose-950/80 hover:bg-rose-900/90 border border-rose-500/40 text-rose-300 hover:text-rose-100 text-xs font-mono transition-colors flex items-center gap-1.5 shadow-[0_0_10px_rgba(244,63,94,0.15)] cursor-pointer"
-                        title={`Delete ${projectName} (backed up first)`}
-                      >
-                        <Trash2 className="w-3.5 h-3.5 text-rose-400" />
-                        <span className="hidden sm:inline">Delete</span>
-                      </button>
-                    )}
-                  </div>
-                </div>
-
-                {/* Stack Service Grid or Empty Stack Placeholder */}
-                {stackData.containers.length === 0 ? (
-                  <div className="py-7 px-4 rounded-xl border border-dashed border-slate-800/80 bg-slate-950/30 flex flex-col items-center justify-center gap-3">
-                    <p className="text-slate-400 text-sm">This stack has no apps yet.</p>
-                    <button
-                      onClick={() => openMoveForStack(projectName)}
-                      className="px-3.5 py-2 rounded-lg bg-purple-500/15 hover:bg-purple-500/25 border border-purple-500/40 text-purple-200 text-sm flex items-center gap-1.5 cursor-pointer"
-                    >
-                      <Plus className="w-4 h-4" />
-                      <span>Add apps</span>
-                    </button>
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {stackData.containers.map((container) => (
-                      <AppCard
-                        inStack
-                        key={container.id}
-                        container={container}
-                        hostAddress={hostAddress}
-                        groups={config?.groups || []}
-                        onInspect={setInspectContainer}
-                        onAssignGroup={handleAssignGroup}
-                        onAction={handleContainerAction}
-                        onSetPrimaryPort={handleSetPrimaryPort}
-                        onMoveApp={openMoveForApp}
-                      />
-                    ))}
-                  </div>
-                )}
-              </section>
-            ))}
-
-            {/* Standalone Containers (Docker Run) */}
             {groupedByComposeStacks.standalone.length > 0 && (
-              <section className="space-y-4 rounded-2xl bg-[#0a0e1a]/40 border border-slate-800 p-5">
-                <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-                  <div className="flex items-center gap-3">
-                    <div className="p-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-400">
-                      <Terminal className="w-5 h-5" />
-                    </div>
-                    <div>
-                      <h2 className="text-base font-bold font-mono text-white tracking-tight">
-                        Standalone Containers
-                      </h2>
-                      <p className="text-xs text-slate-400 font-mono">
-                        Containers launched individually via `docker run` without a Compose stack
-                      </p>
-                    </div>
-                  </div>
-
-                  <span className="px-2 py-0.5 rounded-full text-[11px] font-mono bg-slate-900 border border-slate-800 text-slate-400">
-                    {groupedByComposeStacks.standalone.length} containers
+              <Shelf
+                id="stack:none"
+                title="Not in a Stack"
+                icon={<FolderIcon apps={groupedByComposeStacks.standalone} />}
+                status={
+                  <span className="truncate">
+                    <Health apps={groupedByComposeStacks.standalone} /> <span className="hidden sm:inline">· Started with docker run</span>
                   </span>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {groupedByComposeStacks.standalone.map((container) => (
-                    <AppCard
-                      key={container.id}
-                      container={container}
-                      hostAddress={hostAddress}
-                      groups={config?.groups || []}
-                      onInspect={setInspectContainer}
-                      onAssignGroup={handleAssignGroup}
-                      onAction={handleContainerAction}
-                      onSetPrimaryPort={handleSetPrimaryPort}
-                      onMoveApp={openMoveForApp}
-                    />
-                  ))}
-                </div>
-              </section>
+                }
+                menu={[
+                  ...stackActionItems(groupedByComposeStacks.standalone),
+                  {
+                    key: 'move',
+                    label: 'Move into a Stack…',
+                    divider: true,
+                    onSelect: () => {
+                      setMoveInitialDestination(undefined);
+                      setMoveInitialAppId(undefined);
+                      setIsMergeModalOpen(true);
+                    },
+                  },
+                ]}
+              >
+                <TileGrid>{groupedByComposeStacks.standalone.map((c) => card(c))}</TileGrid>
+              </Shelf>
             )}
           </div>
         )}
       </main>
 
-      {/* Footer Command Telemetry */}
-      <footer className="border-t border-slate-800/80 bg-[#07090e] px-4 lg:px-6 py-4 text-xs font-mono text-slate-500">
-        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse"></span>
-            <span>MANIFEXUS v1.0 — Central Command Hub</span>
-            <span className="text-slate-600">|</span>
-            <span>Host: {hostAddress}</span>
-          </div>
-          <div>
-            Data volume: <code className="text-slate-400">/data/config.json</code> (Persistent)
-          </div>
-        </div>
+      <footer className="px-4 lg:px-6 pt-6 pb-8 text-center text-[12px]" style={{ color: 'rgba(235,235,245,0.35)', fontFamily: ios.font }}>
+        Manifexus{softwareUpdate?.current.version ? ` ${softwareUpdate.current.version}` : ''} · {hostAddress}
       </footer>
+
+      {/* One stack: its apps, where it lives, and actions */}
+      {(() => {
+        const d = stackDetails ? groupedByComposeStacks.stacksMap[stackDetails] : undefined;
+        const composeFile = d?.configFiles?.split(',')[0] || (d?.workingDir ? `${d.workingDir}/docker-compose.yml` : undefined);
+        const own = stackDetails?.toLowerCase() === 'manifexus';
+        return (
+          <StackDetailsSheet
+            project={d ? stackDetails : null}
+            apps={d?.containers || []}
+            workingDir={d?.workingDir}
+            composeFile={composeFile}
+            onClose={() => setStackDetails(null)}
+            onOpenApp={(c) => {
+              setStackDetails(null);
+              setInspectContainer(c);
+            }}
+            onAddApp={() => {
+              const p = stackDetails!;
+              setStackDetails(null);
+              openMoveForStack(p);
+            }}
+            onEditCompose={
+              composeFile
+                ? () => {
+                    setTerminalTargetFile(composeFile);
+                    setTerminalStackName(stackDetails || undefined);
+                    setStackDetails(null);
+                    setIsTerminalModalOpen(true);
+                  }
+                : undefined
+            }
+            onOpenRestore={() => {
+              setStackDetails(null);
+              setIsRestoreOpen(true);
+            }}
+            onDelete={
+              own || !d
+                ? undefined
+                : () => {
+                    setDeleteStackTarget({
+                      projectName: stackDetails!,
+                      targetDirectory: d.workingDir,
+                      servicesCount: d.containers.length,
+                      apps: d.containers.map((c) => ({ id: c.id, name: (c.customName || c.friendlyName || c.cleanName).replace(/^\//, ''), iconUrl: c.iconUrl })),
+                    });
+                    setStackDetails(null);
+                  }
+            }
+          />
+        );
+      })()}
 
       {/* App details, and Diagnostics for Manifexus itself */}
       <AppDetailsSheet
