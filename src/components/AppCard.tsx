@@ -28,6 +28,9 @@ const STATE: Record<string, { label: string; color: string }> = {
   dead: { label: 'Stopped', color: '#FF453A' },
 };
 
+/** Apps whose own icon this page already reported */
+const reported = new Set<string>();
+
 /** The app's icon, or its initials on a tinted tile when there's no icon */
 export const AppIcon: React.FC<{ container: DeepContainerMetadata; size?: number }> = ({ container, size = 48 }) => {
   const [failed, setFailed] = useState<string[]>([]);
@@ -48,6 +51,16 @@ export const AppIcon: React.FC<{ container: DeepContainerMetadata; size?: number
     return list;
   }, [container.iconUrl, container.iconSource, container.webPort, container.customUrl]);
   const url = candidates.find((u) => !failed.includes(u));
+  // The app's own icon loaded here but Manifexus hasn't saved one: tell it, so every screen uses it
+  const report = (loaded: string) => {
+    if (container.iconSource || loaded === container.iconUrl || reported.has(container.id)) return;
+    reported.add(container.id);
+    void fetch(`/api/apps/${encodeURIComponent(container.id)}/icon/seen`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: loaded }),
+    }).catch(() => undefined);
+  };
   const initials = name
     .replace(/[-_]+/g, ' ')
     .split(' ')
@@ -71,7 +84,7 @@ export const AppIcon: React.FC<{ container: DeepContainerMetadata; size?: number
       }}
     >
       {url ? (
-        <img src={url} alt="" onError={() => setFailed((f) => [...f, url])} onLoad={(e) => (e.currentTarget.naturalWidth < 8 ? setFailed((f) => [...f, url]) : undefined)} referrerPolicy="no-referrer" className="object-contain" style={{ width: size * 0.72, height: size * 0.72 }} />
+        <img src={url} alt="" onError={() => setFailed((f) => [...f, url])} onLoad={(e) => (e.currentTarget.naturalWidth < 8 ? setFailed((f) => [...f, url]) : report(url!))} referrerPolicy="no-referrer" className="object-contain" style={{ width: size * 0.72, height: size * 0.72 }} />
       ) : (
         <span className="font-semibold text-white/90" style={{ fontSize: size * 0.36, letterSpacing: '0.02em' }}>
           {initials || '?'}

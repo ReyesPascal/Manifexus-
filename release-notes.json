@@ -21,6 +21,9 @@
       "improved": [
         "Running, Stopped, Stacks and Ports now live in the header. Tap Running or Stopped to show only those apps, or Ports to see which app uses each port.",
         "Stacks and Groups are now two big titles you tap between, with search beside them and one + button for New Stack and New Group.",
+        "Progress follows along: while a move, restore or fix runs, the screen scrolls to the step that's working (scroll up yourself and it waits for you).",
+        "Show All Steps opens every step with its commands right on top of the progress, and Back takes you straight back to it.",
+        "Each app's icon is its own: the one its page shows in the browser tab, saved the first time it's seen and used on every screen.",
         "Fixing has its own screen. It shows the problem, works on it step by step, then shows the change with a before and after of every file: Make Changes, Do It Myself or Not Now. After the change it runs the checks again to confirm the problem is gone. One problem, start to finish.",
         "The AI knows what Manifexus can do: when a screen does the job (Move, Restore, Settings…) it offers a button that opens it, instead of terminal steps.",
         "The AI chooses the model for each problem by its real speed on your server: when the smarter model is about as fast, it does everything. Thinking is kept short on slow processors unless the problem needs it.",

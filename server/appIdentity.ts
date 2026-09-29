@@ -69,6 +69,8 @@ interface IconInfo {
 }
 
 interface State {
+  /** An app's own icon address that a browser showed (when the server can't download it itself) */
+  iconSeen?: Record<string, string>;
   probes: Record<string, PortProbe>;
   projects: Record<string, ProjectInfo>;
   icons: Record<string, IconInfo>;
@@ -653,11 +655,52 @@ export function refreshIcons(containers: DeepContainerMetadata[]) {
 /** The saved icon's address for the dashboard, when one was found */
 export function iconUrl(c: DeepContainerMetadata): string | undefined {
   const i = state.icons[iconKey(c)];
-  return i?.file ? `/api/apps/icons/${encodeURIComponent(i.file)}?v=${i.at}` : undefined;
+  if (i?.file) return `/api/apps/icons/${encodeURIComponent(i.file)}?v=${i.at}`;
+  // The app's own icon, as a browser loaded it: every screen uses the same address
+  return state.iconSeen?.[iconKey(c)];
 }
 
 export function iconSource(c: DeepContainerMetadata): string | undefined {
-  return state.icons[iconKey(c)]?.source;
+  const i = state.icons[iconKey(c)];
+  return i?.file ? i.source : state.iconSeen?.[iconKey(c)] ? 'page' : undefined;
+}
+
+/**
+ * A browser showed this app's own icon (the one in its tab) from this address. Save the icon for
+ * every screen: download it if the server can reach it (directly, or the same port through the
+ * server's own ways in), otherwise remember the address so every browser loads it from there.
+ */
+export async function iconSeen(c: DeepContainerMetadata, url: string): Promise<boolean> {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return false;
+  }
+  if (!/^https?:$/.test(u.protocol)) return false;
+  const ports = c.ports.map((p) => String(p.publicPort || '')).filter(Boolean);
+  if (u.port && !ports.includes(u.port) && !c.customUrl) return false;
+  const key = iconKey(c);
+  const existing = state.icons[key];
+  if (existing?.file && existing.v === ICON_VERSION && !/(dashboard-icons|selfhst|github)/.test(existing.source || '')) return true;
+  const port = c.ports.find((p) => String(p.publicPort) === u.port);
+  const tries = [url, ...hostCandidates.map((h) => `${u.protocol}//${h}:${u.port}${u.pathname}${u.search}`)];
+  if (port) for (const ip of [c.ipAddress, ...(c.ipAddresses || [])].filter(Boolean)) tries.push(`${u.protocol}//${ip}:${port.privatePort}${u.pathname}${u.search}`);
+  for (const t of Array.from(new Set(tries))) {
+    const got = await tryIcon(t);
+    if (!got) continue;
+    fs.mkdirSync(ICON_DIR, { recursive: true });
+    const file = `${key}.${got.ext}`;
+    for (const f of fs.readdirSync(ICON_DIR)) if (f.startsWith(`${key}.`) && f !== file) fs.rmSync(path.join(ICON_DIR, f), { force: true });
+    fs.writeFileSync(path.join(ICON_DIR, file), got.body);
+    state.icons[key] = { file, source: url, at: Date.now(), v: ICON_VERSION };
+    save();
+    return true;
+  }
+  if (!state.iconSeen) state.iconSeen = {};
+  state.iconSeen[key] = url;
+  save();
+  return true;
 }
 
 export function iconFile(name: string): string | undefined {

@@ -98,7 +98,7 @@ import { describeFix, autoFixActions, FixContext } from './server/fixCatalog';
 import type { Check } from './server/diagnosticsService';
 import { learnActivity, recentCommands } from './server/commandLog';
 import { seedAiExample } from './server/aiExample';
-import { refreshIdentity, webInfo, projectInfo, iconUrl as appIconUrl, iconSource, iconFile, forgetIcon, setHostCandidates, friendlyName } from './server/appIdentity';
+import { refreshIdentity, webInfo, projectInfo, iconUrl as appIconUrl, iconSource, iconFile, forgetIcon, setHostCandidates, friendlyName, iconSeen } from './server/appIdentity';
 import {
   getSoftwareUpdateState,
   checkForUpdate,
@@ -347,6 +347,13 @@ async function startServer() {
     res.setHeader('Cache-Control', 'public, max-age=604800, immutable');
     if (f.endsWith('.svg')) res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'");
     res.sendFile(f);
+  });
+  // A browser showed an app's own icon (from its web page): save it for every screen
+  app.post('/api/apps/:id/icon/seen', async (req, res) => {
+    const { containers } = await getContainersList();
+    const c = containers.find((x) => x.id === req.params.id || x.cleanName === req.params.id);
+    if (!c || typeof req.body?.url !== 'string') return res.status(400).json({ error: 'No such app.' });
+    res.json({ ok: await iconSeen(c, req.body.url) });
   });
   // Look for an app's icon again
   app.post('/api/apps/:id/icon/refresh', async (req, res) => {

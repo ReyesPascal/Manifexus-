@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { usePrefs } from '../prefs';
-import { StepCommands, useLearnSteps } from './Commands';
-import { Button, Group, IconTile, LinkButton, Row, SectionFooter, ios } from './ui/ios';
+import { CommandItem, StepCommands, useLearn, useLearnSteps } from './Commands';
+import { BackButton, Button, Group, IconTile, LinkButton, Row, SectionFooter, Sheet, ios } from './ui/ios';
 import { copyText } from './ActivitySheet';
 
 /**
@@ -204,8 +204,41 @@ export const ProgressView: React.FC<{
   onFinished?: () => void;
 }> = ({ run, runningTitle, doneMessage, onDone, onClose, onFinished }) => {
   const [copy, setCopy] = useState<'idle' | 'busy' | 'done' | 'failed'>('idle');
+  const [allSteps, setAllSteps] = useState(false);
   const { showCommands } = usePrefs();
   const learning = useLearnSteps(showCommands ? run.activityId : undefined, run.status === 'running' || run.status === 'idle');
+
+  // Follow along: keep the step that's working in view as the list grows, and show the end when it
+  // finishes. Scrolling by hand pauses this for a few seconds, so you can read something above.
+  const rootRef = useRef<HTMLDivElement>(null);
+  const stepRefs = useRef(new Map<number, HTMLDivElement>());
+  const pausedUntil = useRef(0);
+  useEffect(() => {
+    const scroller = rootRef.current?.closest('.overflow-y-auto') as HTMLElement | null;
+    if (!scroller) return;
+    const pause = () => (pausedUntil.current = Date.now() + 6000);
+    scroller.addEventListener('wheel', pause, { passive: true });
+    scroller.addEventListener('touchmove', pause, { passive: true });
+    return () => {
+      scroller.removeEventListener('wheel', pause);
+      scroller.removeEventListener('touchmove', pause);
+    };
+  }, []);
+  const runningIndex = run.steps.find((s) => s.status === 'running')?.index;
+  const learnedCount = Array.from(learning.values()).reduce((n, l) => n + l.length, 0);
+  useEffect(() => {
+    if (Date.now() < pausedUntil.current) return;
+    const scroller = rootRef.current?.closest('.overflow-y-auto') as HTMLElement | null;
+    if (!scroller) return;
+    const t = setTimeout(() => {
+      if (run.status === 'running' && runningIndex !== undefined) {
+        stepRefs.current.get(runningIndex)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      } else if (run.status !== 'idle' && run.status !== 'running' && run.steps.length) {
+        scroller.scrollTo({ top: scroller.scrollHeight, behavior: 'smooth' });
+      }
+    }, 120);
+    return () => clearTimeout(t);
+  }, [runningIndex, learnedCount, run.status, run.steps.length]);
 
   // Success: refresh the dashboard, show "Done" briefly, then close by itself
   // (not when commands are shown: there's something to read, so Done is left to the person)
@@ -271,7 +304,7 @@ export const ProgressView: React.FC<{
   };
 
   return (
-    <div className="space-y-7" aria-live="polite">
+    <div ref={rootRef} className="space-y-7" aria-live="polite">
       <div className="flex flex-col items-center text-center pt-3">
         {tile}
         <h3 className="mt-4 text-[22px] leading-[27px] font-semibold text-white px-4">{title}</h3>
@@ -311,7 +344,14 @@ export const ProgressView: React.FC<{
         <section>
           <Group className="ios-inset-icon">
             {run.steps.map((s) => (
-              <React.Fragment key={s.index}>
+              <div
+                key={s.index}
+                ref={(el) => {
+                  if (el) stepRefs.current.set(s.index, el);
+                  else stepRefs.current.delete(s.index);
+                }}
+                className="scroll-mb-4"
+              >
               <Row
                 leading={<StepIcon step={s} />}
                 title={
@@ -327,13 +367,13 @@ export const ProgressView: React.FC<{
                 trailing={s.status === 'success' || s.status === 'failed' ? <span className="text-[13px] tabular-nums">{fmt(s.durationMs)}</span> : undefined}
               />
               {showCommands && <StepCommands commands={learning.get(s.index) || []} />}
-              </React.Fragment>
+              </div>
             ))}
           </Group>
           {running && <SectionFooter>You can close this screen. It keeps going, and the result is saved in Activity.</SectionFooter>}
           {!running && run.activityId && run.status === 'done' && (
             <SectionFooter>
-              <LinkButton onClick={openActivity}>{showCommands ? 'See Every Step in Activity' : 'View Details in Activity'}</LinkButton>
+              <LinkButton onClick={() => setAllSteps(true)}>Show All Steps</LinkButton>
             </SectionFooter>
           )}
         </section>
@@ -346,6 +386,48 @@ export const ProgressView: React.FC<{
           </Button>
         </div>
       )}
+      <AllStepsSheet open={allSteps} onClose={() => setAllSteps(false)} run={run} title={runningTitle} />
     </div>
+  );
+};
+
+/**
+ * Every step of a finished change with the commands behind it, on top of the progress screen.
+ * The only way out is Back, which returns to the progress you were looking at.
+ */
+const AllStepsSheet: React.FC<{ open: boolean; onClose: () => void; run: RunState; title: string }> = ({ open, onClose, run, title }) => {
+  const learn = useLearn(open ? run.activityId : undefined, false);
+  return (
+    <Sheet open={open} title="All Steps" subtitle={title} onClose={onClose} leftAction={<BackButton label="Back" onClick={onClose} />} rightAction={<span />} zIndex={90}>
+      <div className="space-y-4">
+        <Group className="ios-inset-icon">
+          {run.steps.map((s) => (
+            <div key={s.index}>
+              <Row
+                leading={<StepIcon step={s} />}
+                title={<span style={{ color: s.status === 'failed' ? '#FF8A80' : s.status === 'pending' || s.status === 'skipped' ? ios.tertiary : ios.label }}>{s.name}</span>}
+                subtitle={s.status === 'failed' && s.detail ? <span className="break-words">{s.detail}</span> : undefined}
+                trailing={s.durationMs !== undefined ? <span className="text-[13px] tabular-nums">{fmt(s.durationMs)}</span> : undefined}
+              />
+              <StepCommands commands={learn.steps.get(s.index) || []} />
+            </div>
+          ))}
+          {learn.loose.length > 0 && (
+            <div className="px-4 py-3.5 space-y-3">
+              {learn.loose.map((c, i) => (
+                <CommandItem key={i} c={c} />
+              ))}
+            </div>
+          )}
+        </Group>
+        <SectionFooter>
+          {!learn.loaded
+            ? 'Reading the record…'
+            : learn.steps.size || learn.loose.length
+              ? 'Each step with the commands you’d type in your server’s terminal to do the same yourself. Steps without one happened inside Manifexus or only checked things.'
+              : 'None of these steps needed a command: they happened inside Manifexus or only checked things.'}
+        </SectionFooter>
+      </div>
+    </Sheet>
   );
 };
