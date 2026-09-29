@@ -330,41 +330,69 @@ export const Shelf: React.FC<{
 };
 
 /**
- * Stacks fit together like tiles, and every app card is the same size everywhere:
+ * Stacks fit together like tiles on a grid, and every app card is the same size everywhere:
  *
  * - The number of columns comes from the real width, so a card is never narrower than MIN_COL.
- * - Each stack is exactly as wide as its apps (a one-app stack is one card wide; more apps than
- *   columns wrap onto more lines inside the stack).
- * - Bigger stacks are placed first and smaller ones fill the space beside them (first-fit), so rows
- *   come out full. When stacks grow or shrink, everything is re-fitted.
- * - A row that's nearly full is widened a little to close the gap (at most MAX_STRETCH); otherwise it
- *   keeps its natural size, so a lone small stack never turns into a giant card.
- * - Stacks in a row share one height.
+ * - A stack is as wide as its apps. One with more apps than fit across takes the shape with no empty
+ *   slots (4 apps on 3 columns becomes 2 × 2), and the space beside it goes to other stacks.
+ * - Bigger stacks are placed first; each stack goes in the first spot it fits, so smaller stacks fill
+ *   the gaps next to bigger ones. When stacks grow or shrink, or the window changes, everything re-fits.
+ * - Stacks sharing a row line up to the same height.
  */
 const MIN_COL = 320; // narrowest app card column, px (a one-app stack's name, + and ⋯ still fit)
 const GAP = 16;
-const MAX_STRETCH = 1.5;
 
 /** Columns (app cards across) for the panel a TileGrid is in; set by ShelfGrid */
 const CellCols = React.createContext<number | null>(null);
 
-type Cell = { i: number; w: number };
+type Place = { i: number; col: number; row: number; w: number; h: number };
 
-function planRows(apps: number[], C: number): Cell[][] {
-  // Biggest first (by app count, the same order on a phone as on a big screen); equal sizes keep their order
-  const order = apps
-    .map((n, i) => ({ i, n, w: Math.max(1, Math.min(C, n)) }))
-    .sort((a, b) => b.n - a.n || a.i - b.i)
-    .map(({ i, w }) => ({ i, w }));
-  const rows: { cells: Cell[]; left: number }[] = [];
-  for (const it of order) {
-    const row = rows.find((r) => r.left >= it.w);
-    if (row) {
-      row.cells.push(it);
-      row.left -= it.w;
-    } else rows.push({ cells: [it], left: C - it.w });
+/** The shape for a stack: as wide as its apps, or for more apps than columns the one with fewest empty slots */
+function shapeFor(n: number, C: number): { w: number; h: number } {
+  if (n <= C) return { w: Math.max(1, n), h: 1 };
+  let best = { w: C, h: Math.ceil(n / C) };
+  let bestHoles = best.w * best.h - n;
+  for (let w = C - 1; w >= 1; w--) {
+    const h = Math.ceil(n / w);
+    const holes = w * h - n;
+    // Only narrower when it really removes empty slots, and never taller than twice the widest shape
+    if (holes < bestHoles && h <= 2 * Math.ceil(n / C)) {
+      best = { w, h };
+      bestHoles = holes;
+    }
   }
-  return rows.map((r) => r.cells);
+  return best;
+}
+
+function placeStacks(apps: number[], C: number): Place[] {
+  const order = apps
+    .map((n, i) => ({ i, n }))
+    // Biggest first (the same order on a phone as on a big screen); equal sizes keep their order
+    .sort((a, b) => b.n - a.n || a.i - b.i);
+  const taken: boolean[][] = [];
+  const free = (r: number, c: number, w: number, h: number) => {
+    if (c + w > C) return false;
+    for (let y = r; y < r + h; y++) for (let x = c; x < c + w; x++) if (taken[y]?.[x]) return false;
+    return true;
+  };
+  const out: Place[] = [];
+  for (const { i, n } of order) {
+    const { w, h } = shapeFor(n, C);
+    // First spot it fits, top to bottom, left to right
+    for (let r = 0; ; r++) {
+      let c = 0;
+      for (; c <= C - w; c++) if (free(r, c, w, h)) break;
+      if (c <= C - w) {
+        for (let y = r; y < r + h; y++) {
+          taken[y] = taken[y] || [];
+          for (let x = c; x < c + w; x++) taken[y][x] = true;
+        }
+        out.push({ i, col: c, row: r, w, h });
+        break;
+      }
+    }
+  }
+  return out;
 }
 
 export const ShelfGrid: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -385,31 +413,23 @@ export const ShelfGrid: React.FC<{ children: React.ReactNode }> = ({ children })
   // "Not in a Stack" isn't a stack: it sits on its own at the bottom, full width, and never changes how the stacks fit
   const stacks = items.filter((c) => c.props.id !== 'stack:none');
   const loose = items.filter((c) => c.props.id === 'stack:none');
-  const rows = planRows(
+  const places = placeStacks(
     stacks.map((c) => Math.max(0, c.props.span ?? 1)),
     C
   );
-  const colPx = (width - GAP * (C - 1)) / C;
   return (
     <div ref={ref} className="flex flex-col gap-3 sm:gap-4">
-      {rows.map((row, r) => {
-        const used = row.reduce((sum, c) => sum + c.w, 0);
-        const stretch = used < C && C / used <= MAX_STRETCH;
-        return (
-          <div key={r} className="flex gap-3 sm:gap-4 items-stretch">
-            {row.map(({ i, w }) => (
-              <div
-                key={stacks[i].key ?? i}
-                className="flex flex-col min-w-0"
-                // Natural size: w card columns (and the gaps between them); stretched rows share the full width
-                style={stretch || used === C ? { flex: `${w} 1 0px` } : { flex: `0 0 ${w * colPx + (w - 1) * GAP}px` }}
-              >
-                <CellCols.Provider value={w}>{stacks[i]}</CellCols.Provider>
-              </div>
-            ))}
+      <div className="grid gap-3 sm:gap-4" style={{ gridTemplateColumns: `repeat(${C}, minmax(0, 1fr))` }}>
+        {places.map(({ i, col, row, w, h }) => (
+          <div
+            key={stacks[i].key ?? i}
+            className="flex flex-col min-w-0"
+            style={{ gridColumn: `${col + 1} / span ${w}`, gridRow: `${row + 1} / span ${h}` }}
+          >
+            <CellCols.Provider value={w}>{stacks[i]}</CellCols.Provider>
           </div>
-        );
-      })}
+        ))}
+      </div>
       {loose.map((c, i) => (
         <div key={c.key ?? `loose${i}`} className="flex flex-col min-w-0 mt-2 sm:mt-3">
           <CellCols.Provider value={C}>{c}</CellCols.Provider>
