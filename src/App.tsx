@@ -33,6 +33,7 @@ import { AssistantSheet } from './components/AssistantSheet';
 import { FixSheet, FixRequest } from './components/FixSheet';
 import type { AiAction } from './components/aiShared';
 import { setPrefsFromConfig } from './prefs';
+import { FEATURES } from './features';
 import { GroupManagerModal } from './components/GroupManagerModal';
 import { SettingsModal } from './components/SettingsModal';
 import { SimulateContainerModal } from './components/SimulateContainerModal';
@@ -433,6 +434,9 @@ export default function App() {
   const helpersOf = useMemo(() => helpersByApp(containers, helperOf), [containers, helperOf]);
 
   // Filtered containers based on search and status
+  // Your own groups, while that feature is shown
+  const userGroups = useMemo(() => (FEATURES.groups ? config?.groups || [] : []), [config?.groups]);
+
   const filteredContainers = useMemo(() => {
     const matched = containers.filter((c) => {
       // Directive 1: Never show Manifexus in standard cards grid - rendered as Hero element
@@ -452,7 +456,7 @@ export default function App() {
         const matchPort = c.ports.some(
           (p) => String(p.publicPort || '').includes(q) || String(p.privatePort).includes(q)
         );
-        const matchGroup = config?.groups.some(
+        const matchGroup = userGroups.some(
           (g) => g.id === c.customGroup && g.name.toLowerCase().includes(q)
         );
 
@@ -475,7 +479,7 @@ export default function App() {
       out.push(show);
     }
     return out;
-  }, [containers, statusFilter, searchQuery, config?.groups, helperOf]);
+  }, [containers, statusFilter, searchQuery, userGroups, helperOf]);
 
   // Summary numbers, computed from exactly what the dashboard shows as app cards
   // (not Manifexus itself, not apps hidden in Settings)
@@ -502,7 +506,7 @@ export default function App() {
     const groupsMap: Record<string, DeepContainerMetadata[]> = {};
     const uncategorized: DeepContainerMetadata[] = [];
 
-    const groupIds = new Set((config?.groups || []).map((g) => g.id));
+    const groupIds = new Set(userGroups.map((g) => g.id));
 
     for (const c of filteredContainers) {
       if (c.customGroup && groupIds.has(c.customGroup)) {
@@ -514,7 +518,7 @@ export default function App() {
     }
 
     return { groupsMap, uncategorized };
-  }, [filteredContainers, config?.groups]);
+  }, [filteredContainers, userGroups]);
 
   // Grouped containers by Docker Compose Stacks (including discovered empty stacks)
   const groupedByComposeStacks = useMemo(() => {
@@ -586,7 +590,7 @@ export default function App() {
       container={c}
       helpers={helpersOf.get(c.id)}
       hostAddress={hostAddress}
-      groups={config?.groups || []}
+      groups={userGroups}
       onInspect={setInspectContainer}
       onAssignGroup={handleAssignGroup}
       onAction={handleContainerAction}
@@ -673,6 +677,9 @@ export default function App() {
             fetchPrivileges();
           }}
           isRefreshing={isRefreshing}
+          search={searchQuery}
+          onSearch={setSearchQuery}
+          onNewStack={() => setIsCreateStackModalOpen(true)}
         />
 
         {/* Standby / Demo Mode Notification Banner (Visible when socket is not attached) */}
@@ -704,16 +711,15 @@ export default function App() {
           </div>
         )}
 
-        {/* Stacks | Groups, search, and + for creating */}
+        {/* The break between the header and the stacks */}
         <LibraryBar
+          showGroups={FEATURES.groups}
           view={viewMode}
           onView={setViewMode}
-          search={searchQuery}
-          onSearch={setSearchQuery}
+          count={isLoading || searchQuery || statusFilter !== 'all' ? undefined : stats.stacks}
           filter={statusFilter}
           onClearFilter={() => setStatusFilter('all')}
-          addItems={[
-            { key: 'stack', label: 'New Stack…', onSelect: () => setIsCreateStackModalOpen(true) },
+          groupItems={[
             { key: 'group', label: 'New Group…', onSelect: () => setIsGroupManagerOpen(true) },
             ...(viewMode === 'groups' ? [{ key: 'edit', label: 'Edit Groups…', divider: true, onSelect: () => setIsGroupManagerOpen(true) }] : []),
           ]}
@@ -763,9 +769,9 @@ export default function App() {
         )}
 
         {/* BY GROUP */}
-        {!isLoading && viewMode === 'groups' && (
+        {!isLoading && FEATURES.groups && viewMode === 'groups' && (
           <div className="space-y-4">
-            {(config?.groups || []).map((group) => {
+            {userGroups.map((group) => {
               const items = groupedByUserCategories.groupsMap[group.id] || [];
               if (items.length === 0 && (searchQuery || statusFilter !== 'all')) return null;
               return (
@@ -971,7 +977,7 @@ export default function App() {
         partOf={inspectContainer && helperOf.get(inspectContainer.id) ? containers.find((x) => x.id === helperOf.get(inspectContainer.id)) : undefined}
         onOpenApp={setInspectContainer}
         system={Boolean(inspectContainer && manifexusHeroContainer && inspectContainer.id === manifexusHeroContainer.id)}
-        groups={config?.groups || []}
+        groups={userGroups}
         hostAddress={hostAddress}
         onClose={() => setInspectContainer(null)}
         onSaveOverride={handleSaveOverride}
@@ -1002,7 +1008,7 @@ export default function App() {
 
       {/* Custom Group Manager Modal */}
       <GroupManagerModal
-        isOpen={isGroupManagerOpen}
+        isOpen={FEATURES.groups && isGroupManagerOpen}
         onClose={() => setIsGroupManagerOpen(false)}
         groups={config?.groups || []}
         onSaveGroup={handleSaveGroup}

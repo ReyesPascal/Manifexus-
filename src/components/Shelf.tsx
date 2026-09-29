@@ -1,10 +1,10 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useState } from 'react';
 import { DeepContainerMetadata } from '../types';
 import { AppIcon } from './AppCard';
 import { MenuButton, MenuItem, ios } from './ui/ios';
 
 /**
- * The dashboard below the hero, in the hero's style: a toolbar (Stacks | Groups, search, +) and
+ * The dashboard below the hero, in the hero's style: a section bar under the header and
  * one glass panel per stack or group, with its apps on quiet tiles inside.
  */
 
@@ -240,112 +240,75 @@ export const ShelfNote: React.FC<{ children: React.ReactNode }> = ({ children })
 );
 
 // ----------------------------------------------------------------------------
-// Toolbar
+// Section bar
 // ----------------------------------------------------------------------------
 
-const SearchGlyph = () => (
-  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden>
-    <circle cx="11" cy="11" r="6.5" />
-    <path d="m20 20-4.2-4.2" />
-  </svg>
-);
-
 /**
- * Stacks | Groups as large titles you tap between, a search field, and one + button for creating
- * things (New Stack, New Group). Group editing lives with the groups themselves.
+ * The break between the header and the stacks: a quiet "Your Stacks" label and a hairline, with the
+ * "Showing only running apps" note on the right. Search and New Stack live in the header. With groups
+ * shown, the label becomes Stacks | Groups to tap between, and + adds or edits groups.
  */
 export const LibraryBar: React.FC<{
+  /** Off: just the Your Stacks label, no Groups to switch to */
+  showGroups?: boolean;
   view: 'compose' | 'groups';
   onView: (v: 'compose' | 'groups') => void;
-  search: string;
-  onSearch: (q: string) => void;
+  /** How many stacks are shown */
+  count?: number;
   filter: 'all' | 'running' | 'stopped';
   onClearFilter: () => void;
-  addItems: MenuItem[];
-}> = ({ view, onView, search, onSearch, filter, onClearFilter, addItems }) => {
-  const [searching, setSearching] = useState(Boolean(search));
-  const input = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    if (searching) input.current?.focus();
-  }, [searching]);
-  const tab = (v: 'compose' | 'groups', label: string) => (
+  /** Group actions (New Group, Edit Groups), while groups are shown */
+  groupItems?: MenuItem[];
+}> = ({ showGroups = false, view, onView, count, filter, onClearFilter, groupItems = [] }) => {
+  const label = 'text-[12px] font-semibold uppercase tracking-[0.08em]';
+  const tab = (v: 'compose' | 'groups', text: string) => (
     <button
       type="button"
       role="tab"
       aria-selected={view === v}
       onClick={() => onView(v)}
-      className="text-[26px] sm:text-[28px] leading-none font-bold rounded-md transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0A84FF]"
-      style={{ fontFamily: displayFont, letterSpacing: '-0.03em', color: view === v ? '#fff' : 'rgba(235,235,245,0.3)' }}
+      className={`${label} rounded-md transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0A84FF]`}
+      style={{ color: view === v ? 'rgba(255,255,255,0.9)' : 'rgba(235,235,245,0.35)' }}
     >
-      {label}
+      {text}
     </button>
   );
-  const field = (
-    <label
-      className="flex items-center gap-2 h-9 pl-3 pr-2 rounded-full w-full sm:w-[260px] transition-colors focus-within:ring-2 focus-within:ring-[#0A84FF]"
-      style={{ background: 'rgba(118,118,128,0.16)', boxShadow: 'inset 0 0 0 0.5px rgba(255,255,255,0.08)', color: ios.secondary }}
-    >
-      <SearchGlyph />
-      <input
-        ref={input}
-        type="search"
-        value={search}
-        onChange={(e) => onSearch(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Escape') {
-            onSearch('');
-            setSearching(false);
-          }
-        }}
-        onBlur={() => !search && setSearching(false)}
-        placeholder="Search apps"
-        aria-label="Search apps"
-        className="flex-1 min-w-0 bg-transparent outline-none text-[14px] text-white placeholder:text-[rgba(235,235,245,0.4)] [&::-webkit-search-cancel-button]:hidden"
-      />
-      {search && (
-        <button type="button" onClick={() => onSearch('')} aria-label="Clear search" className="w-5 h-5 rounded-full flex items-center justify-center text-[11px] text-black" style={{ background: 'rgba(235,235,245,0.45)' }}>
-          ✕
-        </button>
-      )}
-    </label>
-  );
   return (
-    <div className="mb-5 mt-2" style={{ fontFamily: ios.font }}>
-      <div className="flex items-center gap-3">
-        <div role="tablist" aria-label="Arrange apps" className="flex items-baseline gap-5 min-w-0">
+    <div className="mt-3 mb-4 flex items-center gap-3 min-h-[28px]" style={{ fontFamily: ios.font }}>
+      {showGroups ? (
+        <div role="tablist" aria-label="Arrange apps" className="flex items-center gap-4 flex-shrink-0">
           {tab('compose', 'Stacks')}
           {tab('groups', 'Groups')}
         </div>
-        <div className="flex-1" />
-        <div className="hidden sm:block">{field}</div>
-        {!searching && (
-          <button
-            type="button"
-            onClick={() => setSearching(true)}
-            aria-label="Search apps"
-            className="sm:hidden w-9 h-9 rounded-full inline-flex items-center justify-center hover:bg-white/[0.08] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0A84FF]"
-            style={{ background: 'rgba(118,118,128,0.16)', color: 'rgba(255,255,255,0.85)' }}
-          >
-            <SearchGlyph />
-          </button>
-        )}
-        <MenuButton
-          look="bare"
-          ariaLabel="Create"
-          title="New Stack or Group"
-          items={addItems}
-          label={<PlusGlyph size={17} />}
-          className="flex-shrink-0 w-9 h-9 rounded-full inline-flex items-center justify-center text-white bg-[#0A84FF] shadow-[0_4px_14px_-4px_rgba(10,132,255,0.6)] transition-all hover:brightness-110 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-black focus-visible:ring-[#0A84FF]"
-        />
-      </div>
-      {searching && <div className="sm:hidden mt-3">{field}</div>}
+      ) : (
+        <h2 className={`${label} flex-shrink-0 flex items-center gap-2`} style={{ color: 'rgba(235,235,245,0.6)' }}>
+          Your Stacks
+          {count !== undefined && (
+            <span className="tabular-nums font-medium normal-case tracking-normal px-1.5 rounded-full text-[11.5px] leading-[18px]" style={{ background: 'rgba(118,118,128,0.2)', color: 'rgba(235,235,245,0.7)' }}>
+              {count}
+            </span>
+          )}
+        </h2>
+      )}
+      <div className="flex-1 h-px" style={{ background: 'linear-gradient(90deg, rgba(255,255,255,0.14), rgba(255,255,255,0.03))' }} aria-hidden />
       {filter !== 'all' && (
-        <div className="mt-3 flex items-center gap-2 text-[13px]" style={{ color: ios.secondary }}>
-          <span>Showing only {filter === 'running' ? 'running' : 'stopped'} apps.</span>
+        <div className="flex items-center gap-2 text-[13px] flex-shrink-0" style={{ color: ios.secondary }}>
+          <span className="max-sm:hidden">Showing only {filter === 'running' ? 'running' : 'stopped'} apps.</span>
+          <span className="sm:hidden">Only {filter}</span>
           <button type="button" onClick={onClearFilter} className="font-medium hover:opacity-80" style={{ color: ios.blue }}>
             Show All
           </button>
         </div>
+      )}
+      {showGroups && groupItems.length > 0 && (
+        <MenuButton
+          look="bare"
+          ariaLabel="Groups"
+          title="New or Edit Groups"
+          items={groupItems}
+          label={<PlusGlyph size={15} />}
+          className="flex-shrink-0 w-7 h-7 rounded-full inline-flex items-center justify-center text-white/70 hover:text-white hover:bg-white/[0.08] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0A84FF]"
+        />
       )}
     </div>
   );

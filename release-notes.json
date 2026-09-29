@@ -10,7 +10,7 @@
         "Stack actions. Each stack's ⋯ menu can Start, Restart or Stop all its apps, edit its compose file, or open the new Stack Details screen.",
         "Server Cleanup. Tap Clean Up in the header to find folders no app uses anymore (empty folders, and stacks with no apps) and delete the ones you pick. Stacks are backed up first and can be restored.",
         "Apps and their databases together. A database or cache that belongs to an app (like Nextcloud's MariaDB) no longer gets its own card. The app's icon gets a small database badge, the card warns \"Database stopped\" if it stops, and starting the app starts it too. Its details are inside the app's Details.",
-        "Cleaner app cards. Each card shows the app's icon, name and whether it's running, with Open, Restart and Stop right there. Moving and groups are in the ⋯ menu, and tapping a card opens its details.",
+        "Cleaner app cards. Each card shows the app's icon, name and whether it's running, with Open, Restart and Stop right there. Move to Another Stack and Details sit beside the app's name, and tapping a card opens its details too.",
         "Open goes straight to the app's web page. Manifexus checks each port and picks the one that is really a web page (never a peer or database port). If there are several, the arrow next to Open lists them and lets you pick the default.",
         "Real icons and names. Manifexus finds each app's icon (from the big icon sets, the app's own web page, or its GitHub project) and uses its real name, like Usenet Ultimate instead of usenet-ultimate.",
         "Project Page. App Details links to the app's project on GitHub and shows its latest release.",
@@ -21,7 +21,7 @@
       ],
       "improved": [
         "Running, Stopped, Stacks and Ports now live in the header. Tap Running or Stopped to show only those apps, or Ports to see which app uses each port.",
-        "Stacks and Groups are now two big titles you tap between, with search beside them and one + button for New Stack and New Group.",
+        "Search and New Stack are in the header, right under the toolbar, and a quiet Your Stacks line separates the header from your stacks.",
         "Progress follows along: while a move, restore or fix runs, the screen scrolls to the step that's working (scroll up yourself and it waits for you).",
         "Show All Steps opens every step with its commands right on top of the progress, and Back takes you straight back to it.",
         "Each app's icon is its own: the one its page shows in the browser tab, saved in Manifexus the first time it's seen and used on every screen (cards, Details, Move, Ports, stacks). It works even when a firewall keeps Manifexus's container from reaching the app: the icon is read from the server itself.",

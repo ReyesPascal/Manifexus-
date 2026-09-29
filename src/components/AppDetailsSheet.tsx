@@ -16,6 +16,7 @@ import {
   ios,
 } from './ui/ios';
 import { DeepContainerMetadata, UserGroup, AppOverride, ContainerMount } from '../types';
+import { FEATURES } from '../features';
 import { ManifexusAppIcon } from './SoftwareUpdateSheet';
 import { copyText } from './ActivitySheet';
 import { AppIcon } from './AppCard';
@@ -699,7 +700,7 @@ export const AppDetailsSheet: React.FC<{
             ) : (
               <Row onClick={() => push('logs')} leading={<NavTile d={G.logs} color="#30D158" />} title="App Output" subtitle="What the app itself has printed" chevron />
             )}
-            {!system && <Row onClick={() => push('customize')} leading={<NavTile d={G.pencil} color="#FF9F0A" />} title="Customize" subtitle="Name, group, launch link, icon and notes" chevron />}
+            {!system && <Row onClick={() => push('customize')} leading={<NavTile d={G.pencil} color="#FF9F0A" />} title="Customize" subtitle={FEATURES.groups ? 'Name, group, launch link, icon and notes' : 'Name, launch link, icon and notes'} chevron />}
           </Group>
         </section>
       </div>
@@ -901,6 +902,7 @@ export const AppDetailsSheet: React.FC<{
           </Group>
           <SectionFooter>The app card opens the custom link if you set one, otherwise http://{hostAddress}:{custom.port || 'port'}.</SectionFooter>
         </section>
+        {FEATURES.groups && (
         <section>
           <SectionHeader>Group</SectionHeader>
           <Group>
@@ -916,6 +918,7 @@ export const AppDetailsSheet: React.FC<{
             ))}
           </Group>
         </section>
+        )}
         <section>
           <SectionHeader>Notes</SectionHeader>
           <Group>

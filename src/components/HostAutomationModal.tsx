@@ -54,7 +54,7 @@ export const HostAutomationModal: React.FC<HostAutomationModalProps> = ({
       - /var/run/docker.sock:/var/run/docker.sock
       # Host home mount: enables direct, automated docker-compose.yml editing & backups
       - /home:/host/home
-      # Persistent host directory for custom groups and app overrides
+      # Persistent host directory for Manifexus settings and app overrides
       - ./data:/data`;
 
   const copyToClipboard = (text: string, type: string) => {

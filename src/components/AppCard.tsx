@@ -113,20 +113,26 @@ const StopGlyph = () => (
   </svg>
 );
 
-const MoreGlyph = () => (
-  <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
-    <circle cx="5" cy="12" r="1.9" />
-    <circle cx="12" cy="12" r="1.9" />
-    <circle cx="19" cy="12" r="1.9" />
+/** Same arrows as Move in Restore */
+const MoveGlyph = () => (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <path d="M4 8h13m0 0-3.5-3.5M17 8l-3.5 3.5M20 16H7m0 0 3.5-3.5M7 16l3.5 3.5" />
+  </svg>
+);
+
+const InfoGlyph = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M12 11v5.5M12 7.6v.01" strokeWidth="2.6" />
   </svg>
 );
 
 /**
- * An app on the dashboard: its icon and name, whether it's running and where it lives, and one clear
- * action (Open its web page, or Start it) with Restart and Stop beside it. Moving and groups are in the
- * ⋯ menu; tap the card for Details.
+ * An app on the dashboard. The top row is about the app itself: its icon, name, whether it's running,
+ * and Move and Details beside it. The bottom row runs it: one clear action (Open its web page, or
+ * Start it) with Restart and Stop beside it. Tapping the card also opens Details.
  */
-export const AppCard: React.FC<AppCardProps> = ({ container, inStack, helpers = [], hostAddress, groups, onInspect, onAssignGroup, onAction, onSetPrimaryPort, onMoveApp }) => {
+export const AppCard: React.FC<AppCardProps> = ({ container, inStack, helpers = [], hostAddress, groups, onInspect, onAction, onSetPrimaryPort, onMoveApp }) => {
   const [acting, setActing] = useState<'start' | 'stop' | 'restart'>();
   const name = container.customName || container.friendlyName || container.cleanName;
   const running = container.state === 'running';
@@ -148,18 +154,6 @@ export const AppCard: React.FC<AppCardProps> = ({ container, inStack, helpers = 
       setActing(undefined);
     }
   };
-
-  const menu: MenuItem[] = [
-    ...(onMoveApp ? [{ key: 'move', label: 'Move to Another Stack…', onSelect: () => onMoveApp(container) }] : []),
-    ...(groups.length
-      ? [
-          { key: 'gh', label: 'Group', header: true, divider: !!onMoveApp, onSelect: () => undefined },
-          { key: 'g-none', label: 'None', checked: !container.customGroup, onSelect: () => onAssignGroup(container.id, '') },
-          ...groups.map((g) => ({ key: `g-${g.id}`, label: g.name, dot: g.color, checked: container.customGroup === g.id, onSelect: () => onAssignGroup(container.id, g.id) })),
-        ]
-      : []),
-    { key: 'details', label: 'Details', divider: true, onSelect: () => onInspect(container) },
-  ];
 
   const openMenu: MenuItem[] = [
     ...[webPort!, ...others].map((p, i) => ({
@@ -230,14 +224,35 @@ export const AppCard: React.FC<AppCardProps> = ({ container, inStack, helpers = 
             )}
           </div>
         </div>
-        <MenuButton
-          look="bare"
-          label={<MoreGlyph />}
-          ariaLabel={`More for ${name}`}
-          title="More"
-          items={menu}
-          className="flex-shrink-0 -mr-1 w-9 h-9 rounded-full inline-flex items-center justify-center text-white/60 hover:text-white hover:bg-white/[0.08] focus-visible:outline-2 focus-visible:outline-[#0A84FF]"
-        />
+        {/* Managing the app: Move and Details, in the same capsule as Restart and Stop */}
+        <div className="flex items-stretch h-[32px] rounded-[10px] overflow-hidden flex-shrink-0" style={{ background: 'rgba(255,255,255,0.06)' }}>
+          {onMoveApp && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onMoveApp(container);
+              }}
+              title="Move to Another Stack"
+              aria-label={`Move ${name} to another stack`}
+              className="w-[36px] inline-flex items-center justify-center text-white/60 hover:text-white hover:bg-white/[0.08] focus-visible:outline-2 focus-visible:outline-[#0A84FF] -outline-offset-2"
+            >
+              <MoveGlyph />
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onInspect(container);
+            }}
+            title="Details"
+            aria-label={`Details for ${name}`}
+            className={`w-[36px] inline-flex items-center justify-center text-white/60 hover:text-white hover:bg-white/[0.08] focus-visible:outline-2 focus-visible:outline-[#0A84FF] -outline-offset-2 ${onMoveApp ? 'border-l border-white/[0.08]' : ''}`}
+          >
+            <InfoGlyph />
+          </button>
+        </div>
       </div>
 
       {/* The main action, with Restart and Stop beside it */}

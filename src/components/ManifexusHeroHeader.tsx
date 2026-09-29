@@ -38,7 +38,18 @@ interface ManifexusHeroHeaderProps {
   onOpenSettings: () => void;
   onRefresh: () => void;
   isRefreshing?: boolean;
+  /** Search apps, beside New Stack under the toolbar */
+  search?: string;
+  onSearch?: (q: string) => void;
+  onNewStack?: () => void;
 }
+
+const SearchGlyph = () => (
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden>
+    <circle cx="11" cy="11" r="6.5" />
+    <path d="m20 20-4.2-4.2" />
+  </svg>
+);
 
 /** Hover/focus tooltip. Wrap it in an element with the `group` class. */
 const Tip: React.FC<{ text: string; side?: 'top' | 'bottom'; align?: 'center' | 'end' }> = ({
@@ -149,6 +160,9 @@ export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
   onOpenSettings,
   onRefresh,
   isRefreshing,
+  search = '',
+  onSearch,
+  onNewStack,
 }) => {
   const port = container?.ports?.[0]?.publicPort || 3334;
   const socketOn = !!systemStatus?.dockerConnected;
@@ -210,10 +224,11 @@ export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
             </div>
           </div>
 
-          {/* Toolbar: records, then system */}
+          {/* Toolbar (records, then system), and under it search and New Stack */}
+          <div className="w-full sm:w-auto sm:self-start lg:self-auto flex-shrink-0 flex flex-col gap-2.5">
           <nav
             aria-label="Manifexus"
-            className="w-full sm:w-auto sm:self-start lg:self-auto flex-shrink-0 flex items-center justify-between sm:justify-start gap-0.5 p-1 rounded-full"
+            className="flex items-center justify-between sm:justify-start gap-0.5 p-1 rounded-full"
             style={{
               background: 'rgba(118,118,128,0.14)',
               boxShadow: 'inset 0 0 0 0.5px rgba(255,255,255,0.1), 0 1px 2px rgba(0,0,0,0.3)',
@@ -289,6 +304,45 @@ export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
               align="end"
             />
           </nav>
+          {(onSearch || onNewStack) && (
+            <div className="flex items-center gap-2">
+              {onSearch && (
+                <label
+                  className="flex-1 min-w-0 flex items-center gap-2 h-9 pl-3.5 pr-2 rounded-full transition-shadow focus-within:ring-2 focus-within:ring-[#0A84FF]"
+                  style={{ background: 'rgba(118,118,128,0.14)', boxShadow: 'inset 0 0 0 0.5px rgba(255,255,255,0.1)', color: ios.secondary }}
+                >
+                  <SearchGlyph />
+                  <input
+                    type="search"
+                    value={search}
+                    onChange={(e) => onSearch(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Escape' && onSearch('')}
+                    placeholder="Search apps"
+                    aria-label="Search apps"
+                    className="flex-1 min-w-0 bg-transparent outline-none text-[14px] text-white placeholder:text-[rgba(235,235,245,0.4)] [&::-webkit-search-cancel-button]:hidden"
+                  />
+                  {search && (
+                    <button type="button" onClick={() => onSearch('')} aria-label="Clear search" className="w-5 h-5 rounded-full flex items-center justify-center text-[11px] text-black" style={{ background: 'rgba(235,235,245,0.45)' }}>
+                      ✕
+                    </button>
+                  )}
+                </label>
+              )}
+              {onNewStack && (
+                <button
+                  type="button"
+                  onClick={onNewStack}
+                  className="flex-shrink-0 inline-flex items-center gap-1.5 h-9 pl-3 pr-4 rounded-full text-[14px] font-semibold text-white bg-[#0A84FF] shadow-[0_4px_14px_-4px_rgba(10,132,255,0.6)] transition-all hover:brightness-110 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-black focus-visible:ring-[#0A84FF]"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.8" strokeLinecap="round" aria-hidden>
+                    <path d="M12 5v14M5 12h14" />
+                  </svg>
+                  New Stack
+                </button>
+              )}
+            </div>
+          )}
+          </div>
         </div>
 
         {/* Status */}
