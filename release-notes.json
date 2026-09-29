@@ -4,11 +4,13 @@
     {
       "version": "1.9",
       "date": "2026-09-29",
-      "headline": "Stacks fill every gap: bigger stacks take a neat shape and smaller ones fit beside them.",
+      "headline": "A new look: stacks in liquid glass on a deep midnight blue, and stacks that fill every gap.",
       "new": [],
       "improved": [
         "A stack with more apps than fit across takes the shape with no empty spots (four apps become a 2 × 2 block, three apps on a narrow window a single column), and the smaller stacks fill the space beside it. Every app card stays the same size.",
-        "Stacks are made of liquid glass: lighter, see-through panels with a bright edge that pick up a soft glow behind the dashboard. App cards are a touch brighter to match."
+        "Stacks are made of liquid glass: lighter, see-through panels with a bright edge that pick up a soft glow behind the dashboard. App cards are a touch brighter to match.",
+        "A deep midnight blue behind everything, so the glass has colour to catch.",
+        "An open header: the name, toolbar and search sit right on the page, lined up with your stacks. The toolbar, search and New Stack are glass capsules, with New Stack tinted blue as the main action."
       ],
       "fixed": []
     },

@@ -100,3 +100,9 @@
   animation-play-state: paused !important;
   transition: none !important;
 }
+
+/* Midnight, behind everything (also when the page is pulled past its edges) */
+html,
+body {
+  background: #0a0f1d;
+}

@@ -52,6 +52,10 @@ import { CreateStackModal } from './components/CreateStackModal';
 import { WebTerminalModal } from './components/WebTerminalModal';
 import { AutomationPrivileges } from './types';
 
+
+/** Midnight: the deep blue the glass sits on */
+const MIDNIGHT = 'linear-gradient(160deg, #101a33 0%, #0b1226 45%, #0a0f1d 100%)';
+
 export default function App() {
   const [containers, setContainers] = useState<DeepContainerMetadata[]>([]);
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
@@ -683,7 +687,7 @@ export default function App() {
       : { onClose: close };
 
   return (
-    <div className="relative isolate min-h-screen bg-[#09090b] text-slate-100 flex flex-col font-sans selection:bg-[#0A84FF]/40">
+    <div style={{ background: MIDNIGHT }} className="relative isolate min-h-screen text-slate-100 flex flex-col font-sans selection:bg-[#0A84FF]/40">
       {/* A soft glow behind everything, for the glass to catch */}
       <div aria-hidden className="fixed inset-0 -z-10 pointer-events-none overflow-hidden">
         <div className="absolute -top-[10%] -left-[10%] w-[60vw] h-[60vw] rounded-full blur-3xl" style={{ background: 'radial-gradient(circle, rgba(10,132,255,0.16), transparent 62%)' }} />

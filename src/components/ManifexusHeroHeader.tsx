@@ -119,22 +119,11 @@ export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
 
   return (
     <section
-      className="relative w-full mb-6 rounded-[22px]"
-      style={{
-        fontFamily: ios.font,
-        background: 'linear-gradient(180deg, rgba(38,38,42,0.92) 0%, rgba(24,24,27,0.94) 100%)',
-        boxShadow:
-          'inset 0 1px 0 rgba(255,255,255,0.07), 0 0 0 1px rgba(255,255,255,0.07), 0 30px 60px -30px rgba(0,0,0,0.9), 0 12px 24px -12px rgba(0,0,0,0.6)',
-      }}
+      // Open: no panel. The name, toolbar and search sit right on the page; the stacks are the glass
+      className="relative w-full mb-6"
+      style={{ fontFamily: ios.font }}
     >
-      {/* Ambient light */}
-      <div className="absolute inset-0 overflow-hidden rounded-[22px] pointer-events-none" aria-hidden="true">
-        <div className="absolute -top-24 -left-16 w-80 h-80 rounded-full blur-3xl" style={{ background: 'radial-gradient(circle, rgba(10,132,255,0.22), transparent 65%)' }} />
-        <div className="absolute -top-32 left-1/3 w-[28rem] h-72 rounded-full blur-3xl" style={{ background: 'radial-gradient(circle, rgba(94,92,230,0.12), transparent 70%)' }} />
-        <div className="absolute inset-x-0 top-0 h-px" style={{ background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.18), transparent)' }} />
-      </div>
-
-      <div className="relative px-5 sm:px-7 pt-6 pb-5">
+      <div className="relative px-1 sm:px-2 pt-4 sm:pt-6 pb-2">
         <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-5">
           {/* Identity */}
           <div className="flex items-start sm:items-center gap-4 sm:gap-5 min-w-0">
@@ -151,7 +140,7 @@ export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
               {/* The light: Manifexus's connection to Docker */}
               <span
                 className={`absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full ${socketOn ? '' : 'motion-safe:animate-pulse'}`}
-                style={{ background: socketOn ? ios.green : ios.red, boxShadow: '0 0 0 3px #1f1f23' }}
+                style={{ background: socketOn ? ios.green : ios.red, boxShadow: '0 0 0 3px #0e1629' }}
                 aria-hidden="true"
               />
               {/* What the light means, and where the dashboard lives */}
@@ -226,9 +215,9 @@ export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
             aria-label="Manifexus"
             className="flex items-center justify-between sm:justify-start gap-0.5 p-1 rounded-full"
             style={{
-              background: 'rgba(118,118,128,0.14)',
-              boxShadow: 'inset 0 0 0 0.5px rgba(255,255,255,0.1), 0 1px 2px rgba(0,0,0,0.3)',
-              backdropFilter: 'blur(20px)',
+              background: 'rgba(255,255,255,0.075)',
+              boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.16), inset 0 0 0 1px rgba(255,255,255,0.07)',
+              backdropFilter: 'blur(24px) saturate(170%)',
             }}
           >
             {onOpenAssistant && (
@@ -305,7 +294,7 @@ export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
               {onSearch && (
                 <label
                   className="flex-1 min-w-0 flex items-center gap-2 h-9 pl-3.5 pr-2 rounded-full transition-shadow focus-within:ring-2 focus-within:ring-[#0A84FF]"
-                  style={{ background: 'rgba(118,118,128,0.14)', boxShadow: 'inset 0 0 0 0.5px rgba(255,255,255,0.1)', color: ios.secondary }}
+                  style={{ background: 'rgba(255,255,255,0.075)', boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.16), inset 0 0 0 1px rgba(255,255,255,0.07)', backdropFilter: 'blur(24px) saturate(170%)', color: ios.secondary }}
                 >
                   <SearchGlyph />
                   <input
@@ -328,7 +317,14 @@ export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
                 <button
                   type="button"
                   onClick={onNewStack}
-                  className="flex-shrink-0 inline-flex items-center gap-1.5 h-9 pl-3 pr-4 rounded-full text-[14px] font-semibold text-white bg-[#0A84FF] shadow-[0_4px_14px_-4px_rgba(10,132,255,0.6)] transition-all hover:brightness-110 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-black focus-visible:ring-[#0A84FF]"
+                  className="flex-shrink-0 inline-flex items-center gap-1.5 h-9 pl-3 pr-4 rounded-full text-[14px] font-semibold transition-all hover:brightness-125 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0A84FF]"
+                  // Blue-tinted glass: the main action, in the same material as everything around it
+                  style={{
+                    background: 'rgba(10,132,255,0.22)',
+                    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.18), inset 0 0 0 1px rgba(10,132,255,0.35)',
+                    backdropFilter: 'blur(24px) saturate(170%)',
+                    color: '#64B5FF',
+                  }}
                 >
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.8" strokeLinecap="round" aria-hidden>
                     <path d="M12 5v14M5 12h14" />
