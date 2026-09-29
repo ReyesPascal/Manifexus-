@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { DeepContainerMetadata } from '../types';
 import { AppIcon } from './AppCard';
+import { helperName } from '../appHelpers';
 import { FolderIcon, Health, displayFont } from './Shelf';
 import { copyText } from './ActivitySheet';
 import { Button, Group, Row, SectionFooter, SectionHeader, Sheet, ios } from './ui/ios';
@@ -38,6 +39,7 @@ const CopyRow: React.FC<{ title: string; value: string }> = ({ title, value }) =
 export const StackDetailsSheet: React.FC<{
   project: string | null;
   apps: DeepContainerMetadata[];
+  helpersOf?: Map<string, DeepContainerMetadata[]>;
   workingDir?: string;
   composeFile?: string;
   onClose: () => void;
@@ -46,7 +48,7 @@ export const StackDetailsSheet: React.FC<{
   onEditCompose?: () => void;
   onOpenRestore: () => void;
   onDelete?: () => void;
-}> = ({ project, apps, workingDir, composeFile, onClose, onOpenApp, onAddApp, onEditCompose, onOpenRestore, onDelete }) => {
+}> = ({ project, apps, helpersOf, workingDir, composeFile, onClose, onOpenApp, onAddApp, onEditCompose, onOpenRestore, onDelete }) => {
   if (!project) return null;
   return (
     <Sheet open title="Stack Details" onClose={onClose} zIndex={55}>
@@ -57,7 +59,7 @@ export const StackDetailsSheet: React.FC<{
             {project}
           </h3>
           <div className="mt-1 text-[14px]" style={{ color: ios.secondary }}>
-            <Health apps={apps} />
+            <Health apps={apps} alsoCheck={apps.flatMap((a) => helpersOf?.get(a.id) || [])} />
           </div>
           <div className="mt-4 flex flex-wrap justify-center gap-2">
             <Button onClick={onAddApp} variant="tinted" className="!h-[36px] !px-4 !text-[14px]">
@@ -85,6 +87,7 @@ export const StackDetailsSheet: React.FC<{
                   <span className="inline-flex items-center gap-1.5">
                     <span className="w-[7px] h-[7px] rounded-full" style={{ background: c.state === 'running' ? ios.green : c.state === 'restarting' ? ios.red : '#8E8E93' }} />
                     {STATE[c.state] || c.state}
+                    {(helpersOf?.get(c.id) || []).length > 0 && ` · with ${helpersOf!.get(c.id)!.map(helperName).join(', ')}`}
                   </span>
                 }
                 chevron

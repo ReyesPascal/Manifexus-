@@ -89,11 +89,13 @@ export const FolderIcon: React.FC<{ apps: DeepContainerMetadata[]; tint?: string
 };
 
 /** "3 apps · ● All running" */
-export const Health: React.FC<{ apps: DeepContainerMetadata[]; empty?: string }> = ({ apps, empty = 'Empty' }) => {
+export const Health: React.FC<{ apps: DeepContainerMetadata[]; empty?: string; alsoCheck?: DeepContainerMetadata[] }> = ({ apps, empty = 'Empty', alsoCheck = [] }) => {
   if (!apps.length) return <span style={{ color: ios.tertiary }}>{empty}</span>;
-  const running = apps.filter((a) => a.state === 'running').length;
-  const restarting = apps.filter((a) => a.state === 'restarting' || a.state === 'dead').length;
-  const stopped = apps.length - running - restarting;
+  // The apps' own databases and caches count too: a stopped database means the app isn't working
+  const all = [...apps, ...alsoCheck];
+  const running = all.filter((a) => a.state === 'running').length;
+  const restarting = all.filter((a) => a.state === 'restarting' || a.state === 'dead').length;
+  const stopped = all.length - running - restarting;
   const n = `${apps.length} ${apps.length === 1 ? 'app' : 'apps'}`;
   const dot = (color: string) => <span className="w-[7px] h-[7px] rounded-full inline-block flex-shrink-0" style={{ background: color }} aria-hidden />;
   return (

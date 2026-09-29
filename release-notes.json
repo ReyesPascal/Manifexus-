@@ -8,6 +8,7 @@
       "new": [
         "A fresh, calmer dashboard. Every stack is one clean panel with its apps inside, showing at a glance whether everything is running. Tap a stack's name to fold it away.",
         "Stack actions. Each stack's ⋯ menu can Start, Restart or Stop all its apps, edit its compose file, or open the new Stack Details screen.",
+        "Apps and their databases together. A database or cache that belongs to an app (like Nextcloud's MariaDB) no longer gets its own card. The app's card says \"with db\", warns if it stops, and starting the app starts it too. Its details are inside the app's Details.",
         "Cleaner app cards. Each card shows the app's icon, name and whether it's running, with Open, Restart and Stop right there. Moving and groups are in the ⋯ menu, and tapping a card opens its details.",
         "Open goes straight to the app's web page. Manifexus checks each port and picks the one that is really a web page (never a peer or database port). If there are several, the arrow next to Open lists them and lets you pick the default.",
         "Real icons and names. Manifexus finds each app's icon (from the big icon sets, the app's own web page, or its GitHub project) and uses its real name, like Usenet Ultimate instead of usenet-ultimate.",

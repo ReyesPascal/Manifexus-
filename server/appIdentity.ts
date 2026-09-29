@@ -632,5 +632,7 @@ export function friendlyName(c: DeepContainerMetadata, title?: string): string {
     const nt = norm(t);
     if (nt.length >= 3 && [slug, service, c.cleanName].some((x) => x && (norm(x).includes(nt) || nt.includes(norm(x))))) return t;
   }
+  // "app", "web" or "server" says nothing: use the image's name then ("nextcloud")
+  if (/^(app|web|server|main|frontend|backend|ui|application)$/i.test(service) && slug) return slug;
   return service || c.cleanName;
 }

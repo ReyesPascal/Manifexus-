@@ -27,6 +27,7 @@ import { PortsSheet } from './components/PortsSheet';
 import { SoftwareUpdateSheet, SoftwareUpdateState } from './components/SoftwareUpdateSheet';
 import { ActivitySheet } from './components/ActivitySheet';
 import { AppCard } from './components/AppCard';
+import { helperParents, helpersByApp } from './appHelpers';
 import { AppDetailsSheet } from './components/AppDetailsSheet';
 import { AssistantSheet } from './components/AssistantSheet';
 import { FixSheet, FixRequest } from './components/FixSheet';
@@ -423,9 +424,13 @@ export default function App() {
     return containers.find(isManifexus);
   }, [containers, isManifexus]);
 
+  // Databases and caches that belong to an app are shown inside that app, not as cards of their own
+  const helperOf = useMemo(() => helperParents(containers.filter((c) => !isManifexus(c) && !c.isHidden)), [containers, isManifexus]);
+  const helpersOf = useMemo(() => helpersByApp(containers, helperOf), [containers, helperOf]);
+
   // Filtered containers based on search and status
   const filteredContainers = useMemo(() => {
-    return containers.filter((c) => {
+    const matched = containers.filter((c) => {
       // Directive 1: Never show Manifexus in standard cards grid - rendered as Hero element
       if (isManifexus(c)) return false;
 
@@ -454,11 +459,23 @@ export default function App() {
 
       return !c.isHidden;
     });
-  }, [containers, statusFilter, searchQuery, config?.groups]);
+    // A helper that matched shows its app instead (searching "postgres" finds the app using it)
+    const ids = new Set<string>();
+    const out: DeepContainerMetadata[] = [];
+    for (const c of matched) {
+      const parentId = helperOf.get(c.id);
+      const show = parentId ? containers.find((x) => x.id === parentId) : c;
+      if (!show || ids.has(show.id)) continue;
+      if (parentId && statusFilter !== 'all') continue;
+      ids.add(show.id);
+      out.push(show);
+    }
+    return out;
+  }, [containers, statusFilter, searchQuery, config?.groups, helperOf]);
 
   // Summary numbers, computed from exactly what the dashboard shows as app cards
   // (not Manifexus itself, not apps hidden in Settings)
-  const visibleApps = useMemo(() => containers.filter((c) => !isManifexus(c) && !c.isHidden), [containers, isManifexus]);
+  const visibleApps = useMemo(() => containers.filter((c) => !isManifexus(c) && !c.isHidden && !helperOf.has(c.id)), [containers, isManifexus, helperOf]);
   const stats = useMemo(() => {
     const running = visibleApps.filter((c) => c.state === 'running').length;
     const stackNames = new Set<string>();
@@ -562,6 +579,7 @@ export default function App() {
       key={c.id}
       inStack={inStack}
       container={c}
+      helpers={helpersOf.get(c.id)}
       hostAddress={hostAddress}
       groups={config?.groups || []}
       onInspect={setInspectContainer}
@@ -794,7 +812,7 @@ export default function App() {
                     id={`stack:${projectName}`}
                     title={projectName}
                     icon={<FolderIcon apps={apps} />}
-                    status={<Health apps={apps} />}
+                    status={<Health apps={apps} alsoCheck={apps.flatMap((a) => helpersOf.get(a.id) || [])} />}
                     forceOpen={apps.some((c) => c.state === 'restarting' || c.state === 'dead')}
                     action={own ? undefined : { label: 'Add App', onClick: () => openMoveForStack(projectName), title: `Move apps into ${projectName}` }}
                     menu={[
@@ -892,6 +910,7 @@ export default function App() {
           <StackDetailsSheet
             project={d ? stackDetails : null}
             apps={d?.containers || []}
+            helpersOf={helpersOf}
             workingDir={d?.workingDir}
             composeFile={composeFile}
             onClose={() => setStackDetails(null)}
@@ -939,6 +958,9 @@ export default function App() {
       <AppDetailsSheet
         covered={Boolean(overDetails)}
         container={inspectContainer}
+        helpers={inspectContainer ? helpersOf.get(inspectContainer.id) : undefined}
+        partOf={inspectContainer && helperOf.get(inspectContainer.id) ? containers.find((x) => x.id === helperOf.get(inspectContainer.id)) : undefined}
+        onOpenApp={setInspectContainer}
         system={Boolean(inspectContainer && manifexusHeroContainer && inspectContainer.id === manifexusHeroContainer.id)}
         groups={config?.groups || []}
         hostAddress={hostAddress}

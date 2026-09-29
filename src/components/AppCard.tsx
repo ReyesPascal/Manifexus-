@@ -1,11 +1,14 @@
 import React, { useState } from 'react';
 import { DeepContainerMetadata, UserGroup } from '../types';
 import { MenuButton, MenuItem } from './ui/ios';
+import { helperName } from '../appHelpers';
 
 interface AppCardProps {
   container: DeepContainerMetadata;
   /** Shown inside its stack's section, so the stack name isn't repeated */
   inStack?: boolean;
+  /** Its own databases and caches, shown as part of it */
+  helpers?: DeepContainerMetadata[];
   hostAddress: string;
   groups: UserGroup[];
   onInspect: (container: DeepContainerMetadata) => void;
@@ -95,7 +98,7 @@ const MoreGlyph = () => (
  * action (Open its web page, or Start it) with Restart and Stop beside it. Moving and groups are in the
  * ⋯ menu; tap the card for Details.
  */
-export const AppCard: React.FC<AppCardProps> = ({ container, inStack, hostAddress, groups, onInspect, onAssignGroup, onAction, onSetPrimaryPort, onMoveApp }) => {
+export const AppCard: React.FC<AppCardProps> = ({ container, inStack, helpers = [], hostAddress, groups, onInspect, onAssignGroup, onAction, onSetPrimaryPort, onMoveApp }) => {
   const [acting, setActing] = useState<'start' | 'stop' | 'restart'>();
   const name = container.customName || container.friendlyName || container.cleanName;
   const running = container.state === 'running';
@@ -106,9 +109,14 @@ export const AppCard: React.FC<AppCardProps> = ({ container, inStack, hostAddres
   const others = container.otherWebPorts || [];
   const group = groups.find((g) => g.id === container.customGroup);
 
+  // A helper that isn't running means the app isn't really working
+  const downHelpers = helpers.filter((h) => h.state !== 'running');
+
   const act = async (a: 'start' | 'stop' | 'restart') => {
     setActing(a);
     try {
+      // Starting the app starts its database and cache first
+      if (a === 'start' || a === 'restart') await Promise.all(downHelpers.map((h) => onAction(h.id, 'start')));
       await onAction(container.id, a);
     } finally {
       setActing(undefined);
@@ -170,8 +178,25 @@ export const AppCard: React.FC<AppCardProps> = ({ container, inStack, hostAddres
             {name}
           </h3>
           <div className="mt-0.5 flex items-center gap-1.5 text-[13px] leading-[18px] min-w-0" style={{ color: 'rgba(235,235,245,0.6)' }}>
-            <span className="w-[7px] h-[7px] rounded-full flex-shrink-0" style={{ background: busyLabel ? '#0A84FF' : st.color }} aria-hidden />
+            <span className="w-[7px] h-[7px] rounded-full flex-shrink-0" style={{ background: busyLabel ? '#0A84FF' : running && downHelpers.length ? '#FF9F0A' : st.color }} aria-hidden />
             <span className="flex-shrink-0">{busyLabel || st.label}</span>
+            {running && !busyLabel && downHelpers.length > 0 ? (
+              <>
+                <span aria-hidden>·</span>
+                <span className="truncate" style={{ color: '#FF9F0A' }} title={`${downHelpers.map(helperName).join(', ')} isn’t running`}>
+                  {downHelpers.map(helperName).join(', ')} stopped
+                </span>
+              </>
+            ) : (
+              helpers.length > 0 && (
+                <>
+                  <span aria-hidden>·</span>
+                  <span className="truncate" title={`Includes ${helpers.map(helperName).join(', ')}`}>
+                    with {helpers.map(helperName).join(', ')}
+                  </span>
+                </>
+              )
+            )}
             {container.compose?.project && !inStack && (
               <>
                 <span aria-hidden>·</span>

@@ -19,6 +19,7 @@ import { DeepContainerMetadata, UserGroup, AppOverride, ContainerMount } from '.
 import { ManifexusAppIcon } from './SoftwareUpdateSheet';
 import { copyText } from './ActivitySheet';
 import { AppIcon } from './AppCard';
+import { helperName } from '../appHelpers';
 import type { FixInfo, FixRequest } from './FixSheet';
 
 /**
@@ -263,6 +264,11 @@ export const AppDetailsSheet: React.FC<{
   system?: boolean;
   groups: UserGroup[];
   hostAddress: string;
+  /** The app's own databases and caches */
+  helpers?: DeepContainerMetadata[];
+  /** The app this one belongs to (for a database or cache) */
+  partOf?: DeepContainerMetadata;
+  onOpenApp?: (c: DeepContainerMetadata) => void;
   onClose: () => void;
   onSaveOverride: (containerId: string, override: AppOverride) => Promise<void>;
   onAction?: (containerId: string, action: 'start' | 'stop' | 'restart') => Promise<void> | void;
@@ -276,7 +282,7 @@ export const AppDetailsSheet: React.FC<{
   onFixWithAI?: (r: FixRequest) => void;
   /** Another screen is open on top of this one */
   covered?: boolean;
-}> = ({ container, system, groups, hostAddress, onClose, onSaveOverride, onAction, onOpenUpdates, onOpenRestore, onOpenSettings, onOpenActivity, onFixWithAI, covered }) => {
+}> = ({ container, system, groups, hostAddress, helpers = [], partOf, onOpenApp, onClose, onSaveOverride, onAction, onOpenUpdates, onOpenRestore, onOpenSettings, onOpenActivity, onFixWithAI, covered }) => {
   const open = Boolean(container);
   const [stack, setStack] = useState<View[]>(['overview']);
   const view = stack[stack.length - 1];
@@ -599,6 +605,34 @@ export const AppDetailsSheet: React.FC<{
               ))}
             </Group>
             <SectionFooter>From the last 7 days, recorded by Activity.</SectionFooter>
+          </section>
+        )}
+
+        {!system && (helpers.length > 0 || partOf) && (
+          <section>
+            <SectionHeader>{partOf ? 'Part Of' : 'Also Part of This App'}</SectionHeader>
+            <Group className="ios-inset-icon">
+              {(partOf ? [partOf] : helpers).map((h) => (
+                <Row
+                  key={h.id}
+                  onClick={onOpenApp ? () => onOpenApp(h) : undefined}
+                  leading={<AppIcon container={h} size={29} />}
+                  title={partOf ? h.customName || h.friendlyName || h.cleanName : helperName(h)}
+                  subtitle={
+                    <span className="inline-flex items-center gap-1.5">
+                      <span className="w-[7px] h-[7px] rounded-full" style={{ background: h.state === 'running' ? ios.green : h.state === 'restarting' ? ios.red : '#8E8E93' }} />
+                      {h.state === 'running' ? 'Running' : h.state === 'restarting' ? 'Keeps restarting' : 'Stopped'} · {h.image.split('/').pop()?.split('@')[0]}
+                    </span>
+                  }
+                  chevron={Boolean(onOpenApp)}
+                />
+              ))}
+            </Group>
+            <SectionFooter>
+              {partOf
+                ? `This runs behind ${partOf.customName || partOf.friendlyName || partOf.cleanName}, so the dashboard shows it inside that app instead of as its own card.`
+                : 'The database and other parts this app needs. They’re shown here instead of as their own cards; starting the app starts them too.'}
+            </SectionFooter>
           </section>
         )}
 
