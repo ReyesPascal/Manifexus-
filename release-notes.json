@@ -27,6 +27,8 @@
         "Activity has a new Fixes filter."
       ],
       "fixed": [
+        "Removing an AI model no longer shows \"Unexpected end of JSON input\" when it actually worked, and tapping Remove on a model that's already gone isn't an error.",
+        "Questions to Ask Manifexus no longer stay \"In progress\" in Activity forever. Each one is listed as \"Ask Manifexus: …\" and ends as done, failed (with the reason) or stopped. There's a new AI Questions filter.",
         "On phones, the dashboard no longer shifts sideways by a few pixels.",
         "If an AI model can't download, you get a clear reason and a Try Again button.",
         "Updating Manifexus keeps your settings, history, backups and AI models, even if no data folder was set up. Diagnostics now tells you if one is missing."
