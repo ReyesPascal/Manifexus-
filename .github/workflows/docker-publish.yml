@@ -23,6 +23,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0   # full history, so older versions can be tagged at their commit
 
       # The version comes from release-notes.json (the newest entry), so every release gets
       # numbered image tags (1.1.0, 1.1) and a Git tag (v1.1.0) without anyone tagging by hand.
@@ -89,6 +91,7 @@ jobs:
             case "$v" in *.*.*) ;; *.*) v="$v.0" ;; *) v="$v.0.0" ;; esac
             if [ "$v" = "$CURRENT" ]; then commit="$GITHUB_SHA"; fi
             [ -n "$commit" ] || continue
+            if ! git cat-file -e "$commit^{commit}" 2>/dev/null; then echo "::warning::Commit $commit for $v not found"; continue; fi
             if ! git rev-parse -q --verify "refs/tags/v$v" >/dev/null; then
               git tag -a "v$v" "$commit" -m "Manifexus $v" && git push origin "v$v" && echo "Tagged v$v"
             fi
