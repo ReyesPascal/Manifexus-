@@ -46,6 +46,7 @@ import {
   record,
   currentActivityId,
   setActivityTitle,
+  finishActivity,
   pipelineRecorder,
   listActivities,
   getActivity,
@@ -907,7 +908,13 @@ async function startServer() {
     if (res.flushHeaders) res.flushHeaders();
     const ac = new AbortController();
     res.on('close', () => ac.abort());
-    const send = (data: unknown) => {
+    // The Activity for this question ends with the answer (streams aren't closed by the request tracker)
+    const activityId = currentActivityId();
+    let outcome: { status: 'succeeded' | 'failed'; error?: string } | undefined;
+    const send = (data: { type?: string; message?: string; summary?: string }) => {
+      if (data.type === 'done') outcome = { status: 'succeeded' };
+      else if (data.type === 'error') outcome = { status: 'failed', error: data.message };
+      if (data.type === 'done' && data.summary) record('info', 'system', `Answered in ${data.summary}`);
       if (!res.writableEnded) res.write(`data: ${JSON.stringify(data)}\n\n`);
     };
     try {
@@ -915,6 +922,9 @@ async function startServer() {
     } catch (e) {
       if (!ac.signal.aborted) send({ type: 'error', message: (e as Error).message });
     } finally {
+      if (outcome?.status === 'succeeded') finishActivity(activityId, 'succeeded');
+      else if (outcome?.status === 'failed') finishActivity(activityId, 'failed', { message: outcome.error || 'The AI couldn’t answer.' });
+      else finishActivity(activityId, 'interrupted', { message: ac.signal.aborted ? 'Stopped before it finished (Stop was tapped or Ask was closed).' : 'Ended without an answer.' });
       res.end();
     }
   });

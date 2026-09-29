@@ -376,15 +376,29 @@ export async function ollama<T>(p: string, body?: unknown, method = body ? 'POST
     headers: body ? { 'Content-Type': 'application/json' } : undefined,
     body: body ? JSON.stringify(body) : undefined,
   });
-  if (!r.ok) throw new Error((await r.text().catch(() => '')) || `The AI engine answered ${r.status}.`);
-  return (await r.json()) as T;
+  const text = await r.text().catch(() => '');
+  if (!r.ok) throw new Error(engineError(text) || `The AI engine answered ${r.status}.`);
+  // Some answers have no body at all (removing a model): that's success, not a broken reply
+  if (!text.trim()) return {} as T;
+  return JSON.parse(text) as T;
+}
+
+/** The engine's own message from an error body like {"error":"model 'x' not found"} */
+function engineError(text: string): string {
+  try {
+    const j = JSON.parse(text);
+    if (typeof j?.error === 'string') return j.error;
+  } catch {
+    // not JSON
+  }
+  return text.trim();
 }
 
 /** Streams newline-delimited JSON from the engine */
 export async function* ollamaStream<T>(p: string, body: unknown, signal?: AbortSignal): AsyncGenerator<T> {
   await ensureEngine();
   const r = await fetch(`${BASE}${p}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
-  if (!r.ok || !r.body) throw new Error((await r.text().catch(() => '')) || `The AI engine answered ${r.status}.`);
+  if (!r.ok || !r.body) throw new Error(engineError(await r.text().catch(() => '')) || `The AI engine answered ${r.status}.`);
   const reader = r.body.getReader();
   const dec = new TextDecoder();
   let buf = '';
@@ -534,7 +548,12 @@ export function cancelDownload(model: string) {
 }
 
 export async function removeModel(model: string): Promise<void> {
-  await ollama('/api/delete', { model }, 'DELETE');
+  try {
+    await ollama('/api/delete', { model }, 'DELETE');
+  } catch (e) {
+    // Already gone (e.g. a second tap on Remove): the goal is met, so just tidy up below
+    if (!/not found/i.test((e as Error).message || '')) throw e;
+  }
   downloads.delete(model);
   const s = getAiSettings();
   const patch: Partial<AiSettings> = {};
