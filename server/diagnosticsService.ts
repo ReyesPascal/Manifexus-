@@ -3,7 +3,9 @@
  * resource use and container logs. Each check says what's fine, what isn't, and what to do.
  */
 import fs from 'fs';
+import path from 'path';
 import { getConfig } from './storageService';
+import { onServerSince } from './appIdentity';
 import { queryDockerEngine, fetchContainerLogs } from './dockerService';
 import { checkPrivilegeStatus } from './automationService';
 import { getSelfContainerId, formatBytes } from './dataBackupService';
@@ -129,7 +131,7 @@ export async function appDiagnostics(id: string) {
     const said = await lastWords(id);
     checks.push({ id: 'state', level: 'error', title: 'Keeps restarting', detail: `It stops and Docker starts it again. Last exit code ${st.ExitCode}: ${exitMeaning(st.ExitCode)}.${said ? ` Its last message: “${said}”` : ''}`, link: 'logs' });
   } else if (running) {
-    checks.push({ id: 'state', level: 'ok', title: 'Running', detail: `Up for ${duration(st.StartedAt)}.` });
+    checks.push({ id: 'state', level: 'ok', title: 'Running', detail: `Running for ${duration(st.StartedAt)} since it last started.` });
   } else if (st.Status === 'created') {
     checks.push({ id: 'state', level: 'warn', title: 'Never started', detail: 'The container exists but hasn’t been started.' });
   } else {
@@ -192,9 +194,24 @@ export async function appDiagnostics(id: string) {
     .slice(0, 8)
     .map((e) => ({ ts: e.ts, level: e.level, message: e.msg }));
 
+  // How long it has really been on this server (updates recreate the container and reset Docker's clock)
+  const volumeTimes: number[] = [];
+  for (const m of (inspect.Mounts || []) as { Type?: string; Name?: string }[]) {
+    if (m.Type !== 'volume' || !m.Name) continue;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const v = await queryDockerEngine<any>(`/volumes/${encodeURIComponent(m.Name)}`).catch(() => null);
+    if (v?.CreatedAt) volumeTimes.push(new Date(v.CreatedAt).getTime());
+  }
+  const labels = inspect.Config?.Labels || {};
+  const since = onServerSince(
+    { cleanName: name, image: String(inspect.Config?.Image || ''), compose: { service: labels['com.docker.compose.service'] } },
+    [new Date(inspect.Created).getTime(), ...volumeTimes, /manifexus/i.test(String(inspect.Config?.Image || '')) ? dataFolderBirth() : undefined]
+  );
+
   return {
     name,
     running,
+    onServerSince: new Date(since).toISOString(),
     startedAt: st.StartedAt,
     finishedAt: st.FinishedAt,
     exitCode: st.ExitCode,
@@ -457,4 +474,18 @@ export async function systemReport(): Promise<string> {
     L.push('```');
   }
   return L.join('\n');
+}
+
+/** When Manifexus's own data folder was made: when Manifexus was first set up on this server */
+function dataFolderBirth(): number | undefined {
+  try {
+    const dir = fs.existsSync('/data') ? '/data' : path.join(process.cwd(), 'data');
+    const times = ['config.json', '.'].map((f) => {
+      const st = fs.statSync(path.join(dir, f));
+      return Math.min(...[st.birthtimeMs, st.mtimeMs, st.ctimeMs].filter((t) => t > 0));
+    });
+    return Math.min(...times);
+  } catch {
+    return undefined;
+  }
 }

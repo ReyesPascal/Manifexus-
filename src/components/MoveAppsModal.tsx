@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AutomationPrivileges, DeepContainerMetadata, EmptyComposeStack, StackMergePlan } from '../types';
 import { ProgressView, useRun } from './ProgressTracker';
+import { AppIcon } from './AppCard';
 import {
   Alert,
   AppTile,
@@ -637,7 +638,7 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
                     leading={
                       <span className="flex items-center gap-3">
                         <SelectCircle on={on} />
-                        <AppTile name={appName(a)} iconUrl={a.iconUrl} />
+                        <AppIcon container={a} size={29} />
                       </span>
                     }
                     title={appName(a)}
@@ -676,7 +677,7 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
           {selectedApps.map((a) => (
             <Row
               key={a.id}
-              leading={<AppTile name={appName(a)} iconUrl={a.iconUrl} />}
+              leading={<AppIcon container={a} size={29} />}
               title={appName(a)}
               trailing={<span className="text-[15px]">{a.compose?.isCompose ? `from ${a.compose.project}` : 'standalone'}</span>}
             />

@@ -1,5 +1,6 @@
 import React, { useMemo } from 'react';
 import { DeepContainerMetadata } from '../types';
+import { AppIcon } from './AppCard';
 import { AppTile, Group, Row, SectionFooter, SectionHeader, Sheet, ios } from './ui/ios';
 
 interface PortsSheetProps {
@@ -130,7 +131,7 @@ export const PortsSheet: React.FC<PortsSheetProps> = ({ open, onClose, container
                 <Row
                   key={`${e.app.id}-${e.hostPort}`}
                   onClick={() => window.open(urlFor(e.hostPort, e.containerPort), '_blank', 'noopener')}
-                  leading={<AppTile name={appName(e.app)} iconUrl={e.app.iconUrl} />}
+                  leading={<AppIcon container={e.app} size={29} />}
                   title={appName(e.app)}
                   subtitle={describeWeb(e)}
                   trailing={
@@ -155,7 +156,7 @@ export const PortsSheet: React.FC<PortsSheetProps> = ({ open, onClose, container
               {other.map((e) => (
                 <Row
                   key={`${e.app.id}-${e.hostPort}`}
-                  leading={<AppTile name={appName(e.app)} iconUrl={e.app.iconUrl} />}
+                  leading={<AppIcon container={e.app} size={29} />}
                   title={appName(e.app)}
                   subtitle={describe(e)}
                   trailing={portText(e.hostPort)}
@@ -178,7 +179,7 @@ export const PortsSheet: React.FC<PortsSheetProps> = ({ open, onClose, container
               {reserved.map((e) => (
                 <Row
                   key={`${e.app.id}-${e.hostPort}`}
-                  leading={<AppTile name={appName(e.app)} iconUrl={e.app.iconUrl} />}
+                  leading={<AppIcon container={e.app} size={29} />}
                   title={appName(e.app)}
                   subtitle={describe(e)}
                   trailing={<span className="font-mono text-[15px] tabular-nums" style={{ color: ios.tertiary }}>{e.hostPort}</span>}
@@ -196,7 +197,7 @@ export const PortsSheet: React.FC<PortsSheetProps> = ({ open, onClose, container
               {internalOnly.map(({ app, ports }) => (
                 <Row
                   key={app.id}
-                  leading={<AppTile name={appName(app)} iconUrl={app.iconUrl} />}
+                  leading={<AppIcon container={app} size={29} />}
                   title={appName(app)}
                   trailing={<span className="font-mono text-[13px]">{ports.join(', ')}</span>}
                 />

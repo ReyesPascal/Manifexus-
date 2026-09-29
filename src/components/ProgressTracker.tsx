@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { usePrefs } from '../prefs';
 import { CommandItem, StepCommands, useLearn, useLearnSteps } from './Commands';
 import { BackButton, Button, Group, IconTile, LinkButton, Row, SectionFooter, Sheet, ios } from './ui/ios';
@@ -386,7 +387,8 @@ export const ProgressView: React.FC<{
           </Button>
         </div>
       )}
-      <AllStepsSheet open={allSteps} onClose={() => setAllSteps(false)} run={run} title={runningTitle} />
+      {/* On top of everything (not inside this screen, which would trap it) */}
+      {allSteps && createPortal(<AllStepsSheet open onClose={() => setAllSteps(false)} run={run} title={runningTitle} />, document.body)}
     </div>
   );
 };

@@ -71,6 +71,8 @@ interface IconInfo {
 interface State {
   /** An app's own icon address that a browser showed (when the server can't download it itself) */
   iconSeen?: Record<string, string>;
+  /** When each app was first on this server (ms), kept across updates and recreated containers */
+  firstSeen?: Record<string, number>;
   probes: Record<string, PortProbe>;
   projects: Record<string, ProjectInfo>;
   icons: Record<string, IconInfo>;
@@ -717,6 +719,7 @@ export function forgetIcon(c: DeepContainerMetadata) {
 
 /** Start all background lookups for these apps */
 export function refreshIdentity(containers: DeepContainerMetadata[]) {
+  noteApps(containers);
   refreshProbes(containers);
   refreshProjects(containers);
   refreshIcons(containers);
@@ -741,3 +744,35 @@ export function friendlyName(c: DeepContainerMetadata, title?: string): string {
 /** Databases, caches and similar parts that serve another app */
 export const isHelperImage = (image: string) =>
   /(^|\/)(mariadb|mysql|postgres(ql)?|postgis|pgvecto-rs|timescaledb|redis|valkey|keydb|dragonfly|mongo(db)?|memcached|elasticsearch|opensearch|clamav|rabbitmq|influxdb|cassandra|etcd|minio|couchdb|nats|mosquitto)([:@-]|$)/i.test((image || '').split('@')[0]);
+
+// ----------------------------------------------------------------------------
+// How long an app has been on this server
+// ----------------------------------------------------------------------------
+
+/** The same app across updates, moves and recreated containers: its service (or name) and image */
+function lifeKey(c: { cleanName: string; image: string; compose?: { service?: string } }): string {
+  const who = (c.compose?.service || c.cleanName.replace(/[-_]\d+$/, '')).toLowerCase();
+  return `${who}|${imageSlug(c.image)}`;
+}
+
+/**
+ * When the app was first on this server. Updating an app (or Manifexus) recreates its container and
+ * resets Docker's own clock; this remembers the earliest time ever seen, from the container's creation,
+ * its named volumes' creation, and Manifexus's own records.
+ */
+export function onServerSince(c: { cleanName: string; image: string; compose?: { service?: string } }, times: (number | undefined)[]): number {
+  const k = lifeKey(c);
+  const known = [state.firstSeen?.[k], ...times].filter((t): t is number => typeof t === 'number' && t > 946684800000 && t <= Date.now());
+  const earliest = known.length ? Math.min(...known) : Date.now();
+  if (!state.firstSeen) state.firstSeen = {};
+  if (state.firstSeen[k] !== earliest) {
+    state.firstSeen[k] = earliest;
+    save();
+  }
+  return earliest;
+}
+
+/** Remember every app's creation time as it's seen, so the record starts before its first update */
+export function noteApps(containers: DeepContainerMetadata[]) {
+  for (const c of containers) onServerSince(c, [c.created ? c.created * 1000 : undefined]);
+}

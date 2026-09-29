@@ -66,6 +66,8 @@ interface AppDiag {
   name: string;
   running: boolean;
   startedAt?: string;
+  /** When the app was first on this server (kept across updates) */
+  onServerSince?: string;
   finishedAt?: string;
   exitCode?: number;
   restartCount: number;
@@ -106,7 +108,9 @@ function uptime(iso?: string): string {
   const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
   if (s < 3600) return `${Math.max(1, Math.round(s / 60))} min`;
   if (s < 86400 * 2) return `${Math.round(s / 3600)} hours`;
-  return `${Math.round(s / 86400)} days`;
+  if (s < 86400 * 60) return `${Math.round(s / 86400)} days`;
+  if (s < 86400 * 365 * 2) return `${Math.round(s / (86400 * 30.4))} months`;
+  return `${Math.round(s / (86400 * 365))} years`;
 }
 
 /** "gamma-cache-1 stopped with …" → "Stopped with …" (the sheet already names the app) */
@@ -439,7 +443,7 @@ export const AppDetailsSheet: React.FC<{
     const unhealthy = diag?.checks.find((c) => c.id === 'health' && c.level === 'error');
     if (unhealthy) return { text: 'Running · Unhealthy', color: ios.orange, bg: 'rgba(255,159,10,0.15)' };
     if (state?.title === 'Keeps restarting') return { text: 'Keeps Restarting', color: ios.red, bg: 'rgba(255,69,58,0.15)' };
-    if (running) return { text: `Running${diag?.startedAt ? ` · ${uptime(diag.startedAt)}` : ''}`, color: ios.green, bg: 'rgba(48,209,88,0.15)' };
+    if (running) return { text: `Running${diag?.onServerSince || diag?.startedAt ? ` · ${uptime(diag.onServerSince || diag.startedAt)}` : ''}`, color: ios.green, bg: 'rgba(48,209,88,0.15)' };
     return {
       text: `Stopped${diag?.exitCode !== undefined ? ` · exit ${diag.exitCode}` : ''}`,
       color: diag && diag.exitCode !== 0 && diag.exitCode !== 143 ? ios.red : ios.secondary,
@@ -661,7 +665,13 @@ export const AppDetailsSheet: React.FC<{
             {!system && name !== container.cleanName && <CopyRow title="Container" value={container.cleanName} mono />}
             <CopyRow title="Image" value={container.image} mono />
             <CopyRow title="Container ID" value={container.id} display={container.id.slice(0, 12)} mono />
-            <Row title="Created" trailing={<span>{new Date(container.created * 1000).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}</span>} />
+            <Row
+              title="On This Server Since"
+              trailing={<span>{new Date(diag?.onServerSince || container.created * 1000).toLocaleDateString(undefined, { dateStyle: 'medium' })}</span>}
+            />
+            {diag?.startedAt && !diag.startedAt.startsWith('0001') && (
+              <Row title="Last Started" trailing={<span>{new Date(diag.startedAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}</span>} />
+            )}
             <Row title="Restarts Automatically" trailing={<span>{RESTART[container.restartPolicy || ''] || container.restartPolicy}</span>} />
             {container.command && <CopyRow title="Command" value={container.command} mono />}
             {system && sys?.environment?.docker?.version && (
