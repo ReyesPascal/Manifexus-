@@ -1118,6 +1118,8 @@ export async function deleteHostStack(params: {
 }): Promise<{
   success: boolean;
   message: string;
+  /** The folder couldn't be removed from the server */
+  folderLeft?: boolean;
   backupArchiveDir?: string;
   historyRecordId?: string;
   dataBackupBytes?: number;
@@ -1213,9 +1215,11 @@ export async function deleteHostStack(params: {
       await removeVolume(v.name);
     }
   }
+  let folderLeft = false;
   if (isDemo) {
     await deleteHostDirectory(resolvedTargetDir);
-  } else if (!(await removeHostDirectory(resolvedTargetDir))) {
+  } else if (!(await removeHostDirectory(resolvedTargetDir).catch(() => false))) {
+    folderLeft = true;
     globalLogService.log({
       eventType: 'STACK_OP',
       level: 'WARN',
@@ -1250,7 +1254,10 @@ export async function deleteHostStack(params: {
 
   return {
     success: true,
-    message: skipDataBackup
+    folderLeft,
+    message: folderLeft
+      ? `Stack '${sanitizedName}' was deleted and backed up, but its folder ${resolvedTargetDir} couldn’t be removed from the server. You can delete it from Server Cleanup, or by hand.`
+      : skipDataBackup
       ? `Stack '${sanitizedName}' was deleted. Its compose file was saved, but its data was not backed up.`
       : `Stack '${sanitizedName}' was deleted. Its compose file and ${formatBytes(dataBackupBytes)} of data were backed up. Bring it back anytime from Restore.`,
     backupArchiveDir: snapshotRes.backupArchiveDir,

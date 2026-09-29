@@ -98,6 +98,7 @@ import { describeFix, autoFixActions, FixContext } from './server/fixCatalog';
 import type { Check } from './server/diagnosticsService';
 import { learnActivity, recentCommands } from './server/commandLog';
 import { seedAiExample } from './server/aiExample';
+import { scanCleanup, runCleanup } from './server/cleanupService';
 import { refreshIdentity, webInfo, projectInfo, iconUrl as appIconUrl, iconSource, iconFile, forgetIcon, setHostCandidates, friendlyName, iconSeen } from './server/appIdentity';
 import {
   getSoftwareUpdateState,
@@ -348,6 +349,24 @@ async function startServer() {
     if (f.endsWith('.svg')) res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'");
     res.sendFile(f);
   });
+  // Server Cleanup: unused folders in the stacks locations, and deleting the chosen ones
+  app.get('/api/cleanup/scan', async (_req, res) => {
+    try {
+      res.json(await scanCleanup());
+    } catch (e) {
+      res.status(500).json({ error: (e as Error).message });
+    }
+  });
+  app.post('/api/cleanup/run', async (req, res) => {
+    const paths = Array.isArray(req.body?.paths) ? req.body.paths.filter((p: unknown) => typeof p === 'string') : [];
+    if (!paths.length) return res.status(400).json({ error: 'Choose at least one folder.' });
+    try {
+      res.json({ results: await runCleanup(paths) });
+    } catch (e) {
+      res.status(500).json({ error: (e as Error).message });
+    }
+  });
+
   // A browser showed an app's own icon (from its web page): save it for every screen
   app.post('/api/apps/:id/icon/seen', async (req, res) => {
     const { containers } = await getContainersList();

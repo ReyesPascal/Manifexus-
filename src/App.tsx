@@ -45,6 +45,7 @@ import type { MenuItem } from './components/ui/ios';
 import { ios } from './components/ui/ios';
 import { RestoreSheet } from './components/RestoreSheet';
 import { StackDetailsSheet } from './components/StackDetailsSheet';
+import { CleanupSheet } from './components/CleanupSheet';
 import { CreateStackModal } from './components/CreateStackModal';
 import { WebTerminalModal } from './components/WebTerminalModal';
 import { AutomationPrivileges } from './types';
@@ -494,6 +495,7 @@ export default function App() {
   }, [visibleApps, emptyStacks, containers]);
   const [isPortsOpen, setIsPortsOpen] = useState(false);
   const [stackDetails, setStackDetails] = useState<string | null>(null);
+  const [isCleanupOpen, setIsCleanupOpen] = useState(false);
 
   // Grouped containers by Custom User Groups
   const groupedByUserCategories = useMemo(() => {
@@ -664,6 +666,7 @@ export default function App() {
           }}
           activityAlert={unseenFailure}
           onOpenRestore={() => setIsRestoreOpen(true)}
+          onOpenCleanup={() => setIsCleanupOpen(true)}
           onOpenSettings={() => setIsSettingsOpen(true)}
           onRefresh={() => {
             fetchData(true);
@@ -903,6 +906,9 @@ export default function App() {
       <footer className="px-4 lg:px-6 pt-6 pb-8 text-center text-[12px]" style={{ color: 'rgba(235,235,245,0.35)', fontFamily: ios.font }}>
         Manifexus{softwareUpdate?.current.version ? ` ${softwareUpdate.current.version}` : ''} · {hostAddress}
       </footer>
+
+      {/* Unused folders on the server */}
+      <CleanupSheet open={isCleanupOpen} onClose={() => setIsCleanupOpen(false)} onChanged={() => fetchData(false)} />
 
       {/* One stack: its apps, where it lives, and actions */}
       {(() => {

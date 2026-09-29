@@ -8,6 +8,7 @@
       "new": [
         "A fresh, calmer dashboard. Every stack is one clean panel with its apps inside, showing at a glance whether everything is running. Tap a stack's name to fold it away.",
         "Stack actions. Each stack's ⋯ menu can Start, Restart or Stop all its apps, edit its compose file, or open the new Stack Details screen.",
+        "Server Cleanup. Tap Clean Up in the header to find folders no app uses anymore (empty folders, and stacks with no apps) and delete the ones you pick. Stacks are backed up first and can be restored.",
         "Apps and their databases together. A database or cache that belongs to an app (like Nextcloud's MariaDB) no longer gets its own card. The app's icon gets a small database badge, the card warns \"Database stopped\" if it stops, and starting the app starts it too. Its details are inside the app's Details.",
         "Cleaner app cards. Each card shows the app's icon, name and whether it's running, with Open, Restart and Stop right there. Moving and groups are in the ⋯ menu, and tapping a card opens its details.",
         "Open goes straight to the app's web page. Manifexus checks each port and picks the one that is really a web page (never a peer or database port). If there are several, the arrow next to Open lists them and lets you pick the default.",
@@ -47,6 +48,7 @@
         "Activity has new Fixes and Fix with AI filters."
       ],
       "fixed": [
+        "Deleting a stack removes its folder from the server, trying harder when something inside won't go, and tells you if the folder couldn't be removed instead of saying it's all gone.",
         "When a fix finishes, a Done button is always there to close it.",
         "No more garbled patches behind a screen while the AI starts up.",
         "Undo Fix no longer says it failed when it actually put the file back.",

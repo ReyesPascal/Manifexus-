@@ -1,5 +1,5 @@
 import React from 'react';
-import { Activity, History, Stethoscope, Settings, RefreshCw, Sparkles } from 'lucide-react';
+import { Activity, History, Stethoscope, Settings, RefreshCw, Sparkles, Eraser } from 'lucide-react';
 import { DeepContainerMetadata, SystemStatus } from '../types';
 import { ManifexusAppIcon, UpdateGlyph } from './SoftwareUpdateSheet';
 import { ios } from './ui/ios';
@@ -31,6 +31,8 @@ interface ManifexusHeroHeaderProps {
   activityAlert?: boolean;
   /** Opens Restore */
   onOpenRestore?: () => void;
+  /** Opens Server Cleanup */
+  onOpenCleanup?: () => void;
   /** Ask Manifexus (the built-in AI) */
   onOpenAssistant?: () => void;
   onOpenSettings: () => void;
@@ -142,6 +144,7 @@ export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
   onOpenActivity,
   activityAlert,
   onOpenRestore,
+  onOpenCleanup,
   onOpenAssistant,
   onOpenSettings,
   onRefresh,
@@ -243,6 +246,14 @@ export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
                 label="Restore"
                 tip="Go back to before a move or delete. Every change keeps a backup."
                 onClick={onOpenRestore}
+              />
+            )}
+            {onOpenCleanup && (
+              <ToolButton
+                icon={<Eraser className={iconCls} />}
+                label="Clean Up"
+                tip="Find folders on your server that no app uses anymore, and delete the ones you pick."
+                onClick={onOpenCleanup}
               />
             )}
             <Divider />

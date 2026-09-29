@@ -263,7 +263,14 @@ export async function removeHostDirectory(hostDir: string): Promise<boolean> {
   const code = await runHelper(`rm -rf /parent/${shellQuote(name)} && [ ! -e /parent/${shellQuote(name)} ]`, [
     `${parent}:/parent`,
   ], DEFAULT_HELPER_TIMEOUT_MS, [], { purpose: `Delete folder ${normalized}` });
-  return code === 0;
+  if (code === 0) return true;
+  // Something inside wouldn't go (a lock or a mount): try once more directly on the server
+  try {
+    const r = await runHostCommand(`rm -rf ${shellQuote(normalized)} && [ ! -e ${shellQuote(normalized)} ]`);
+    return r.code === 0;
+  } catch {
+    return false;
+  }
 }
 
 export class StackFolderExistsError extends Error {}

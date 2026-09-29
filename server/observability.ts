@@ -220,6 +220,7 @@ const ROUTES: [string, RegExp, Describer][] = [
   ['POST', /^\/api\/stacks\/plan-merge$/, (_r, b) => ({ type: 'plan', title: `Review move into ${b?.targetStackName || 'a stack'}` })],
   ['POST', /^\/api\/stacks\/execute-merge$/, (_r, b) => ({ type: 'move', title: `Move apps into ${b?.targetStackName || 'a stack'}` })],
   ['POST', /^\/api\/stacks\/create$/, (_r, b) => ({ type: 'stack', title: `Create stack ${b?.stackName || ''}`.trim() })],
+  ['POST', /^\/api\/cleanup\/run$/, (_r, b) => ({ type: 'delete', title: `Clean up ${Array.isArray(b?.paths) ? b.paths.length : ''} unused folder${Array.isArray(b?.paths) && b.paths.length === 1 ? '' : 's'}`.replace('  ', ' ') })],
   ['POST', /^\/api\/stacks\/delete$/, (_r, b) => ({ type: 'delete', title: `Delete stack ${b?.projectName || ''}`.trim() })],
   ['POST', /^\/api\/restore\/([^/]+)\/run$/, () => ({ type: 'undo', title: 'Restore' })],
   ['POST', /^\/api\/ai\/plans\/([^/]+)\/run$/, () => ({ type: 'fix', title: 'Fix with the built-in AI' })],
