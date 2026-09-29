@@ -18,6 +18,7 @@ import {
 import { DeepContainerMetadata, UserGroup, AppOverride, ContainerMount } from '../types';
 import { ManifexusAppIcon } from './SoftwareUpdateSheet';
 import { copyText } from './ActivitySheet';
+import { AppIcon } from './AppCard';
 import type { FixInfo, FixRequest } from './FixSheet';
 
 /**
@@ -232,6 +233,30 @@ const StorageRow: React.FC<{ mount: ContainerMount }> = ({ mount: m }) => {
 // Sheet
 // ----------------------------------------------------------------------------
 
+/** Where an icon came from, in a few words */
+function iconFrom(source: string): string {
+  if (/dashboard-icons/.test(source)) return 'from the Dashboard Icons set';
+  if (/selfhst/.test(source)) return 'from the selfh.st icon set';
+  if (/github\.com/.test(source)) return 'from its project on GitHub';
+  return 'from the app’s own web page';
+}
+
+/** A row that opens a link (and shows where it goes) */
+const LinkRow: React.FC<{ title: string; url: string; display: string }> = ({ title, url, display }) => (
+  <Row
+    onClick={() => window.open(url, '_blank', 'noopener')}
+    title={title}
+    trailing={
+      <span className="inline-flex items-center gap-1 max-w-[62vw] sm:max-w-[360px]" style={{ color: ios.blue }}>
+        <span className="truncate">{display}</span>
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden className="flex-shrink-0">
+          <path d="M7 17 17 7M9 7h8v8" />
+        </svg>
+      </span>
+    }
+  />
+);
+
 export const AppDetailsSheet: React.FC<{
   container: DeepContainerMetadata | null;
   /** Manifexus itself: shows system Diagnostics */
@@ -271,9 +296,9 @@ export const AppDetailsSheet: React.FC<{
   const [logCopied, setLogCopied] = useState(false);
 
   // Customize
+  const [iconLookup, setIconLookup] = useState(false);
   const [custom, setCustom] = useState({ name: '', group: '', port: '', url: '', icon: '', notes: '' });
   const [saving, setSaving] = useState(false);
-  const [iconFailed, setIconFailed] = useState(false);
 
   const push = (v: View) => {
     setStack((s) => [...s, v]);
@@ -311,13 +336,12 @@ export const AppDetailsSheet: React.FC<{
     setSys(null);
     setLogs(null);
     setLogQuery('');
-    setIconFailed(false);
     setCustom({
       name: container.customName || '',
       group: container.customGroup || '',
       port: container.primaryPort ? String(container.primaryPort) : '',
       url: container.customUrl || '',
-      icon: container.iconUrl || '',
+      icon: container.iconSource === 'yours' ? container.iconUrl || '' : '',
       notes: container.notes || '',
     });
     load();
@@ -347,11 +371,11 @@ export const AppDetailsSheet: React.FC<{
 
   if (!container) return null;
 
-  const name = system ? 'Manifexus' : container.customName || container.cleanName;
+  const name = system ? 'Manifexus' : container.customName || container.friendlyName || container.cleanName;
   const running = diag ? diag.running : container.state === 'running';
   const checks = system ? sys?.checks : diag?.checks;
   const resources = system ? sys?.resources : diag?.resources;
-  const launchUrl = container.customUrl || (container.primaryPort ? `http://${hostAddress}:${container.primaryPort}` : undefined);
+  const launchUrl = container.customUrl || (container.webPort ? `http://${hostAddress}:${container.webPort}` : undefined);
 
   const followLink = (link?: Link, checkId?: string) => {
     if (!link) return;
@@ -421,14 +445,8 @@ export const AppDetailsSheet: React.FC<{
     <span className="block w-[64px] h-[64px] [&>svg]:w-full [&>svg]:h-full" style={{ filter: 'drop-shadow(0 8px 18px rgba(47,140,255,0.35))' }}>
       <ManifexusAppIcon size={64} />
     </span>
-  ) : container.iconUrl && !iconFailed ? (
-    <span className="w-[64px] h-[64px] rounded-[15px] flex items-center justify-center overflow-hidden" style={{ background: '#fff' }}>
-      <img src={container.iconUrl} alt="" onError={() => setIconFailed(true)} className="w-[46px] h-[46px] object-contain" />
-    </span>
   ) : (
-    <IconTile color="#5E5CE6" size={64}>
-      <span className="text-[26px] font-semibold text-white">{name.slice(0, 1).toUpperCase()}</span>
-    </IconTile>
+    <AppIcon container={container} size={64} />
   );
 
   // ---------------------------------------------------------------- views
@@ -595,6 +613,18 @@ export const AppDetailsSheet: React.FC<{
             ) : (
               <Row title="Stack" trailing={<span>Standalone app (docker run)</span>} />
             )}
+            {!system && launchUrl && <LinkRow title="Web Page" url={launchUrl} display={launchUrl.replace(/^https?:\/\//, '')} />}
+            {!system && container.project?.url && (
+              <LinkRow
+                title="Project Page"
+                url={container.project.url}
+                display={`${container.project.repo}${container.project.latest ? ` · ${container.project.latest}` : ''}`}
+              />
+            )}
+            {!system && container.project?.imageSource && container.project.imageSource !== container.project.url && (
+              <LinkRow title="Image Built From" url={container.project.imageSource} display={container.project.imageSource.replace('https://github.com/', '')} />
+            )}
+            {!system && name !== container.cleanName && <CopyRow title="Container" value={container.cleanName} mono />}
             <CopyRow title="Image" value={container.image} mono />
             <CopyRow title="Container ID" value={container.id} display={container.id.slice(0, 12)} mono />
             <Row title="Created" trailing={<span>{new Date(container.created * 1000).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}</span>} />
@@ -604,7 +634,9 @@ export const AppDetailsSheet: React.FC<{
               <Row title="Docker" trailing={<span>{sys.environment.docker.version} · {sys.environment.docker.os}</span>} />
             )}
           </Group>
-          <SectionFooter>Tap a value to copy it.</SectionFooter>
+          <SectionFooter>
+            {!system && container.project?.latest ? `Latest release on GitHub: ${container.project.latest}. ` : ''}Tap a value to copy it, or a link to open it.
+          </SectionFooter>
         </section>
 
         <section>
@@ -794,6 +826,19 @@ export const AppDetailsSheet: React.FC<{
             <FieldRow id="cust-name" label="Name" value={custom.name} onChange={(v) => setCustom((c) => ({ ...c, name: v }))} placeholder={container.cleanName} />
             <FieldRow id="cust-icon" label="Icon" value={custom.icon} onChange={(v) => setCustom((c) => ({ ...c, icon: v }))} placeholder="Image link (optional)" mono />
           </Group>
+          <SectionFooter>
+            {container.iconSource && container.iconSource !== 'yours'
+              ? `Leave Icon empty to use the one Manifexus found (${iconFrom(container.iconSource)}). `
+              : 'Leave Icon empty and Manifexus finds one: from the big icon sets, the app’s own web page, or its project on GitHub. '}
+            <LinkButton
+              onClick={() => {
+                void fetch(`/api/apps/${encodeURIComponent(container.id)}/icon/refresh`, { method: 'POST' });
+                setIconLookup(true);
+              }}
+            >
+              {iconLookup ? 'Looking…' : 'Find Icon Again'}
+            </LinkButton>
+          </SectionFooter>
         </section>
         <section>
           <SectionHeader>Open Link</SectionHeader>

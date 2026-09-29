@@ -49,6 +49,18 @@ export interface DeepContainerMetadata {
   ipAddress?: string;
   restartPolicy?: string;
   iconUrl?: string;
+  /** Where the icon came from (an icon set, the app's own page, GitHub) */
+  iconSource?: string;
+  /** A friendlier name than the container's (its page title or service name) */
+  friendlyName?: string;
+  /** The published port Open uses: the app's web page (none when it has no web page) */
+  webPort?: number;
+  /** Other published ports that are web pages too */
+  otherWebPorts?: number[];
+  /** false when the app was checked and has no web page */
+  hasWeb?: boolean;
+  /** The app's project on GitHub and its latest release */
+  project?: { url?: string; repo?: string; latest?: string; imageSource?: string };
   customGroup?: string;
   customName?: string;
   customUrl?: string;

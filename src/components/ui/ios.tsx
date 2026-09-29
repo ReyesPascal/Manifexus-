@@ -621,6 +621,12 @@ export interface MenuItem {
   divider?: boolean;
   /** Keep the menu open after choosing (for multi-select) */
   keepOpen?: boolean;
+  /** A small caption above the items that follow (not tappable) */
+  header?: boolean;
+  /** Red text, for actions like Stop */
+  destructive?: boolean;
+  /** Trailing detail, e.g. ":8081" */
+  detail?: React.ReactNode;
   onSelect: () => void;
 }
 
@@ -640,12 +646,14 @@ export const MenuButton: React.FC<{
   label: React.ReactNode;
   ariaLabel: string;
   items: MenuItem[];
-  look?: 'field' | 'link';
+  look?: 'field' | 'link' | 'bare';
   /** Tint the label, e.g. blue when a filter is active */
   tint?: string;
   align?: 'left' | 'right';
   className?: string;
-}> = ({ label, ariaLabel, items, look = 'field', tint, align = 'right', className = '' }) => {
+  /** Hover text for the button */
+  title?: string;
+}> = ({ label, ariaLabel, items, look = 'field', tint, align = 'right', className = '', title }) => {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ top?: number; bottom?: number; left?: number; right?: number; maxHeight: number }>();
   const btnRef = useRef<HTMLButtonElement>(null);
@@ -712,22 +720,35 @@ export const MenuButton: React.FC<{
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={ariaLabel}
-        onClick={() => setOpen((o) => !o)}
+        title={title}
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((o) => !o);
+        }}
         className={
-          look === 'field'
+          look === 'bare'
+            ? className
+            : look === 'field'
             ? `h-9 pl-3 pr-2.5 rounded-[10px] inline-flex items-center gap-1.5 text-[15px] whitespace-nowrap flex-shrink-0 transition-colors hover:bg-white/[0.06] focus-visible:outline-2 focus-visible:outline-[#0A84FF] ${className}`
             : `inline-flex items-center gap-1 text-[13px] font-medium rounded hover:opacity-80 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0A84FF] ${className}`
         }
-        style={look === 'field' ? { background: open ? ios.groupPressed : ios.fill, color: tint || ios.label } : { color: tint || ios.blue }}
+        style={look === 'bare' ? undefined : look === 'field' ? { background: open ? ios.groupPressed : ios.fill, color: tint || ios.label } : { color: tint || ios.blue }}
       >
-        <span className="truncate">{label}</span>
-        <PopupChevrons />
+        {look === 'bare' ? (
+          label
+        ) : (
+          <>
+            <span className="truncate">{label}</span>
+            <PopupChevrons />
+          </>
+        )}
       </button>
       {open && (
         <div
           ref={menuRef}
           role="menu"
           aria-label={ariaLabel}
+          onClick={(e) => e.stopPropagation()}
           className="fixed z-[100] min-w-[230px] max-w-[300px] py-1.5 rounded-[13px] overflow-y-auto"
           style={{
             ...pos,
@@ -742,6 +763,11 @@ export const MenuButton: React.FC<{
           {items.map((it) => (
             <React.Fragment key={it.key}>
               {it.divider && <div className="my-1.5 h-[6px]" style={{ background: 'rgba(0,0,0,0.28)' }} role="separator" />}
+              {it.header ? (
+                <div className="px-4 pt-1.5 pb-1 text-[12.5px]" style={{ color: ios.secondary }}>
+                  {it.label}
+                </div>
+              ) : (
               <button
                 type="button"
                 role={it.checked !== undefined ? 'menuitemcheckbox' : 'menuitem'}
@@ -763,8 +789,16 @@ export const MenuButton: React.FC<{
                   </span>
                 )}
                 {it.dot && <span className="w-[7px] h-[7px] rounded-full flex-shrink-0" style={{ background: it.dot }} />}
-                <span className="truncate">{it.label}</span>
+                <span className="truncate flex-1" style={it.destructive ? { color: ios.red } : undefined}>
+                  {it.label}
+                </span>
+                {it.detail && (
+                  <span className="flex-shrink-0 text-[13px] tabular-nums" style={{ color: ios.secondary }}>
+                    {it.detail}
+                  </span>
+                )}
               </button>
+              )}
             </React.Fragment>
           ))}
         </div>

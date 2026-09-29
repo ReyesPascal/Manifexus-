@@ -434,7 +434,7 @@ export default function App() {
       // Search query
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
-        const matchName = (c.customName || c.cleanName).toLowerCase().includes(q);
+        const matchName = [c.customName, c.friendlyName, c.cleanName].some((n) => (n || '').toLowerCase().includes(q));
         const matchImage = c.image.toLowerCase().includes(q);
         const matchProject = (c.compose.project || '').toLowerCase().includes(q);
         const matchService = (c.compose.service || '').toLowerCase().includes(q);
@@ -909,6 +909,7 @@ export default function App() {
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                     {stackData.containers.map((container) => (
                       <AppCard
+                        inStack
                         key={container.id}
                         container={container}
                         hostAddress={hostAddress}

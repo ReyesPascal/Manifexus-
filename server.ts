@@ -98,6 +98,7 @@ import { describeFix, autoFixActions, FixContext } from './server/fixCatalog';
 import type { Check } from './server/diagnosticsService';
 import { learnActivity, recentCommands } from './server/commandLog';
 import { seedAiExample } from './server/aiExample';
+import { refreshIdentity, webInfo, projectInfo, iconUrl as appIconUrl, iconSource, iconFile, forgetIcon, setHostCandidates, friendlyName } from './server/appIdentity';
 import {
   getSoftwareUpdateState,
   checkForUpdate,
@@ -105,6 +106,7 @@ import {
   installUpdate,
   startUpdateScheduler,
   pendingUpdateActivityId,
+  getSelf,
 } from './server/updateService';
 import fs from 'fs';
 import { DeepContainerMetadata } from './src/types';
@@ -324,6 +326,36 @@ async function startServer() {
     }
   });
 
+  // Addresses that reach published ports from inside Manifexus: its network gateways and the host address
+  let hostsAt = 0;
+  const identityHosts = async () => {
+    if (Date.now() - hostsAt < 10 * 60 * 1000) return;
+    hostsAt = Date.now();
+    const self = await getSelf().catch(() => null);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const nets = Object.values((self?.inspect as any)?.NetworkSettings?.Networks || {}) as { Gateway?: string }[];
+    const host = getConfig().hostAddress;
+    setHostCandidates([...nets.map((n) => n.Gateway || ''), 'host.docker.internal', host && host !== 'localhost' ? host : '', '127.0.0.1']);
+  };
+
+  // App icons found by Manifexus (saved in /data/apps/icons)
+  app.get('/api/apps/icons/:file', (req, res) => {
+    const f = iconFile(req.params.file);
+    if (!f) return res.status(404).end();
+    res.setHeader('Cache-Control', 'public, max-age=604800, immutable');
+    if (f.endsWith('.svg')) res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'");
+    res.sendFile(f);
+  });
+  // Look for an app's icon again
+  app.post('/api/apps/:id/icon/refresh', async (req, res) => {
+    const { containers } = await getContainersList();
+    const c = containers.find((x) => x.id === req.params.id || x.cleanName === req.params.id);
+    if (!c) return res.status(404).json({ error: 'No such app.' });
+    forgetIcon(c);
+    refreshIdentity([c]);
+    res.json({ ok: true });
+  });
+
   // Get containers list enriched with user customizations and discovered empty compose stacks
   app.get('/api/containers', async (req, res) => {
     try {
@@ -337,17 +369,30 @@ async function startServer() {
         const nameKey = c.cleanName;
         const override = config.appOverrides[key] || config.appOverrides[nameKey] || {};
 
+        const web = webInfo(c);
+        const chosen = override.customPort && c.ports.some((p) => p.publicPort === override.customPort) ? override.customPort : undefined;
+        const webPort = chosen || web.port;
+        const project = projectInfo(c);
         return {
           ...c,
           customName: override.customName || undefined,
           customGroup: override.customGroup || undefined,
           customUrl: override.customUrl || undefined,
-          iconUrl: override.customIcon || c.iconUrl,
-          primaryPort: override.customPort || c.primaryPort,
+          iconUrl: override.customIcon || appIconUrl(c) || c.iconUrl,
+          iconSource: override.customIcon ? 'yours' : iconSource(c),
+          primaryPort: webPort || override.customPort || c.primaryPort,
+          friendlyName: friendlyName(c, web.title),
+          webPort,
+          otherWebPorts: [...(chosen && web.port && web.port !== chosen ? [web.port] : []), ...web.others].filter((p) => p !== webPort),
+          hasWeb: chosen ? true : web.hasWeb,
+          project: project ? { url: project.url, repo: project.repo, latest: project.latest, imageSource: project.imageSource } : undefined,
           notes: override.notes || undefined,
           isHidden: override.isHidden || false,
         };
       });
+
+      // Look up web pages, project pages and icons in the background; they show on the next refresh
+      void identityHosts().then(() => refreshIdentity(containers.filter((c) => !isManifexusContainer(c))));
 
       res.json({
         containers: enriched,

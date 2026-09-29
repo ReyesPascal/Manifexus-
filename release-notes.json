@@ -6,6 +6,10 @@
       "date": "2026-09-28",
       "headline": "Fix problems in one tap: automatically, step by step yourself, or with a private AI built into Manifexus.",
       "new": [
+        "Cleaner app cards. Each card shows the app's icon, name and whether it's running, with Open, Restart and Stop right there. Moving and groups are in the ⋯ menu, and tapping a card opens its details.",
+        "Open goes straight to the app's web page. Manifexus checks each port and picks the one that is really a web page (never a peer or database port). If there are several, the arrow next to Open lists them and lets you pick the default.",
+        "Real icons and names. Manifexus finds each app's icon (from the big icon sets, the app's own web page, or its GitHub project) and uses its real name, like Usenet Ultimate instead of usenet-ultimate.",
+        "Project Page. App Details links to the app's project on GitHub and shows its latest release.",
         "Fix This. Every problem in Diagnostics' To Fix list now has three ways to fix it: Fix Automatically, Fix It Myself or Fix with AI.",
         "Fix Automatically. For problems Manifexus knows the answer to (a settings path without its leading /, an app listed in two stacks, an app that's stopped or unhealthy) it prepares the change itself, no AI needed. You see it first, and it's backed up and saved in Restore.",
         "Fix It Myself. Step-by-step instructions for every problem, with the exact commands to copy and buttons for the Manifexus screens that do each step. When you're done, Check Again confirms it's fixed.",
