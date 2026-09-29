@@ -28,6 +28,7 @@ import { SoftwareUpdateSheet, SoftwareUpdateState } from './components/SoftwareU
 import { ActivitySheet } from './components/ActivitySheet';
 import { AppCard } from './components/AppCard';
 import { helperParents, helpersByApp } from './appHelpers';
+import { StackIcon, StackIconChoice } from './stackIcons';
 import { AppDetailsSheet } from './components/AppDetailsSheet';
 import { AssistantSheet } from './components/AssistantSheet';
 import { FixSheet, FixRequest } from './components/FixSheet';
@@ -346,6 +347,18 @@ export default function App() {
 
   // The name shown for a stack; its folder keeps the real one
   const stackLabel = (project: string) => config?.stackNames?.[project]?.trim() || project;
+  // A stack's icon (empty = automatic: its apps' icons, or a symbol guessed from its name)
+  const handleStackIcon = async (project: string, choice: StackIconChoice | undefined) => {
+    const stackIcons = { ...(config?.stackIcons || {}) };
+    if (choice && (choice.svg || choice.logo)) stackIcons[project] = choice;
+    else delete stackIcons[project];
+    setConfig((c) => (c ? { ...c, stackIcons } : c));
+    try {
+      await handleSaveConfig({ stackIcons });
+    } catch (err) {
+      console.error('Failed to save the stack icon:', err);
+    }
+  };
   const handleRenameStack = async (project: string, name: string) => {
     const stackNames = { ...(config?.stackNames || {}) };
     if (name.trim() && name.trim() !== project) stackNames[project] = name.trim();
@@ -827,7 +840,7 @@ export default function App() {
                     id={`stack:${projectName}`}
                     title={stackLabel(projectName)}
                     rename={{ original: projectName, onSave: (n) => void handleRenameStack(projectName, n) }}
-                    icon={<FolderIcon apps={apps} />}
+                    icon={<StackIcon name={stackLabel(projectName)} apps={apps} choice={config?.stackIcons?.[projectName]} />}
                     status={<Health apps={apps} alsoCheck={apps.flatMap((a) => helpersOf.get(a.id) || [])} />}
                     forceOpen={apps.some((c) => c.state === 'restarting' || c.state === 'dead')}
                     action={own ? undefined : { label: 'Add App', onClick: () => openMoveForStack(projectName), title: `Move apps into ${projectName}` }}
@@ -930,6 +943,8 @@ export default function App() {
           <StackDetailsSheet
             project={d ? stackDetails : null}
             displayName={stackDetails ? stackLabel(stackDetails) : undefined}
+            iconChoice={stackDetails ? config?.stackIcons?.[stackDetails] : undefined}
+            onChooseIcon={(choice) => stackDetails && void handleStackIcon(stackDetails, choice)}
             apps={d?.containers || []}
             helpersOf={helpersOf}
             workingDir={d?.workingDir}
@@ -1109,9 +1124,14 @@ export default function App() {
       <CreateStackModal
         isOpen={isCreateStackModalOpen}
         onClose={() => setIsCreateStackModalOpen(false)}
-        onSuccess={() => {
+        onSuccess={(stack, name, icon) => {
+          // Show the friendly name typed ("Media Server"); the folder keeps the safe one
+          if (stack?.project && name && name !== stack.project) void handleRenameStack(stack.project, name);
+          if (stack?.project && icon) void handleStackIcon(stack.project, icon);
           fetchData(true);
         }}
+        onAddApps={(project) => openMoveForStack(project)}
+        existingProjects={Array.from(new Set([...emptyStacks.map((s) => s.project), ...containers.map((c) => c.compose?.project || '').filter(Boolean)]))}
         defaultBaseDir={
           defaultStacksDir ||
           (containers.find((c) => c.compose?.workingDir)?.compose?.workingDir || '/opt/stacks/x').split('/').slice(0, -1).join('/')

@@ -2,7 +2,8 @@ import React, { useState } from 'react';
 import { DeepContainerMetadata } from '../types';
 import { AppIcon } from './AppCard';
 import { helperKind } from '../appHelpers';
-import { FolderIcon, Health, displayFont } from './Shelf';
+import { Health, displayFont } from './Shelf';
+import { StackIcon, StackIconChoice, StackIconPicker } from '../stackIcons';
 import { copyText } from './ActivitySheet';
 import { Button, Group, Row, SectionFooter, SectionHeader, Sheet, ios } from './ui/ios';
 
@@ -50,13 +51,41 @@ export const StackDetailsSheet: React.FC<{
   onDelete?: () => void;
   /** The name you gave it on the dashboard */
   displayName?: string;
-}> = ({ project, apps, helpersOf, workingDir, composeFile, onClose, onOpenApp, onAddApp, onEditCompose, onOpenRestore, onDelete, displayName }) => {
+  /** The icon you picked, if any */
+  iconChoice?: StackIconChoice;
+  onChooseIcon?: (choice: StackIconChoice | undefined) => void;
+}> = ({ project, apps, helpersOf, workingDir, composeFile, onClose, onOpenApp, onAddApp, onEditCompose, onOpenRestore, onDelete, displayName, iconChoice, onChooseIcon }) => {
+  const [picking, setPicking] = useState(false);
   if (!project) return null;
   return (
     <Sheet open title="Stack Details" onClose={onClose} zIndex={55}>
       <div className="space-y-7">
         <div className="flex flex-col items-center text-center pt-2">
-          <FolderIcon apps={apps} size={72} />
+          <button
+            type="button"
+            onClick={onChooseIcon ? () => setPicking(true) : undefined}
+            className="group flex flex-col items-center gap-1.5 rounded-[18px] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0A84FF]"
+            aria-label="Choose an icon for this stack"
+          >
+            <StackIcon name={displayName || project} apps={apps} choice={iconChoice} size={72} />
+            {onChooseIcon && (
+              <span className="text-[13px] font-medium group-hover:opacity-80" style={{ color: ios.blue }}>
+                Edit Icon
+              </span>
+            )}
+          </button>
+          {onChooseIcon && (
+            <StackIconPicker
+              open={picking}
+              name={displayName || project}
+              current={iconChoice}
+              onClose={() => setPicking(false)}
+              onChoose={(c) => {
+                onChooseIcon(c);
+                setPicking(false);
+              }}
+            />
+          )}
           <h3 className="mt-3.5 text-[24px] leading-[29px] font-semibold text-white" style={{ fontFamily: displayFont, letterSpacing: '-0.02em' }}>
             {displayName || project}
           </h3>

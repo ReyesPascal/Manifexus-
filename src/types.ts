@@ -100,6 +100,8 @@ export interface ManifexusConfig {
   aiExampleSeeded?: boolean;
   /** Names shown for stacks on the dashboard, by compose project; the folder keeps its real name */
   stackNames?: Record<string, string>;
+  /** Icons people chose for their stacks, by stack */
+  stackIcons?: Record<string, { symbol?: string; svg?: string; color?: string; logo?: string }>;
   /** Simple keeps screens clean; Advanced shows the technical side (commands, and later the terminal editor) */
   experienceMode?: 'simple' | 'advanced';
   /** Show the command behind each step. Unset = follow the mode (on in Advanced) */

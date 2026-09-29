@@ -6,6 +6,8 @@
       "date": "2026-09-29",
       "headline": "A fresh, calmer dashboard, and problems fixed in one tap: automatically, step by step yourself, or with a private AI.",
       "new": [
+        "A friendlier New Stack. Give it any name (like Media Server) and see the folder it becomes as you type. A taken name is caught right away, and once it's made you can add apps straight from there.",
+        "Stack icons. Every stack gets its own icon from the start, guessed from its name (Downloads gets a download arrow, Media a clapperboard) in its own colour. Tap it in New Stack or Stack Details to choose any of 1,600+ symbols, 12 colours, or an app's logo. Once a stack has apps, it shows their icons, unless you picked one.",
         "A fresh, calmer dashboard. Every stack is one clean panel with its apps inside, showing at a glance whether everything is running. Tap a stack's name to fold it away.",
         "Stack actions. Each stack's ⋯ menu can Start, Restart or Stop all its apps, edit its compose file, or open the new Stack Details screen.",
         "Server Cleanup. Tap Clean Up in the header to find folders no app uses anymore (empty folders, and stacks with no apps) and delete the ones you pick. Stacks are backed up first and can be restored.",

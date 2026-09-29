@@ -1,249 +1,261 @@
-import React, { useEffect, useState, useId } from 'react';
-import {
-  X,
-  Layers,
-  FolderPlus,
-  FileCode,
-  CheckCircle2,
-  AlertCircle,
-  Loader2,
-  Terminal,
-} from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { EmptyComposeStack } from '../types';
+import { Button, FieldRow, Group, IconTile, LinkButton, Row, SectionFooter, SectionHeader, Sheet, ios } from './ui/ios';
+import { IconTileFor, StackIconChoice, StackIconPicker, guessIcon } from '../stackIcons';
+
+/**
+ * New Stack: name it, see exactly which folder it becomes, and (optionally) put it somewhere else.
+ * The name can be friendly ("Media Server"); the folder gets a safe version of it (media-server).
+ * Once it's made, the next step is right there: Add Apps.
+ */
 
 interface CreateStackModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSuccess: (newStack: EmptyComposeStack) => void;
+  /** The stack was made; `name` is the friendly name typed (shown on the dashboard) */
+  onSuccess: (newStack: EmptyComposeStack, name: string, icon?: StackIconChoice) => void;
+  /** Open Add Apps for the new stack */
+  onAddApps?: (project: string) => void;
   defaultBaseDir?: string;
+  /** Stacks that already exist, so a taken name is caught while typing */
+  existingProjects?: string[];
 }
 
-export const CreateStackModal: React.FC<CreateStackModalProps> = ({
-  isOpen,
-  onClose,
-  onSuccess,
-  defaultBaseDir = '',
-}) => {
-  const stackNameInputId = useId();
-  const baseDirInputId = useId();
-  const [rawStackName, setRawStackName] = useState('');
-  const [customBaseDir, setCustomBaseDir] = useState(defaultBaseDir);
-  const [showAdvancedDir, setShowAdvancedDir] = useState(false);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-
-  // Follow the server's default location (it loads after the dashboard's first fetch) until the
-  // user chooses a different one; start fresh each time the dialog opens.
-  useEffect(() => {
-    if (isOpen) {
-      setShowAdvancedDir(false);
-      setCustomBaseDir(defaultBaseDir);
-    }
-  }, [isOpen]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    if (!showAdvancedDir) setCustomBaseDir(defaultBaseDir);
-  }, [defaultBaseDir, showAdvancedDir]);
-
-  if (!isOpen) return null;
-
-  // Real-time sanitized slug
-  const sanitizedSlug = rawStackName
+const slugify = (s: string) =>
+  s
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9_-]/g, '-')
+    .replace(/-{2,}/g, '-')
     .replace(/^-+|-+$/g, '');
 
-  const targetHostDir = `${customBaseDir.replace(/\/$/, '')}/${sanitizedSlug || 'your-stack-name'}`;
-  const targetComposePath = `${targetHostDir}/docker-compose.yml`;
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!sanitizedSlug || sanitizedSlug.length < 2) {
-      setErrorMessage('Please enter a stack name with at least 2 alphanumeric characters.');
-      return;
+export const CreateStackModal: React.FC<CreateStackModalProps> = ({ isOpen, onClose, onSuccess, onAddApps, defaultBaseDir = '', existingProjects = [] }) => {
+  const [name, setName] = useState('');
+  const [customDir, setCustomDir] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [made, setMade] = useState<{ project: string; name: string; dir: string } | null>(null);
+  // An icon you picked; until then it follows the name (a guessed symbol and colour)
+  const [icon, setIcon] = useState<StackIconChoice | undefined>();
+  const [picking, setPicking] = useState(false);
+
+  useEffect(() => {
+    if (isOpen) {
+      setName('');
+      setCustomDir(null);
+      setError(null);
+      setMade(null);
+      setBusy(false);
+      setIcon(undefined);
+      setPicking(false);
     }
+  }, [isOpen]);
 
-    setIsSubmitting(true);
-    setErrorMessage(null);
+  const slug = slugify(name);
+  const base = (customDir ?? defaultBaseDir).trim().replace(/\/+$/, '');
+  const folder = `${base || '/'}${base.endsWith('/') ? '' : '/'}${slug || '…'}`;
+  const taken = useMemo(() => existingProjects.some((p) => p.toLowerCase() === slug), [existingProjects, slug]);
+  const problem = !name.trim()
+    ? null
+    : slug.length < 2
+      ? 'Use at least 2 letters or numbers.'
+      : slug === 'manifexus'
+        ? 'That name is used by Manifexus itself.'
+        : taken
+          ? `There’s already a stack called ${slug}.`
+          : customDir !== null && !customDir.trim().startsWith('/')
+            ? 'The location must be a full path, like /home/you/stacks.'
+            : null;
+  const ready = Boolean(slug) && slug.length >= 2 && !problem && !busy;
+  const shownIcon = icon || guessIcon(name.trim() || 'stack');
 
+  const create = async () => {
+    if (!ready) return;
+    setBusy(true);
+    setError(null);
     try {
-      const response = await fetch('/api/stacks/create', {
+      const r = await fetch('/api/stacks/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          stackName: sanitizedSlug,
-          baseDir: showAdvancedDir ? customBaseDir : undefined,
-        }),
+        body: JSON.stringify({ stackName: slug, baseDir: customDir !== null ? customDir.trim() : undefined }),
       });
-
-      const data = await response.json();
-      if (!response.ok || !data.success) {
-        throw new Error(data.error || 'Failed to provision stack directory');
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j.success) {
+        throw new Error(r.status === 409 ? `A folder called ${slug} is already there. Choose another name or location.` : j.error || 'The stack couldn’t be made.');
       }
-
-      onSuccess(data.stack);
-      onClose();
-      setRawStackName('');
-      setErrorMessage(null);
-    } catch (err) {
-      setErrorMessage((err as Error).message || 'An unexpected error occurred.');
+      const label = name.trim();
+      onSuccess(j.stack, label, icon);
+      setMade({ project: j.stack?.project || slug, name: label, dir: j.stack?.workingDir || folder });
+    } catch (e) {
+      setError((e as Error).message);
     } finally {
-      setIsSubmitting(false);
+      setBusy(false);
     }
   };
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fadeIn">
-      <div className="relative w-full max-w-lg overflow-hidden rounded-2xl bg-[#090d16] border border-cyan-500/30 shadow-[0_0_50px_rgba(6,182,212,0.15)] flex flex-col">
-        {/* Header */}
-        <div className="flex items-center justify-between p-5 border-b border-slate-800 bg-[#0c1220]">
-          <div className="flex items-center gap-3">
-            <div className="p-2.5 rounded-xl bg-cyan-950/80 border border-cyan-500/40 text-cyan-400 shadow-[0_0_15px_rgba(6,182,212,0.2)]">
-              <FolderPlus className="w-5 h-5" />
-            </div>
-            <div>
-              <h2 className="text-base font-bold font-mono text-white tracking-tight flex items-center gap-2">
-                <span>Create New Compose Stack</span>
-                <span className="px-2 py-0.5 rounded text-[10px] uppercase font-mono tracking-wider bg-cyan-950/80 text-cyan-300 border border-cyan-500/40">
-                  Provision
-                </span>
-              </h2>
-              <p className="text-xs text-slate-400 font-mono mt-0.5">
-                Provisions empty stack directory with baseline docker-compose.yml
-              </p>
-            </div>
-          </div>
-          <button
-            onClick={onClose}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+  let body: React.ReactNode;
+  let footer: React.ReactNode;
+
+  if (made) {
+    // Done: the natural next step is right here
+    body = (
+      <div className="flex flex-col items-center text-center pt-6">
+        <div className="relative">
+          <IconTileFor choice={shownIcon} size={72} />
+          <span className="absolute -bottom-1.5 -right-1.5 w-7 h-7 rounded-full flex items-center justify-center" style={{ background: ios.green, boxShadow: '0 0 0 3px #1c1c1e' }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="m5 12.5 4.5 4.5L19 7.5" />
+            </svg>
+          </span>
+        </div>
+        <h3 className="mt-4 text-[22px] font-semibold text-white">{made.name} Is Ready</h3>
+        <p className="mt-1.5 text-[14px] leading-[20px] max-w-[420px]" style={{ color: ios.secondary }}>
+          Its folder is <span className="font-mono text-[13px] text-white/80">{made.dir}</span>. Add apps to it now, or anytime with the + on the stack.
+        </p>
+      </div>
+    );
+    footer = (
+      <div className="flex items-center justify-end gap-2">
+        <Button tone="gray" onClick={onClose} className="sm:min-w-[120px]">
+          Done
+        </Button>
+        {onAddApps && (
+          <Button
+            onClick={() => {
+              onClose();
+              onAddApps(made.project);
+            }}
+            className="flex-1 sm:flex-none sm:min-w-[150px]"
           >
-            <X className="w-5 h-5" />
+            Add Apps
+          </Button>
+        )}
+      </div>
+    );
+  } else {
+    body = (
+      <form
+        className="space-y-7"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void create();
+        }}
+      >
+        <button type="submit" hidden aria-hidden tabIndex={-1} />
+        <div className="flex flex-col items-center text-center pt-2">
+          {/* A live preview of the stack's icon: tap to choose another */}
+          <button
+            type="button"
+            onClick={() => setPicking(true)}
+            className="group flex flex-col items-center gap-1.5 rounded-[18px] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0A84FF]"
+            aria-label="Choose an icon for this stack"
+          >
+            <IconTileFor choice={shownIcon} size={72} />
+            <span className="text-[13px] font-medium group-hover:opacity-80" style={{ color: ios.blue }}>
+              Edit Icon
+            </span>
           </button>
+          <p className="mt-3 text-[14px] leading-[20px] max-w-[440px]" style={{ color: ios.secondary }}>
+            A stack is a folder for apps that belong together, like a media server and its downloaders. It starts empty; you add apps next.
+          </p>
         </div>
 
-        {/* Content Form */}
-        <form onSubmit={handleSubmit} className="p-5 space-y-4">
-          {errorMessage && (
-            <div className="p-3 rounded-xl bg-red-950/40 border border-red-500/40 text-red-300 text-xs font-mono flex items-start gap-2.5">
-              <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0 mt-0.5" />
-              <span>{errorMessage}</span>
-            </div>
-          )}
+        <section>
+          <Group>
+            <FieldRow
+              id="new-stack-name"
+              label="Name"
+              value={name}
+              onChange={(v) => {
+                setName(v);
+                setError(null);
+              }}
+              placeholder="Media"
+              autoFocus
+              invalid={Boolean(problem)}
+            />
+          </Group>
+          <SectionFooter tone={problem ? 'danger' : 'default'}>
+            {problem ? (
+              problem
+            ) : (
+              <>
+                Folder: <span className="font-mono text-[12.5px]" style={{ color: slug ? 'rgba(235,235,245,0.85)' : undefined }}>{folder}</span>
+              </>
+            )}
+          </SectionFooter>
+        </section>
 
-          {/* Stack Name Input */}
-          <div className="space-y-1.5">
-            <label htmlFor={stackNameInputId} className="block text-xs font-mono font-medium text-slate-300">
-              Stack Project Name <span className="text-cyan-400">*</span>
-            </label>
-            <div className="relative">
-              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-500">
-                <Layers className="w-4 h-4" />
-              </div>
-              <input
-                id={stackNameInputId}
-                type="text"
-                autoFocus
-                placeholder="e.g. observability, media-suite, home-hub"
-                value={rawStackName}
-                onChange={(e) => setRawStackName(e.target.value)}
-                className="w-full pl-9 pr-3 py-2.5 bg-slate-900/90 border border-slate-700/80 rounded-xl text-sm font-mono text-white placeholder-slate-500 focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 transition-all shadow-inner"
+        <section>
+          <SectionHeader
+            action={
+              customDir !== null ? (
+                <LinkButton onClick={() => setCustomDir(null)}>Use Default</LinkButton>
+              ) : undefined
+            }
+          >
+            Location
+          </SectionHeader>
+          <Group>
+            {customDir === null ? (
+              <Row
+                title="Put It In"
+                onClick={() => setCustomDir(defaultBaseDir)}
+                trailing={<span className="font-mono text-[13.5px] truncate max-w-[52vw] sm:max-w-[360px]">{defaultBaseDir || '…'}</span>}
+                chevron
               />
-            </div>
-            {sanitizedSlug && (
-              <div className="text-[11px] font-mono text-slate-400 flex items-center gap-1.5 mt-1">
-                <span className="text-slate-500">Sanitized slug:</span>
-                <span className="px-1.5 py-0.5 rounded bg-slate-800 text-cyan-300 border border-slate-700">
-                  {sanitizedSlug}
-                </span>
-              </div>
+            ) : (
+              <FieldRow id="new-stack-dir" label="Put It In" value={customDir} onChange={setCustomDir} placeholder="/home/you/stacks" mono autoFocus />
             )}
-          </div>
+          </Group>
+          <SectionFooter>
+            {customDir === null ? 'Where your other stacks are. Tap to choose another folder.' : 'The stack’s folder is made inside this one.'}
+          </SectionFooter>
+        </section>
 
-          {/* Target Host Directory Preview */}
-          <div className="p-3 rounded-xl bg-slate-950/70 border border-slate-800 space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-mono font-medium text-slate-400 flex items-center gap-1.5">
-                <Terminal className="w-3.5 h-3.5 text-cyan-400" />
-                <span>Host Filesystem Target</span>
-              </span>
-              <button
-                type="button"
-                onClick={() => setShowAdvancedDir(!showAdvancedDir)}
-                className="text-[11px] font-mono text-cyan-400 hover:text-cyan-300 transition-colors underline"
-              >
-                {showAdvancedDir ? 'Use default location' : 'Use a different location'}
-              </button>
-            </div>
-
-            {showAdvancedDir && (
-              <div className="pt-1">
-                <label htmlFor={baseDirInputId} className="block text-[11px] font-mono text-slate-400 mb-1">
-                  Create the stack folder inside:
-                </label>
-                <input
-                  id={baseDirInputId}
-                  type="text"
-                  value={customBaseDir}
-                  onChange={(e) => setCustomBaseDir(e.target.value)}
-                  placeholder="/home/you/stacks"
-                  spellCheck={false}
-                  className="w-full px-2.5 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs font-mono text-slate-200 focus:outline-none focus:border-cyan-400"
-                />
-              </div>
-            )}
-
-            <div className="text-xs font-mono text-slate-300 break-all bg-slate-900/80 p-2 rounded-lg border border-slate-800/80">
-              <div className="text-slate-500 text-[10px] uppercase tracking-wider mb-0.5">Directory Path:</div>
-              <div className="text-cyan-300">{targetHostDir}</div>
-              <div className="text-slate-500 text-[10px] uppercase tracking-wider mt-1.5 mb-0.5">Generated File:</div>
-              <div className="text-emerald-400">{targetComposePath}</div>
-            </div>
-          </div>
-
-          {/* Baseline Template Preview */}
-          <div className="p-3 rounded-xl bg-slate-950/70 border border-slate-800 space-y-1.5">
-            <span className="text-xs font-mono font-medium text-slate-400 flex items-center gap-1.5">
-              <FileCode className="w-3.5 h-3.5 text-purple-400" />
-              <span>Initial Compose Template (Baseline)</span>
-            </span>
-            <pre className="text-[11px] font-mono bg-slate-900 p-2.5 rounded-lg border border-slate-800 text-purple-300 leading-relaxed overflow-x-auto">
-{`services: {}`}
-            </pre>
-            <p className="text-[11px] font-mono text-slate-400">
-              Add apps to it anytime with its Add apps button.
-            </p>
-          </div>
-
-          {/* Buttons */}
-          <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-800">
-            <button
-              type="button"
-              onClick={onClose}
-              disabled={isSubmitting}
-              className="px-4 py-2 rounded-xl text-xs font-mono text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={isSubmitting || !sanitizedSlug}
-              className="px-4 py-2 rounded-xl bg-gradient-to-r from-cyan-600 to-cyan-500 hover:from-cyan-500 hover:to-cyan-400 disabled:opacity-50 disabled:cursor-not-allowed text-xs font-mono font-bold text-slate-950 transition-all flex items-center gap-2 shadow-[0_0_20px_rgba(6,182,212,0.3)] cursor-pointer"
-            >
-              {isSubmitting ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin text-slate-950" />
-                  <span>Provisioning Stack...</span>
-                </>
-              ) : (
-                <>
-                  <CheckCircle2 className="w-4 h-4" />
-                  <span>Provision Empty Stack</span>
-                </>
-              )}
-            </button>
-          </div>
-        </form>
+        {error && (
+          <p className="text-[14px] px-1" style={{ color: ios.orange }} role="alert">
+            {error}
+          </p>
+        )}
+      </form>
+    );
+    footer = (
+      <div className="flex justify-end">
+        <Button onClick={() => void create()} disabled={!ready} className="flex-1 sm:flex-none sm:min-w-[170px]">
+          {busy ? 'Creating…' : 'Create Stack'}
+        </Button>
       </div>
-    </div>
+    );
+  }
+
+  return (
+    <Sheet
+      open={isOpen}
+      title={made ? 'Stack Created' : 'New Stack'}
+      onClose={onClose}
+      leftAction={
+        made ? undefined : (
+          <button type="button" onClick={onClose} className="text-[17px] rounded hover:opacity-80 focus-visible:outline-2 focus-visible:outline-[#0A84FF]" style={{ color: ios.blue }}>
+            Cancel
+          </button>
+        )
+      }
+      rightAction={<span />}
+      footer={footer}
+    >
+      {body}
+      <StackIconPicker
+        open={picking}
+        name={name.trim() || 'New Stack'}
+        current={icon}
+        onClose={() => setPicking(false)}
+        onChoose={(c) => {
+          setIcon(c);
+          setPicking(false);
+        }}
+      />
+    </Sheet>
   );
 };
