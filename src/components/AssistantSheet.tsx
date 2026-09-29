@@ -4,6 +4,10 @@ import { ProgressView, useRun } from './ProgressTracker';
 import { CommandBlock, Explain } from './Commands';
 import { usePrefs } from '../prefs';
 import { Markdown } from './Markdown';
+import { setupWizard, ModelChoice } from './AiSetupWizard';
+import { ACCESS, Freedom, Fit, CatalogEntry, DownloadStep, Download, ACTIVE_DL, Specs, Status, fmtGB, fmtSecs, fmtDur, FREEDOM, fmtLeft, Bar, Spark, AssistantIcon } from './aiShared';
+
+export { AssistantIcon };
 
 /**
  * Ask Manifexus: the built-in AI. First run sets it up (your server's specs, the models that fit,
@@ -15,62 +19,6 @@ import { Markdown } from './Markdown';
 // ----------------------------------------------------------------------------
 // Types (mirror server/aiService.ts and server/aiAgent.ts)
 // ----------------------------------------------------------------------------
-
-type Freedom = 'look' | 'ask' | 'routine' | 'expert';
-type Fit = 'fits' | 'tight' | 'no';
-
-interface CatalogEntry {
-  id: string;
-  name: string;
-  role: 'quick' | 'fixer';
-  blurb: string;
-  downloadBytes: number;
-  memoryBytes: number;
-  moe?: boolean;
-  fit: Fit;
-  why?: string;
-  seconds: number;
-  /** The speed comes from real answers on this server, not a guess */
-  measured?: boolean;
-  installed: boolean;
-}
-
-interface Download {
-  model: string;
-  status: 'downloading' | 'verifying' | 'done' | 'failed' | 'cancelled';
-  completed: number;
-  total: number;
-  message?: string;
-}
-
-interface Specs {
-  cpu: { model: string; cores: number; physicalCores?: number; avx2: boolean; avx512: boolean; arch: string };
-  memory: { totalBytes: number; availableBytes: number; manifexusLimitBytes?: number };
-  gpus: { vendor: string; name: string; vramBytes?: number }[];
-  nvidiaRuntime: boolean;
-  gpuUsable: boolean;
-  disk: { freeBytes: number; totalBytes: number };
-  os: string;
-}
-
-interface Status {
-  engine: {
-    included: boolean;
-    running: boolean;
-    error?: string;
-    version: string;
-    canInstall: boolean;
-    install: { status: 'idle' | 'checking' | 'downloading' | 'verifying' | 'unpacking' | 'done' | 'failed'; completed: number; total: number; message?: string };
-  };
-  specs: Specs;
-  budgetBytes: number;
-  recommended: { quick?: string; fixer?: string; note?: string };
-  catalog: CatalogEntry[];
-  installed: { id: string; bytes: number }[];
-  downloads: Download[];
-  settings: { quickModel?: string; fixerModel?: string; freedom: Freedom; auto?: boolean };
-  ready: boolean;
-}
 
 interface PlanStep {
   action: { type: string; app?: string; stack?: string; path?: string; command?: string; reason: string };
@@ -129,38 +77,11 @@ type Item =
       showWork?: boolean;
     };
 
-type View = 'chat' | 'setup' | 'models' | 'settings' | 'review' | 'progress' | 'guide';
+type View = 'chat' | 'wizard' | 'setup' | 'models' | 'settings' | 'review' | 'progress' | 'guide';
 
 // ----------------------------------------------------------------------------
 // Helpers
 // ----------------------------------------------------------------------------
-
-const fmtGB = (b: number) => (b >= 1e9 ? `${(b / 1e9).toFixed(b >= 10e9 ? 0 : 1)} GB` : `${Math.max(1, Math.round(b / 1e6))} MB`);
-const fmtSecs = (s: number) => (s < 90 ? `~${Math.max(5, Math.round(s / 5) * 5)} s` : `~${(s / 60).toFixed(s < 600 ? 1 : 0).replace(/\.0$/, '')} min`);
-const fmtDur = (ms?: number) => (ms === undefined ? '' : ms < 1000 ? `${Math.max(0.1, ms / 1000).toFixed(1)} s` : ms < 60000 ? `${Math.round(ms / 1000)} s` : `${Math.floor(ms / 60000)} min ${Math.round((ms % 60000) / 1000)} s`);
-
-const FREEDOM: { value: Freedom; title: string; sub: string }[] = [
-  { value: 'look', title: 'Look Only', sub: 'Explains and advises. Never changes anything.' },
-  { value: 'ask', title: 'Ask Before Changes', sub: 'Shows every change for you to review first.' },
-  { value: 'routine', title: 'Fix Routine Things', sub: 'Starts and restarts apps on its own. Anything else still asks.' },
-  { value: 'expert', title: 'Expert', sub: 'Like “Ask”, and may also propose commands to run on your server. Each is shown first.' },
-];
-
-/** The sparkle mark for the assistant */
-const Spark: React.FC<{ size?: number; color?: string }> = ({ size = 18, color = '#fff' }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill={color} aria-hidden="true">
-    <path d="M12 2.5c.4 3.9 1.9 6.4 4.4 7.6 1.3.6 2.9 1 4.6 1.2v1.4c-1.7.2-3.3.6-4.6 1.2-2.5 1.2-4 3.7-4.4 7.6h-1.2c-.4-3.9-1.9-6.4-4.4-7.6-1.3-.6-2.9-1-4.6-1.2v-1.4c1.7-.2 3.3-.6 4.6-1.2 2.5-1.2 4-3.7 4.4-7.6h1.2Z" />
-  </svg>
-);
-
-export const AssistantIcon: React.FC<{ size?: number }> = ({ size = 29 }) => (
-  <span
-    className="flex items-center justify-center flex-shrink-0"
-    style={{ width: size, height: size, borderRadius: size * 0.24, background: 'linear-gradient(135deg, #5E5CE6 0%, #BF5AF2 55%, #FF6482 100%)' }}
-  >
-    <Spark size={size * 0.58} />
-  </span>
-);
 
 /** A file change as a before/after, showing only the changed parts with a little context */
 const DiffView: React.FC<{ lines: string[] }> = ({ lines }) => {
@@ -336,10 +257,40 @@ const RouteChips: React.FC<{ route: NonNullable<Extract<Item, { kind: 'assistant
   </div>
 );
 
-const Bar: React.FC<{ value: number }> = ({ value }) => (
-  <div className="h-[4px] rounded-full overflow-hidden" style={{ background: 'rgba(118,118,128,0.3)' }}>
-    <div className="h-full rounded-full transition-[width] duration-500" style={{ width: `${Math.max(2, Math.min(100, value * 100))}%`, background: ios.blue }} />
-  </div>
+/** Everything getting a model ready involves, ticked off as it happens, with details and times */
+const InstallSteps: React.FC<{ steps: DownloadStep[] }> = ({ steps }) => (
+  <ul className="mt-2 space-y-1.5 rounded-[10px] px-2.5 py-2" style={{ background: 'rgba(255,255,255,0.04)' }}>
+    {steps.map((st) => (
+      <li key={st.id} className="flex items-start gap-2 text-[12.5px] leading-[17px]">
+        {st.status === 'running' ? (
+          <span className="mt-[2px] w-3 h-3 flex-shrink-0 rounded-full border-2 border-t-transparent animate-spin motion-reduce:animate-none" style={{ borderColor: ios.blue, borderTopColor: 'transparent' }} />
+        ) : st.status === 'done' ? (
+          <span className="w-3 flex-shrink-0 text-center" style={{ color: ios.green }}>✓</span>
+        ) : st.status === 'failed' ? (
+          <span className="w-3 flex-shrink-0 text-center font-bold" style={{ color: ios.orange }}>!</span>
+        ) : (
+          <span className="mt-[3px] w-[10px] h-[10px] mx-[1px] flex-shrink-0 rounded-full" style={{ border: `1.5px solid ${ios.tertiary}` }} />
+        )}
+        <div className="min-w-0 flex-1">
+          <div style={{ color: st.status === 'pending' ? ios.tertiary : st.status === 'failed' ? ios.orange : st.status === 'running' ? 'rgba(255,255,255,0.92)' : ios.secondary }}>{st.label}</div>
+          {st.detail && st.status !== 'pending' && (
+            <div className="break-words" style={{ color: st.status === 'failed' ? ios.orange : ios.tertiary }}>
+              {st.detail}
+            </div>
+          )}
+          {st.status === 'pending' && st.detail && <div style={{ color: ios.tertiary }}>{st.detail}</div>}
+          {st.status === 'running' && st.progress !== undefined && (
+            <div className="mt-1 pr-1">
+              <Bar value={st.progress} />
+            </div>
+          )}
+        </div>
+        <span className="flex-shrink-0 tabular-nums" style={{ color: ios.tertiary }}>
+          {st.status === 'done' && st.ms !== undefined ? fmtDur(st.ms) : st.status === 'running' && st.eta ? `~${fmtLeft(st.eta)} left` : ''}
+        </span>
+      </li>
+    ))}
+  </ul>
 );
 
 // ----------------------------------------------------------------------------
@@ -360,6 +311,10 @@ export const AssistantSheet: React.FC<{
 }> = ({ open, onClose, initialView, initialQuestion, focus, backLabel, onBack }) => {
   const [status, setStatus] = useState<Status | null>(null);
   const [loadError, setLoadError] = useState<string>();
+  const [bundleError, setBundleError] = useState<string>();
+  // First-time setup: which page, and the models picked on it
+  const [setupPage, setSetupPage] = useState(0);
+  const [choice, setChoice] = useState<ModelChoice>({});
   const [stack, setStack] = useState<View[]>(['chat']);
   const view = stack[stack.length - 1];
   const [items, setItems] = useState<Item[]>([]);
@@ -406,15 +361,21 @@ export const AssistantSheet: React.FC<{
     load().then((s) => {
       // Ready for a typed question: load the everyday model and let it read its instructions now
       if (s?.ready && !initialQuestion) fetch('/api/ai/warm', { method: 'POST' }).catch(() => undefined);
-      if (initialView) setStack(s?.ready || initialView === 'settings' ? ['chat', initialView] : ['setup']);
-      else setStack(s?.ready ? ['chat'] : ['setup']);
+      // First time: the setup flow. If its download is still going, pick up on its last page.
+      const settingUp = s && (!s.ready || (!s.settings.setupAt && s.downloads.some((d) => ACTIVE_DL.includes(d.status))));
+      if (settingUp) {
+        setChoice({ quick: s.settings.quickModel || s.recommended.quick, fixer: s.settings.fixerModel ?? s.recommended.fixer ?? '' });
+        setSetupPage(s.downloads.some((d) => ACTIVE_DL.includes(d.status)) ? 5 : 0);
+        setStack(['wizard']);
+      } else if (initialView) setStack(s?.ready || initialView === 'settings' ? ['chat', initialView] : ['setup']);
+      else setStack(['chat']);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   // Keep download progress fresh while anything is downloading
   const engineBusy = ['checking', 'downloading', 'verifying', 'unpacking'].includes(status?.engine.install?.status || '');
-  const downloading = status?.downloads.some((d) => d.status === 'downloading' || d.status === 'verifying') || engineBusy;
+  const downloading = status?.downloads.some((d) => ACTIVE_DL.includes(d.status)) || engineBusy;
   useEffect(() => {
     if (!open || !downloading) return;
     const t = setInterval(load, 1000);
@@ -521,6 +482,21 @@ export const AssistantSheet: React.FC<{
     await fetch('/api/ai/models/install', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model, role }) });
     load();
   };
+  /** The recommended models as one download pipeline */
+  const installBundle = async (items: { model: string; role: 'quick' | 'fixer' | 'both' }[]): Promise<boolean> => {
+    setBundleError(undefined);
+    let ok = false;
+    try {
+      const r = await fetch('/api/ai/models/install-bundle', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) setBundleError(j.error || 'Couldn’t start the download.');
+      ok = r.ok;
+    } catch (e) {
+      setBundleError((e as Error).message || 'Couldn’t reach Manifexus.');
+    }
+    await load();
+    return ok;
+  };
   const cancelDl = async (model: string) => {
     await fetch('/api/ai/models/cancel', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model }) });
     setTimeout(load, 400);
@@ -546,18 +522,12 @@ export const AssistantSheet: React.FC<{
   }, [items, status?.settings.freedom]);
 
   const byId = useMemo(() => new Map((status?.catalog || []).map((m) => [m.id, m])), [status]);
-  const dl = (id: string) => status?.downloads.find((d) => d.model === id && (d.status === 'downloading' || d.status === 'verifying'));
+  const dl = (id: string) => status?.downloads.find((d) => d.model === id && ACTIVE_DL.includes(d.status));
   const failedDl = (id: string) => status?.downloads.find((d) => d.model === id && d.status === 'failed');
 
-  // ---------------------------------------------------------------- views
-  let title = 'Ask Manifexus';
-  let body: React.ReactNode = null;
-  let footer: React.ReactNode = null;
-
-  if (!status) {
-    body = <p className="text-[15px] text-center py-20" style={{ color: loadError ? ios.orange : ios.secondary }}>{loadError || 'Loading…'}</p>;
-  } else if (view === 'setup' || view === 'models') {
-    const s = status.specs;
+  /** The recommended models, which still need downloading, and the one-pipeline progress card for them */
+  const setupParts = () => {
+    if (!status) return { rec: [] as { m: CatalogEntry; role: 'quick' | 'fixer'; label: string; sub: string }[], toGet: [] as { m: CatalogEntry; role: 'quick' | 'fixer'; label: string; sub: string }[], pipeline: null as React.ReactNode, active: false };
     const rq = status.recommended.quick ? byId.get(status.recommended.quick) : undefined;
     const rf = status.recommended.fixer && status.recommended.fixer !== status.recommended.quick ? byId.get(status.recommended.fixer) : undefined;
     const rec = [rq && { m: rq, role: 'quick' as const, label: 'Quick Helper', sub: 'Does most of the work: questions, lookups, simple fixes' }, rf && { m: rf, role: 'fixer' as const, label: 'Fixer', sub: 'Steps in for tricky problems' }].filter(Boolean) as {
@@ -567,13 +537,150 @@ export const AssistantSheet: React.FC<{
       sub: string;
     }[];
     const toGet = rec.filter((r) => !r.m.installed && !dl(r.m.id));
+
+    // ---- The pipeline: every recommended model being set up, as one list of steps
+    const recIds = rec.map((r) => r.m.id);
+    // Finished models stay in the list (ticked off) until the whole setup is done
+    const pipeIds = (status.bundle?.models.length ? status.bundle.models : recIds).filter((id) => status.downloads.some((x) => x.model === id));
+    const pipeDls = pipeIds.map((id) => status.downloads.find((x) => x.model === id)!).sort((a, b) => (byId.get(a.model)?.downloadBytes || 0) - (byId.get(b.model)?.downloadBytes || 0));
+    let pipeline: React.ReactNode = null;
+    if (pipeDls.some((x) => x.status !== 'done')) {
+      const nm = (id: string) => byId.get(id)?.name || id;
+      const stepOf = (x: Download, id: string) => x.steps?.find((k) => k.id === id);
+      const steps: DownloadStep[] = [];
+      const first = pipeDls[0];
+      steps.push(
+        status.bundle
+          ? { id: 'room', label: 'Check disk space', status: 'done', detail: `Needs ${fmtGB(status.bundle.neededBytes)} for ${pipeDls.length === 1 ? 'the model' : `${pipeDls.length} models`}; ${fmtGB(status.bundle.freeBytes)} free` }
+          : { ...(stepOf(first, 'room') || { status: 'pending' }), id: 'room', label: 'Check disk space' } as DownloadStep
+      );
+      steps.push({ ...(stepOf(first, 'connect') || { status: 'pending' }), id: 'connect', label: 'Reach the model library' } as DownloadStep);
+      pipeDls.forEach((x, i) => {
+        const st = stepOf(x, 'download') || ({ status: 'pending' } as DownloadStep);
+        steps.push({
+          ...st,
+          id: `dl-${x.model}`,
+          label: `Download ${nm(x.model)} (${fmtGB(byId.get(x.model)?.downloadBytes || x.total)})`,
+          detail:
+            st.status === 'pending' && x.status !== 'failed' && x.status !== 'cancelled'
+              ? i === 0
+                ? 'Smallest first, so you can start asking sooner'
+                : `Starts when ${nm(pipeDls[i - 1].model)} is downloaded, while that one is being tested`
+              : st.detail,
+        });
+      });
+      for (const x of pipeDls)
+        for (const k of ['verify', 'load', 'test']) {
+          const st = stepOf(x, k) || ({ status: 'pending', label: k } as DownloadStep);
+          steps.push({ ...st, id: `${k}-${x.model}`, label: `${nm(x.model)}: ${st.label.charAt(0).toLowerCase()}${st.label.slice(1)}` });
+        }
+      const bytesTotal = pipeDls.reduce((n, x) => n + (x.total || byId.get(x.model)?.downloadBytes || 0), 0);
+      const bytesDone = pipeDls.reduce((n, x) => n + (x.status === 'verifying' || x.status === 'done' ? x.total : x.completed), 0);
+      const readySteps = steps.filter((k) => /^(verify|load|test)-/.test(k.id));
+      const value = 0.9 * (bytesTotal ? bytesDone / bytesTotal : 0) + 0.1 * (readySteps.filter((k) => k.status === 'done').length / Math.max(1, readySteps.length));
+      const active = pipeDls.filter((x) => ACTIVE_DL.includes(x.status));
+      const broken = pipeDls.filter((x) => x.status === 'failed' || x.status === 'cancelled');
+      const speed = pipeDls.find((x) => x.status === 'downloading')?.speed;
+      const left = Math.max(0, bytesTotal - bytesDone);
+      const running = steps.find((k) => k.status === 'running' && !k.id.startsWith('dl-')) || steps.find((k) => k.status === 'running');
+      pipeline = (
+        <section>
+          <SectionHeader
+            action={
+              active.length ? (
+                <LinkButton onClick={() => active.forEach((x) => cancelDl(x.model))}>Cancel</LinkButton>
+              ) : broken.length ? (
+                <LinkButton
+                  onClick={() =>
+                    installBundle(
+                      broken.map((b) => {
+                        const st = status.settings;
+                        return { model: b.model, role: st.quickModel === b.model && st.fixerModel === b.model ? 'both' : st.fixerModel === b.model ? 'fixer' : 'quick' };
+                      })
+                    )
+                  }
+                >
+                  Try Again
+                </LinkButton>
+              ) : undefined
+            }
+          >
+            Setting Up
+          </SectionHeader>
+          <Group>
+            <div className="px-4 py-3">
+              <div className="flex items-baseline justify-between gap-3 text-[14px]">
+                <span className="text-white/90 font-medium truncate">
+                  {broken.length && !active.length ? 'Setup stopped' : left > 0 ? `Downloading ${fmtGB(bytesDone)} of ${fmtGB(bytesTotal)}` : running ? running.label : 'Finishing up'}
+                </span>
+                <span className="flex-shrink-0 tabular-nums text-[12.5px]" style={{ color: ios.secondary }}>
+                  {Math.round(value * 100)}%
+                </span>
+              </div>
+              <div className="mt-2">
+                <Bar value={value} />
+              </div>
+              <div className="mt-1.5 text-[12.5px] tabular-nums" style={{ color: broken.length ? ios.orange : ios.secondary }}>
+                {broken.length
+                  ? broken.map((b) => `${nm(b.model)}: ${b.message || 'didn’t finish'}`).join(' · ')
+                  : [speed ? `${(speed / 1e6).toFixed(1)} MB/s` : '', speed && left ? `~${fmtLeft(left / speed)} left to download` : '', status.ready ? 'You can start asking now' : ''].filter(Boolean).join(' · ') || 'Getting started…'}
+              </div>
+              <InstallSteps steps={steps} />
+            </div>
+          </Group>
+          <SectionFooter>Each model is tested as soon as it’s downloaded, while the next one downloads, so everything is ready as early as possible.</SectionFooter>
+        </section>
+      );
+    }
+    return { rec, toGet, pipeline, active: pipeDls.some((x) => ACTIVE_DL.includes(x.status)) };
+  };
+
+  // ---------------------------------------------------------------- views
+  let title = 'Ask Manifexus';
+  let body: React.ReactNode = null;
+  let footer: React.ReactNode = null;
+
+  let subtitle: string | undefined;
+  if (!status) {
+    body = <p className="text-[15px] text-center py-20" style={{ color: loadError ? ios.orange : ios.secondary }}>{loadError || 'Loading…'}</p>;
+  } else if (view === 'wizard') {
+    const w = setupWizard({
+      status,
+      page: setupPage,
+      go: (n) => {
+        setSetupPage(Math.max(0, Math.min(5, n)));
+        requestAnimationFrame(() => bodyRef.current?.scrollTo({ top: 0 }));
+      },
+      choice,
+      setChoice,
+      pipeline: setupParts().pipeline,
+      bundleError,
+      startDownload: installBundle,
+      setting,
+      finish: () => {
+        setting({ setupAt: true });
+        setStack(['chat']);
+        fetch('/api/ai/warm', { method: 'POST' }).catch(() => undefined);
+      },
+      firstQuestion: initialQuestion,
+    });
+    title = w.title;
+    subtitle = w.subtitle;
+    body = <div key={setupPage} className="motion-safe:animate-[ios-push-in_200ms_ease-out]">{w.body}</div>;
+    footer = w.footer;
+  } else if (view === 'setup' || view === 'models') {
+    const s = status.specs;
+    const { rec, toGet, pipeline } = setupParts();
     const total = toGet.reduce((n, r) => n + r.m.downloadBytes, 0);
     const graphics = s.gpus.length ? s.gpus.map((g) => g.name).join(', ') : 'None';
     title = view === 'models' ? 'All Models' : 'Built-in AI';
 
     const modelRow = (m: CatalogEntry, extra?: { label: string; sub: string }) => {
-      const d = dl(m.id);
-      const failed = !d && !m.installed ? failedDl(m.id) : undefined;
+      // Recommended models are set up together: their progress is in the pipeline card below them
+      const bundled = Boolean(extra) && view === 'setup';
+      const d = bundled ? undefined : dl(m.id);
+      const failed = !d && !m.installed && !bundled ? failedDl(m.id) : undefined;
+      const inPipeline = bundled ? dl(m.id) : undefined;
       return (
         <Row
           key={m.id + (extra?.label || '')}
@@ -591,16 +698,30 @@ export const AssistantSheet: React.FC<{
           subtitle={
             d ? (
               <span className="block pt-1 pr-2 space-y-1.5">
-                <Bar value={d.status === 'verifying' ? 1 : d.total ? d.completed / d.total : 0} />
-                <span className="block tabular-nums" style={{ color: d.message?.startsWith('Connection') ? ios.orange : undefined }}>
-                  {d.status === 'verifying'
-                    ? d.message || 'Making sure it works…'
-                    : [d.completed ? `${fmtGB(d.completed)} of ${fmtGB(d.total)}` : '', d.message || (d.completed ? '' : 'Starting…')].filter(Boolean).join(' · ')}
-                </span>
+                {(() => {
+                  const running = d.steps?.find((x) => x.status === 'running');
+                  const value = d.status === 'queued' ? 0 : d.status === 'downloading' ? (d.total ? d.completed / d.total : 0) : (d.steps || []).filter((x) => x.status === 'done').length / Math.max(1, (d.steps || []).length);
+                  const line =
+                    d.status === 'queued'
+                      ? d.message || 'Waiting its turn'
+                      : d.status === 'downloading'
+                        ? [d.completed ? `${fmtGB(d.completed)} of ${fmtGB(d.total)}` : 'Starting…', d.speed ? `${(d.speed / 1e6).toFixed(1)} MB/s` : '', d.eta ? `~${fmtLeft(d.eta)} left` : '', d.message].filter(Boolean).join(' · ')
+                        : d.message || (running ? `${running.label}…` : 'Getting it ready…');
+                  return (
+                    <>
+                      <Bar value={value} />
+                      <span className="block tabular-nums" style={{ color: d.message?.startsWith('Connection') ? ios.orange : undefined }}>
+                        {line}
+                      </span>
+                    </>
+                  );
+                })()}
+                {d.steps && <InstallSteps steps={d.steps} />}
               </span>
             ) : failed ? (
               <span className="block" style={{ color: ios.orange }}>
                 {failed.message || 'The download didn’t finish.'}
+                {failed.steps && <InstallSteps steps={failed.steps} />}
               </span>
             ) : (
               <span className="block">
@@ -614,7 +735,11 @@ export const AssistantSheet: React.FC<{
             )
           }
           trailing={
-            d ? (
+            inPipeline ? (
+              <span className="text-[13px]" style={{ color: ios.secondary }}>
+                {inPipeline.status === 'queued' ? 'Next' : inPipeline.status === 'downloading' ? 'Downloading' : 'Testing'}
+              </span>
+            ) : bundled && !m.installed ? undefined : d ? (
               <LinkButton onClick={() => cancelDl(m.id)}>Cancel</LinkButton>
             ) : m.installed ? (
               <span className="inline-flex items-center gap-1.5 text-[13px]" style={{ color: ios.green }}>
@@ -744,6 +869,8 @@ export const AssistantSheet: React.FC<{
           </>
         )}
 
+        {view === 'setup' && pipeline}
+
         {view === 'setup' && (
           <Group>
             <Row onClick={() => push('models')} title="All Models" subtitle="Smaller or smarter options, and what fits" chevron />
@@ -754,12 +881,34 @@ export const AssistantSheet: React.FC<{
     if (view === 'setup' && toGet.length && status.engine.included) {
       footer = (
         <div className="flex items-center justify-between gap-3">
-          <span className="text-[13px]" style={{ color: ios.secondary }}>
-            {fmtGB(total)} download
+          <span className="text-[13px]" style={{ color: bundleError ? ios.orange : ios.secondary }}>
+            {bundleError || `${fmtGB(total)} download · one after another, each tested as it arrives`}
           </span>
-          <Button onClick={() => toGet.forEach((r) => install(r.m.id, rec.length === 1 ? 'both' : r.role))} className="sm:min-w-[200px]">
-            Download {toGet.length === 1 ? '' : 'Both'}
+          <Button onClick={() => installBundle(toGet.map((r) => ({ model: r.m.id, role: rec.length === 1 ? 'both' : r.role })))} className="sm:min-w-[200px]">
+            {toGet.length === 1 ? 'Download and Set Up' : 'Download Both'}
           </Button>
+        </div>
+      );
+    } else if (view === 'setup' && downloading && status.downloads.some((d) => ACTIVE_DL.includes(d.status))) {
+      // Overall: how much is left across every model being set up
+      const active = status.downloads.filter((d) => ACTIVE_DL.includes(d.status));
+      const left = active.reduce((n, d) => n + (d.status === 'verifying' ? 0 : Math.max(0, d.total - d.completed)), 0);
+      const speed = active.find((d) => d.status === 'downloading')?.speed;
+      const testingNow = active.find((d) => d.status === 'verifying');
+      footer = (
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-[13px] tabular-nums min-w-0" style={{ color: ios.secondary }}>
+            {left > 0
+              ? `Getting ${active.length === 1 ? 'the model' : `${active.length} models`} ready · ${fmtGB(left)} to go${speed ? ` · ~${fmtLeft(left / speed)} left` : ''}`
+              : testingNow
+                ? `Almost there: testing ${byId.get(testingNow.model)?.name || testingNow.model}`
+                : 'Almost there'}
+          </span>
+          {status.ready && (
+            <Button onClick={() => setStack(['chat'])} className="sm:min-w-[160px] flex-shrink-0">
+              Start Asking
+            </Button>
+          )}
         </div>
       );
     } else if (view === 'setup' && status.ready && !downloading) {
@@ -792,6 +941,20 @@ export const AssistantSheet: React.FC<{
             ))}
           </Group>
           <SectionFooter>Every change is backed up first and saved in Restore, except commands, which can’t be undone.</SectionFooter>
+        </section>
+        <section>
+          <SectionHeader>What It May Look At</SectionHeader>
+          <Group>
+            {ACCESS.map((x) => (
+              <Row
+                key={x.key}
+                title={x.title}
+                subtitle={x.sub}
+                trailing={<Switch checked={status.settings.access?.[x.key] !== false} onChange={(v) => setting({ access: { [x.key]: v } })} label={x.title} />}
+              />
+            ))}
+          </Group>
+          <SectionFooter>Apps, stacks and Diagnostics are always available to it. Passwords, tokens and keys are always hidden.</SectionFooter>
         </section>
         <section>
           <SectionHeader>Model and Thinking</SectionHeader>
@@ -1165,11 +1328,15 @@ export const AssistantSheet: React.FC<{
   }
 
   // ---------------------------------------------------------------- navigation
-  const gear = <GearButton label="AI settings" onClick={() => push(status?.ready ? 'settings' : 'setup')} />;
+  const gear = <GearButton label="AI settings" onClick={() => (status?.ready ? push('settings') : setStack(['wizard']))} />;
   const prev = stack[stack.length - 2];
   const backText = prev === 'chat' ? 'Ask' : prev === 'setup' ? 'Built-in AI' : prev === 'settings' ? 'Settings' : prev === 'review' ? 'Review' : 'Back';
   const leftAction =
-    view === 'progress' ? undefined : stack.length > 1 ? <BackButton label={backText} onClick={pop} /> : backLabel && onBack ? <BackButton label={backLabel} onClick={onBack} /> : view === 'chat' ? gear : undefined;
+    view === 'wizard' && setupPage > 0 ? (
+      <BackButton label="Back" onClick={() => setSetupPage((n) => Math.max(0, n - 1))} />
+    ) : view === 'wizard' ? (
+      backLabel && onBack ? <BackButton label={backLabel} onClick={onBack} /> : undefined
+    ) : view === 'progress' ? undefined : stack.length > 1 ? <BackButton label={backText} onClick={pop} /> : backLabel && onBack ? <BackButton label={backLabel} onClick={onBack} /> : view === 'chat' ? gear : undefined;
   const rightExtra =
     view === 'chat' && stack.length === 1 ? (
       <span className="flex items-center gap-4">
@@ -1192,7 +1359,7 @@ export const AssistantSheet: React.FC<{
         onClose();
       }}
       title={title}
-      subtitle={view === 'chat' && modelName ? `${modelName} · on your server` : undefined}
+      subtitle={subtitle || (view === 'chat' && modelName ? `${modelName} · on your server` : undefined)}
       leftAction={leftAction}
       rightExtra={rightExtra}
       footer={footer}

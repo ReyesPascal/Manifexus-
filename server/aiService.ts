@@ -49,18 +49,40 @@ export interface AiSettings {
    * Off: always the fixer, with its usual settings.
    */
   auto: boolean;
+  /** What it may look at (passwords, tokens and keys are always hidden, whatever this says) */
+  access: AiAccess;
+  /** When first-time setup was finished */
+  setupAt?: string;
 }
 
+export interface AiAccess {
+  /** What apps print (their logs) */
+  logs: boolean;
+  /** Files on the server: compose files, .env, configs, folder listings. Needed to change files. */
+  files: boolean;
+  /** Activity and Restore: what changed recently and what can be undone */
+  history: boolean;
+  /** The server itself: processor, memory, disk, Docker networks, volumes and ports */
+  server: boolean;
+}
+
+const ALL_ACCESS: AiAccess = { logs: true, files: true, history: true, server: true };
+
 export function getAiSettings(): AiSettings {
+  let saved: Partial<AiSettings> = {};
   try {
-    return { freedom: 'ask', auto: true, ...JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8')) };
+    saved = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'));
   } catch {
-    return { freedom: 'ask', auto: true };
+    // defaults
   }
+  return { freedom: 'ask', auto: true, ...saved, access: { ...ALL_ACCESS, ...(saved.access || {}) } };
 }
 
 export function saveAiSettings(patch: Partial<AiSettings>): AiSettings {
-  const next = { ...getAiSettings(), ...patch };
+  const cur = getAiSettings();
+  const next = { ...cur, ...patch, access: { ...cur.access, ...(patch.access || {}) } };
+  for (const k of Object.keys(next.access) as (keyof AiAccess)[]) if (!(k in ALL_ACCESS)) delete next.access[k];
+  for (const k of Object.keys(ALL_ACCESS) as (keyof AiAccess)[]) next.access[k] = next.access[k] !== false;
   if (!['look', 'ask', 'routine', 'expert'].includes(next.freedom)) next.freedom = 'ask';
   next.auto = next.auto !== false;
   fs.mkdirSync(AI_DIR, { recursive: true });
@@ -184,7 +206,7 @@ export interface EngineStats {
 }
 
 /** Learn from an answer's timings (durations are in nanoseconds) */
-export function recordSpeed(model: string, st: EngineStats, info: { promptChars: number; expectedNewChars: number; fresh: boolean }) {
+export function recordSpeed(model: string, st: EngineStats, info: { promptChars: number; expectedNewChars: number; fresh: boolean; measureOnly?: boolean }) {
   const all = speedStore();
   const cur: Speed = all[model] || { prefill: 0, gen: 0, samples: 0 };
   const ema = (old: number, v: number) => (old ? old * 0.6 + v * 0.4 : v);
@@ -192,10 +214,10 @@ export function recordSpeed(model: string, st: EngineStats, info: { promptChars:
   if (pc >= 64 && st.prompt_eval_duration) cur.prefill = ema(cur.prefill, pc / (st.prompt_eval_duration / 1e9));
   if ((st.eval_count || 0) >= 16 && st.eval_duration) cur.gen = ema(cur.gen, st.eval_count! / (st.eval_duration / 1e9));
   if (st.load_duration && st.load_duration > 1e9) cur.loadSecs = ema(cur.loadSecs || 0, st.load_duration / 1e9);
-  // A fresh read of everything tells us how long a token is in characters
-  if (info.fresh && pc >= 200) cur.charsPerToken = ema(cur.charsPerToken || 0, info.promptChars / pc);
+  // A fresh read of everything tells us how long a token is in characters (not from plain test text)
+  if (info.fresh && pc >= 200 && !info.measureOnly) cur.charsPerToken = ema(cur.charsPerToken || 0, info.promptChars / pc);
   // It re-read far more than what was new: this engine/model doesn't reuse what it read last turn
-  if (!info.fresh && pc > 200) {
+  if (!info.fresh && pc > 200 && !info.measureOnly) {
     const cpt = cur.charsPerToken || 3.6;
     cur.noPrefixCache = pc * cpt > Math.max(2000, info.expectedNewChars * 1.8);
   }
@@ -420,17 +442,55 @@ export async function* ollamaStream<T>(p: string, body: unknown, signal?: AbortS
 // Models: installed, downloading, removing
 // ----------------------------------------------------------------------------
 
+/** One stage of getting a model ready, shown as a checklist while it installs */
+export interface DownloadStep {
+  id: 'room' | 'connect' | 'download' | 'verify' | 'load' | 'test';
+  label: string;
+  status: 'pending' | 'running' | 'done' | 'failed';
+  detail?: string;
+  /** How long it took, once done */
+  ms?: number;
+  startedAt?: number;
+  /** 0–1 and seconds left, when they can be worked out */
+  progress?: number;
+  eta?: number;
+}
+
 export interface Download {
   model: string;
-  status: 'downloading' | 'verifying' | 'done' | 'failed' | 'cancelled';
+  /** queued: waiting for another model's download to finish (they download one after another, and are tested while the next downloads) */
+  status: 'queued' | 'downloading' | 'verifying' | 'done' | 'failed' | 'cancelled';
   completed: number;
   total: number;
   message?: string;
   startedAt: string;
+  steps: DownloadStep[];
+  /** Download speed in bytes a second (smoothed) and seconds left */
+  speed?: number;
+  eta?: number;
+  /** Files making up the model: how many are fully downloaded */
+  parts?: { done: number; total: number };
 }
+
+const STEP_LABELS: [DownloadStep['id'], string][] = [
+  ['room', 'Check disk space'],
+  ['connect', 'Reach the model library'],
+  ['download', 'Download'],
+  ['verify', 'Check the download'],
+  ['load', 'Load into memory'],
+  ['test', 'Test answer'],
+];
 
 const downloads = new Map<string, Download>();
 const aborts = new Map<string, AbortController>();
+
+/** Still being downloaded, checked, loaded or tested */
+const settingUp = (id: string) => ['queued', 'downloading', 'verifying'].includes(downloads.get(id)?.status || '');
+
+/** Installed models that have finished setting up (not one that's still being tested) */
+async function usableModels(): Promise<string[]> {
+  return (await installedModels()).map((m) => m.id).filter((id) => !settingUp(id));
+}
 
 export async function installedModels(): Promise<{ id: string; bytes: number }[]> {
   try {
@@ -455,85 +515,240 @@ const retryable = (raw: string) => /timeout|dial tcp|ENOTFOUND|EAI_AGAIN|ECONNRE
 function rememberDownloads() {
   try {
     fs.mkdirSync(AI_DIR, { recursive: true });
-    fs.writeFileSync(DOWNLOADS_FILE, JSON.stringify(Array.from(downloads.values()).filter((d) => d.status === 'downloading').map((d) => d.model)));
+    fs.writeFileSync(DOWNLOADS_FILE, JSON.stringify(Array.from(downloads.values()).filter((d) => d.status === 'queued' || d.status === 'downloading' || d.status === 'verifying').map((d) => d.model)));
   } catch {
     // best effort
   }
 }
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 /**
- * Downloads a model in the background; progress is read from aiStatus(). Checks disk space and the
- * connection first, retries dropped connections (the engine continues partial files), treats a
- * download that stops moving as dropped, then asks the model a tiny question before calling it Ready.
+ * Getting several models ready as soon as possible: they download one at a time (so the first isn't
+ * slowed by sharing the connection), smallest first, and each is checked, loaded and tested while the
+ * next one downloads. Only one model is loaded to test at a time, so memory is never doubled up.
+ */
+let downloadingNow: string | undefined;
+let testing: Promise<void> = Promise.resolve();
+
+async function waitForDownloadTurn(model: string, signal: AbortSignal) {
+  for (;;) {
+    await sleep(250); // let a "Download Both" arrive in full before choosing the order
+    if (signal.aborted) throw new Error('cancelled');
+    if (downloadingNow) continue;
+    const waiting = Array.from(downloads.values())
+      .filter((x) => x.status === 'queued')
+      .sort((a, b) => (catalogModel(a.model)?.downloadBytes || 0) - (catalogModel(b.model)?.downloadBytes || 0));
+    if (waiting[0]?.model === model) {
+      downloadingNow = model;
+      return;
+    }
+  }
+}
+
+const gbText = (b: number) => `${(b / GB).toFixed(b >= 10 * GB ? 0 : 1)} GB`;
+const secsText = (s: number) => (s >= 90 ? `${Math.round(s / 60)} min` : `${Math.max(1, Math.round(s))} s`);
+
+/** A short, fixed passage for the test answer, so the speed it measures is comparable every time */
+const TEST_PROMPT =
+  'Manifexus is a dashboard for the Docker apps on a home server. It shows which apps are running, groups them into stacks, ' +
+  'moves them between stacks with a backup first, and records every change so it can be undone from Restore. Its built-in ' +
+  'assistant can read app logs, compose files and settings, explain problems in plain words, and propose fixes that the ' +
+  'person reviews before anything changes.\n\nIn one short sentence, what does Manifexus do?';
+
+/**
+ * Downloads a model in the background and gets it ready; progress is read from aiStatus(). Each stage
+ * is a step with its own detail: disk space, the model library, the download (speed, time left, parts),
+ * checking the files, loading into memory, and a test answer that also measures its speed here.
  */
 export function installModel(model: string): Download {
   const existing = downloads.get(model);
-  if (existing?.status === 'downloading' || existing?.status === 'verifying') return existing;
-  const d: Download = { model, status: 'downloading', completed: 0, total: catalogModel(model)?.downloadBytes || 0, startedAt: new Date().toISOString(), message: 'Getting ready…' };
+  if (existing && ['queued', 'downloading', 'verifying'].includes(existing.status)) return existing;
+  const info = catalogModel(model);
+  const d: Download = {
+    model,
+    status: 'queued',
+    completed: 0,
+    total: info?.downloadBytes || 0,
+    startedAt: new Date().toISOString(),
+    message: 'Waiting its turn',
+    steps: STEP_LABELS.map(([id, label]) => ({ id, label, status: 'pending' as const })),
+  };
   downloads.set(model, d);
   rememberDownloads();
   const ac = new AbortController();
   aborts.set(model, ac);
   record('info', 'system', `Downloading AI model ${model}`, { model });
+
+  const step = (id: DownloadStep['id']) => d.steps.find((x) => x.id === id)!;
+  const start = (id: DownloadStep['id'], detail?: string) => Object.assign(step(id), { status: 'running', startedAt: Date.now(), detail, progress: undefined, eta: undefined });
+  const done = (id: DownloadStep['id'], detail?: string) => {
+    const x = step(id);
+    Object.assign(x, { status: 'done', ms: Date.now() - (x.startedAt || Date.now()), progress: undefined, eta: undefined });
+    if (detail !== undefined) x.detail = detail;
+  };
+
   (async () => {
     const MAX = 6;
     try {
-      // Before starting: room on disk, and a way to the model library
-      const specs = await getSystemSpecs(true);
-      const size = catalogModel(model)?.downloadBytes || 0;
-      if (size && specs.disk.freeBytes && specs.disk.freeBytes < size + 2e9) throw new Error(`no space left: needs about ${((size + 2e9) / 1e9).toFixed(0)} GB free`);
-      if (!EXTERNAL) {
-        try {
-          await fetch('https://registry.ollama.ai/v2/', { method: 'HEAD', signal: AbortSignal.timeout(15000) });
-        } catch (e) {
-          throw new Error(`fetch failed: ${(e as Error).message}`);
-        }
-      }
-      for (let attempt = 1; ; attempt++) {
-        const round = new AbortController();
-        const stopRound = () => round.abort();
-        ac.signal.addEventListener('abort', stopRound);
-        let lastMove = Date.now();
-        const watchdog = setInterval(() => {
-          if (Date.now() - lastMove > 90_000) round.abort(new Error('stalled'));
-        }, 5000);
-        try {
-          const layers = new Map<string, { total: number; completed: number }>();
-          for await (const ev of ollamaStream<{ status: string; digest?: string; total?: number; completed?: number; error?: string }>('/api/pull', { model, stream: true }, round.signal)) {
-            if (ev.error) throw new Error(ev.error);
-            if (ev.digest && ev.total) {
-              const prev = layers.get(ev.digest);
-              if (!prev || (ev.completed || 0) !== prev.completed) lastMove = Date.now();
-              layers.set(ev.digest, { total: ev.total, completed: ev.completed || 0 });
-            } else lastMove = Date.now();
-            const total = Array.from(layers.values()).reduce((n, l) => n + l.total, 0);
-            if (total) d.total = total;
-            d.completed = Array.from(layers.values()).reduce((n, l) => n + l.completed, 0);
-            d.message = ev.status === 'success' ? undefined : attempt > 1 && d.completed ? `Continuing (try ${attempt} of ${MAX})` : undefined;
+      await waitForDownloadTurn(model, ac.signal);
+      d.status = 'downloading';
+      d.message = undefined;
+      try {
+        // Room on disk for this one and any still waiting behind it
+        start('room');
+        const specs = await getSystemSpecs(true);
+        const size = info?.downloadBytes || 0;
+        const others = Array.from(downloads.values()).filter((x) => x.model !== model && x.status === 'queued').reduce((n, x) => n + (catalogModel(x.model)?.downloadBytes || 0), 0);
+        if (size && specs.disk.freeBytes && specs.disk.freeBytes < size + 2e9) throw new Error(`no space left: needs about ${((size + 2e9) / 1e9).toFixed(0)} GB free`);
+        done('room', `Needs ${gbText(size)}${others ? ` (${gbText(size + others)} with the next one)` : ''}; ${gbText(specs.disk.freeBytes)} free`);
+
+        start('connect', 'registry.ollama.ai');
+        if (!EXTERNAL) {
+          const t = Date.now();
+          try {
+            await fetch('https://registry.ollama.ai/v2/', { method: 'HEAD', signal: AbortSignal.timeout(15000) });
+          } catch (e) {
+            throw new Error(`fetch failed: ${(e as Error).message}`);
           }
-          break;
-        } catch (e) {
-          if (ac.signal.aborted) throw e;
-          const raw = round.signal.aborted ? 'stalled' : (e as Error).message || '';
-          if (attempt >= MAX || !retryable(raw)) throw new Error(raw);
-          d.message = `Connection dropped. Trying again (${attempt + 1} of ${MAX})…`;
-          await new Promise((r) => setTimeout(r, Math.min(60_000, 4000 * 2 ** (attempt - 1))));
-        } finally {
-          clearInterval(watchdog);
-          ac.signal.removeEventListener('abort', stopRound);
+          done('connect', `registry.ollama.ai answered in ${Date.now() - t} ms`);
+        } else done('connect', 'Using the AI engine you set up');
+
+        start('download', 'Getting the list of files');
+        let lastSample = { at: Date.now(), bytes: 0 };
+        for (let attempt = 1; ; attempt++) {
+          const round = new AbortController();
+          const stopRound = () => round.abort();
+          ac.signal.addEventListener('abort', stopRound);
+          let lastMove = Date.now();
+          const watchdog = setInterval(() => {
+            if (Date.now() - lastMove > 90_000) round.abort(new Error('stalled'));
+          }, 5000);
+          try {
+            const layers = new Map<string, { total: number; completed: number }>();
+            for await (const ev of ollamaStream<{ status: string; digest?: string; total?: number; completed?: number; error?: string }>('/api/pull', { model, stream: true }, round.signal)) {
+              if (ev.error) throw new Error(ev.error);
+              const now = Date.now();
+              if (ev.digest && ev.total) {
+                const prev = layers.get(ev.digest);
+                if (!prev || (ev.completed || 0) !== prev.completed) lastMove = now;
+                layers.set(ev.digest, { total: ev.total, completed: ev.completed || 0 });
+                const total = Array.from(layers.values()).reduce((n, l) => n + l.total, 0);
+                // Files are announced as they start: until most are listed, the catalog size is the better total
+                if (total) d.total = info?.downloadBytes && total < info.downloadBytes * 0.8 ? info.downloadBytes : total;
+                d.completed = Array.from(layers.values()).reduce((n, l) => n + l.completed, 0);
+                d.parts = { done: Array.from(layers.values()).filter((l) => l.completed >= l.total).length, total: layers.size };
+                // Smoothed speed from at least a second of progress
+                if (now - lastSample.at >= 1000) {
+                  const inst = Math.max(0, d.completed - lastSample.bytes) / ((now - lastSample.at) / 1000);
+                  if (lastSample.bytes || d.completed < d.total) d.speed = d.speed ? d.speed * 0.7 + inst * 0.3 : inst;
+                  lastSample = { at: now, bytes: d.completed };
+                }
+                d.eta = d.speed ? Math.max(1, (d.total - d.completed) / d.speed) : undefined;
+                Object.assign(step('download'), {
+                  progress: d.total ? d.completed / d.total : 0,
+                  eta: d.eta,
+                  detail: [`${gbText(d.completed)} of ${gbText(d.total)}`, d.speed ? `${(d.speed / 1e6).toFixed(1)} MB/s` : '', d.parts.total > 1 ? `part ${Math.min(d.parts.done + 1, d.parts.total)} of ${d.parts.total}` : '', attempt > 1 ? `try ${attempt} of ${MAX}` : '']
+                    .filter(Boolean)
+                    .join(' · '),
+                });
+              } else {
+                lastMove = now;
+                const st = ev.status || '';
+                if (/^pulling manifest/.test(st)) step('download').detail = 'Getting the list of files';
+                else if (/verifying/.test(st)) {
+                  if (step('download').status === 'running') done('download', `${gbText(d.total)}${d.speed ? ` at ${(d.speed / 1e6).toFixed(1)} MB/s` : ''}`);
+                  if (step('verify').status === 'pending') start('verify', 'Making sure every file arrived intact');
+                } else if (/writing manifest/.test(st)) step('verify').detail = 'Adding it to the list of models';
+                else if (/removing/.test(st)) step('verify').detail = 'Tidying up leftovers';
+              }
+              d.message = attempt > 1 && d.completed ? `Continuing (try ${attempt} of ${MAX})` : undefined;
+            }
+            break;
+          } catch (e) {
+            if (ac.signal.aborted) throw e;
+            const raw = round.signal.aborted ? 'stalled' : (e as Error).message || '';
+            if (attempt >= MAX || !retryable(raw)) throw new Error(raw);
+            const wait = Math.min(60_000, 4000 * 2 ** (attempt - 1));
+            d.message = `Connection dropped. Trying again (${attempt + 1} of ${MAX})…`;
+            step('download').detail = `Connection dropped. Trying again in ${Math.round(wait / 1000)} s (${attempt + 1} of ${MAX}); it continues where it stopped`;
+            await sleep(wait);
+          } finally {
+            clearInterval(watchdog);
+            ac.signal.removeEventListener('abort', stopRound);
+          }
         }
+        if (step('download').status === 'running') done('download', `${gbText(d.total)}${d.speed ? ` at ${(d.speed / 1e6).toFixed(1)} MB/s` : ''}`);
+        if (step('verify').status === 'pending') start('verify');
+        done('verify', 'Every file checks out');
+      } finally {
+        // The next model starts downloading now, while this one is loaded and tested
+        if (downloadingNow === model) downloadingNow = undefined;
       }
-      // Downloaded: make sure it actually runs here before calling it Ready
       d.status = 'verifying';
       d.completed = d.total;
-      d.message = 'Making sure it works on your server…';
-      await ollama('/api/generate', { model, prompt: 'Reply with the single word OK.', stream: false, think: catalogModel(model)?.think ?? false, options: { num_predict: 16 } }, 'POST', 10 * 60 * 1000);
+      d.speed = undefined;
+      d.eta = undefined;
+
+      // One model in memory at a time for testing
+      const prev = testing;
+      let release!: () => void;
+      testing = new Promise<void>((r) => (release = r));
+      try {
+        if (step('load').status === 'pending') step('load').detail = 'Waiting for the other model’s test to finish';
+        d.message = 'Downloaded. Waiting to be tested';
+        await prev;
+        if (ac.signal.aborted) throw new Error('cancelled');
+        d.message = undefined;
+        const specs = await getSystemSpecs(true);
+        const est = speedOf(model, specs).loadSecs || 10;
+        start('load', `${gbText(info?.memoryBytes || d.total)} into memory (RAM). The AI reads from memory, so this happens before its first answer.`);
+        const t0 = Date.now();
+        const ticker = setInterval(() => {
+          const el = (Date.now() - t0) / 1000;
+          Object.assign(step('load'), { progress: Math.min(0.95, el / est), eta: el < est ? est - el : undefined });
+        }, 500);
+        try {
+          await ollama('/api/generate', { model, keep_alive: '5m', options: { num_ctx: NUM_CTX } }, 'POST', 10 * 60 * 1000);
+        } finally {
+          clearInterval(ticker);
+        }
+        const loadMs = Date.now() - t0;
+        recordSpeed(model, { load_duration: loadMs * 1e6 }, { promptChars: 0, expectedNewChars: 0, fresh: false, measureOnly: true });
+        done('load', `Loaded in ${secsText(loadMs / 1000)}. It lets go of the memory a few minutes after it was last used.`);
+
+        // A real (short) answer: proves it works here, and measures how fast it reads and writes
+        start('test', 'Reading a short passage');
+        let wrote = '';
+        let stats: EngineStats = {};
+        for await (const ch of ollamaStream<{ response?: string; thinking?: string; done?: boolean; error?: string } & EngineStats>(
+          '/api/generate',
+          { model, prompt: TEST_PROMPT, stream: true, think: info?.think ?? false, options: { num_ctx: NUM_CTX, temperature: 0, num_predict: 48 } },
+          AbortSignal.any([ac.signal, AbortSignal.timeout(10 * 60 * 1000)])
+        )) {
+          if (ch.error) throw new Error(ch.error);
+          if (ch.response || ch.thinking) {
+            wrote += ch.response || ch.thinking || '';
+            step('test').detail = `Writing its answer: ${Math.max(1, Math.round(wrote.length / 4.8))} words`;
+          }
+          if (ch.done) stats = ch;
+        }
+        recordSpeed(model, stats, { promptChars: TEST_PROMPT.length, expectedNewChars: TEST_PROMPT.length, fresh: true, measureOnly: true });
+        const sp = speedOf(model, specs);
+        done('test', `Works. On your server it reads about ${Math.round(sp.prefill * 0.75)} words a second and writes about ${Math.max(1, Math.round(sp.gen * 0.75))}`);
+      } finally {
+        release();
+      }
       d.status = 'done';
       d.message = undefined;
       record('info', 'system', `AI model ${model} is ready`, { model });
+      // The last model tested is the one in memory: put the everyday model back for the first question
+      if (!Array.from(downloads.values()).some((x) => ['queued', 'downloading', 'verifying'].includes(x.status))) void loadEverydayModel(model);
     } catch (e) {
       d.status = ac.signal.aborted ? 'cancelled' : 'failed';
-      d.message = ac.signal.aborted ? 'Cancelled' : plainPullError((e as Error).message || '');
+      const why = ac.signal.aborted ? 'Cancelled' : plainPullError((e as Error).message || '');
+      d.message = why;
+      for (const x of d.steps) if (x.status === 'running') Object.assign(x, { status: 'failed', detail: why, progress: undefined, eta: undefined, ms: Date.now() - (x.startedAt || Date.now()) });
       if (!ac.signal.aborted) record('warn', 'system', `Couldn’t get AI model ${model} ready`, { model, error: (e as Error).message });
     } finally {
       aborts.delete(model);
@@ -541,6 +756,52 @@ export function installModel(model: string): Download {
     }
   })();
   return d;
+}
+
+/** After installing, have the quick helper in memory (not the model tested last) so the first question starts at once */
+async function loadEverydayModel(justTested: string) {
+  const s = getAiSettings();
+  const everyday = s.auto === false ? s.fixerModel : s.quickModel;
+  if (!everyday || everyday === justTested) return;
+  if (!(await installedModels()).some((m) => m.id === everyday)) return;
+  try {
+    await ollama('/api/generate', { model: everyday, keep_alive: '5m', options: { num_ctx: NUM_CTX } }, 'POST', 10 * 60 * 1000);
+  } catch {
+    // it loads with the first question instead
+  }
+}
+
+/**
+ * The recommended models as one pipeline: disk space is checked for all of them up front (so it
+ * doesn't fail halfway), each gets its role, and they download back to back, smallest first, each
+ * tested while the next downloads.
+ */
+export interface Bundle {
+  models: string[];
+  startedAt: string;
+  neededBytes: number;
+  freeBytes: number;
+}
+let bundle: Bundle | undefined;
+
+export async function installBundle(items: { model: string; role: 'quick' | 'fixer' | 'both' }[]): Promise<Bundle> {
+  const list = items.filter((i) => catalogModel(i.model));
+  if (!list.length) throw new Error('Nothing to download.');
+  const have = (await installedModels()).map((m) => m.id);
+  const todo = list.filter((i) => !have.includes(i.model)).sort((a, b) => catalogModel(a.model)!.downloadBytes - catalogModel(b.model)!.downloadBytes);
+  const neededBytes = todo.reduce((n, i) => n + catalogModel(i.model)!.downloadBytes, 0);
+  const specs = await getSystemSpecs(true);
+  if (neededBytes && specs.disk.freeBytes && specs.disk.freeBytes < neededBytes + 2e9)
+    throw new Error(`Not enough disk space: these need about ${gbText(neededBytes + 2e9)} and ${gbText(specs.disk.freeBytes)} is free.`);
+  const patch: Partial<AiSettings> = {};
+  for (const i of list) {
+    if (i.role === 'quick' || i.role === 'both') patch.quickModel = i.model;
+    if (i.role === 'fixer' || i.role === 'both') patch.fixerModel = i.model;
+  }
+  saveAiSettings(patch);
+  bundle = { models: todo.map((i) => i.model), startedAt: new Date().toISOString(), neededBytes, freeBytes: specs.disk.freeBytes };
+  for (const i of todo) installModel(i.model);
+  return bundle;
 }
 
 export function cancelDownload(model: string) {
@@ -565,7 +826,7 @@ export async function removeModel(model: string): Promise<void> {
 
 /** The model to use for a job: the chosen one if installed, else anything installed */
 export async function modelFor(role: 'quick' | 'fixer'): Promise<string | undefined> {
-  const installed = (await installedModels()).map((m) => m.id);
+  const installed = await usableModels();
   const s = getAiSettings();
   const pick = role === 'quick' ? s.quickModel : s.fixerModel;
   if (pick && installed.includes(pick)) return pick;
@@ -594,11 +855,13 @@ export async function aiStatus() {
     specs,
     budgetBytes: aiMemoryBudget(specs),
     recommended: recommend(specs),
-    catalog: CATALOG.map((m) => ({ ...m, ...fitOf(m, specs), seconds: estimateSeconds(m, specs), measured: Boolean(speedStore()[m.id]?.samples), installed: installed.some((i) => i.id === m.id) })),
+    catalog: CATALOG.map((m) => ({ ...m, ...fitOf(m, specs), seconds: estimateSeconds(m, specs), measured: Boolean(speedStore()[m.id]?.samples), installed: installed.some((i) => i.id === m.id) && !settingUp(m.id) })),
     installed,
     downloads: Array.from(downloads.values()),
+    bundle,
     settings,
-    ready: installed.length > 0,
+    // Ready once a model is downloaded *and* tested (the engine lists it as soon as its files arrive)
+    ready: installed.some((m) => !settingUp(m.id)),
   };
 }
 

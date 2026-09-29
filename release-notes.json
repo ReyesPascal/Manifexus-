@@ -18,6 +18,10 @@
         "Activity → Commands. A learning log of every command behind your recent changes, and How It Was Done on every activity."
       ],
       "improved": [
+        "A new setup for Ask Manifexus. The first time you tap Ask or Fix with AI, a few short steps walk you through it: pick the AI models (picked for your server), what it may do, what it may look at, and how hard it thinks. The download starts as soon as you pick the models and keeps going while you choose the rest.",
+        "New: choose what the AI may look at. App logs, files on your server, Activity and Restore, and server details can each be turned off (also in AI Settings). Passwords, tokens and keys are always hidden from it.",
+        "The recommended models download as one pipeline with one progress view: disk space is checked for all of them first, they download one after another (smallest first), and each is checked, loaded into memory and given a test answer while the next one downloads, so everything is ready sooner.",
+        "Every step of getting a model ready is shown as it happens, with download speed, time left, which part it's on, loading into memory, and a test answer that measures how fast it is on your server. If Ask was opened from Fix with AI, it starts on your problem as soon as it's ready.",
         "While Ask Manifexus works, you see each step as it happens: what it looked up, which model is reading and how much, a progress bar with the time left, and how long every step took. When it's done, it folds into one line you can open again.",
         "Much faster fixes. Manifexus looks up the obvious things (the file or app in question) before the AI starts, and small file changes are written as a one-line edit instead of the whole file, so a fix like a wrong setting takes one AI round instead of several.",
         "Choose Automatically (new in AI Settings, on by default). Each request gets the right model and amount of thinking: quick questions stay quick, tricky problems go to the fixer and think it through, and if the quick helper gets stuck the fixer takes over. The fixer only runs when there's enough free memory at that moment.",

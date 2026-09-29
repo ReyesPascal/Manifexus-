@@ -226,6 +226,7 @@ const ROUTES: [string, RegExp, Describer][] = [
   ['POST', /^\/api\/ai\/settings$/, () => ({ type: 'settings', title: 'Change AI settings' })],
   ['POST', /^\/api\/ai\/engine\/install$/, () => ({ type: 'settings', title: 'Install the AI engine' })],
   ['POST', /^\/api\/ai\/models\/install$/, (_r, b) => ({ type: 'settings', title: `Download AI model ${b?.model || ''}`.trim() })],
+  ['POST', /^\/api\/ai\/models\/install-bundle$/, () => ({ type: 'settings', title: 'Download the recommended AI models' })],
   ['POST', /^\/api\/ai\/models\/cancel$/, (_r, b) => ({ type: 'settings', title: `Cancel download of AI model ${b?.model || ''}`.trim() })],
   ['POST', /^\/api\/ai\/chat$/, (_r, b) => {
     const list = Array.isArray(b?.messages) ? b.messages : [];

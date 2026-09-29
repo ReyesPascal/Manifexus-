@@ -16,7 +16,7 @@ import { listRestorePoints } from './restoreService';
 import { getRegisteredCreatedStacks } from './stackService';
 import { resolveBackupDir, saveMergeHistoryRecord, MergeHistoryRecord } from './historyService';
 import { getSystemSpecs } from './systemSpecs';
-import { getAiSettings, modelFor, ollama, ollamaStream, catalogModel, Freedom, NUM_CTX, speedOf, recordSpeed, EngineStats, fitsNow } from './aiService';
+import { getAiSettings, modelFor, ollama, ollamaStream, catalogModel, Freedom, NUM_CTX, speedOf, recordSpeed, EngineStats, fitsNow, AiAccess, AiSettings } from './aiService';
 import { planRoute, thinkFor, thinkLabel, taskLabel, effortLabel, Think } from './aiRouter';
 import type { DeepContainerMetadata } from '../src/types';
 import { explain, Explain } from './commandLog';
@@ -175,8 +175,22 @@ const READ_TOOLS: ToolDef[] = [
   tool('docker_overview', 'Networks, volumes, and which host ports are in use by which app.'),
 ];
 
-function changeTool(freedom: Freedom): ToolDef {
-  const types = ['restart', 'start', 'stop', 'edit_file', 'write_file', 'compose_up', 'remove_container', ...(freedom === 'expert' ? ['run_command'] : [])];
+/** Which lookups each kind of access allows (apps, stacks and Diagnostics are always allowed) */
+const ACCESS_TOOLS: Record<keyof AiAccess, string[]> = {
+  logs: ['app_logs'],
+  files: ['read_file', 'list_folder'],
+  history: ['activity', 'restore_points'],
+  server: ['server_specs', 'docker_overview'],
+};
+
+export function allowedTool(name: string, access: AiAccess): boolean {
+  for (const [k, names] of Object.entries(ACCESS_TOOLS)) if (names.includes(name)) return access[k as keyof AiAccess];
+  return true;
+}
+
+function changeTool(freedom: Freedom, access: AiAccess): ToolDef {
+  // Without seeing files it can't change them safely
+  const types = ['restart', 'start', 'stop', ...(access.files ? ['edit_file', 'write_file'] : []), 'compose_up', 'remove_container', ...(freedom === 'expert' ? ['run_command'] : [])];
   return tool(
     'propose_changes',
     'Propose changes for the person to review. Nothing happens until they approve. edit_file replaces the exact text `find` in a file with `replace` (best for small changes). write_file writes the COMPLETE content of a new or rewritten file. ' +
@@ -358,6 +372,7 @@ async function buildPlan(args: { title?: string; explanation?: string; actions?:
   if (!actions.length) return { problem: 'The plan has no actions.' };
   const steps: PlanStep[] = [];
   for (const act of actions) {
+    if ((act.type === 'edit_file' || act.type === 'write_file') && !getAiSettings().access.files) return { problem: 'Changing files is off: the person hasn’t allowed looking at files. Use the other actions, or explain the change in words.' };
     // A small edit becomes the whole new file, so it's reviewed, backed up and run like any file change
     if (act.type === 'edit_file') {
       const edited = await applyEdit(act);
@@ -488,7 +503,8 @@ type Msg = any;
  * them (and of the tool list) in memory: on a CPU that saves the slowest part of every answer.
  * Everything that changes (the apps right now, what the person is looking at) goes in their message.
  */
-function systemPrompt(freedom: Freedom): string {
+function systemPrompt(freedom: Freedom, access?: AiAccess): string {
+  const off = access ? (Object.keys(ACCESS_WORDS) as (keyof AiAccess)[]).filter((k) => !access[k]).map((k) => ACCESS_WORDS[k]) : [];
   return [
     'You are the assistant built into Manifexus, a dashboard for the Docker apps on this person’s home server.',
     'Your tools can look at apps, stacks, files, logs, Activity, Restore, Diagnostics and the server. Look before you answer; never guess names, paths or causes. Some things may already be looked up for you: use them, don’t look them up again.',
@@ -498,6 +514,7 @@ function systemPrompt(freedom: Freedom): string {
       : 'When something should change, call propose_changes with every step and a plain explanation. Nothing happens until the person approves; they see a before/after of every file, and Manifexus backs everything up first so it can be undone.',
     'For a small change to a file, use edit_file with the exact current text and its replacement; it is much quicker than write_file, which is only for new files or complete rewrites. Prefer the smallest safe fix. Never delete volumes or data folders.',
     'If you are not sure what is wrong, say so, and say what you would check next.',
+    off.length ? `The person has not allowed you to look at ${off.join(', ')}. If you need them, say what you would look at and that they can allow it in AI Settings.` : '',
     [
       'How to write your answer (the person may never have used a terminal):',
       '- Start with one short sentence that gives the answer or the cause, with the key point in **bold**.',
@@ -505,14 +522,21 @@ function systemPrompt(freedom: Freedom): string {
       '- Put names, paths, settings and values in `code`, and file contents or commands in fenced code blocks.',
       '- Plain words; explain any term you must use. No greetings, no filler, no repeating the question. Under 150 words unless they ask for detail.',
     ].join('\n'),
-  ].join('\n\n');
+  ]
+    .filter(Boolean)
+    .join('\n\n');
 }
 
 function userTurn(question: string, snapshot: string, focus?: string): string {
   return [question, '---', 'Context from Manifexus (not typed by the person):', `Apps right now:\n${snapshot}`, focus ? `The person is looking at this:\n${focus}` : ''].filter(Boolean).join('\n\n');
 }
 
-const toolsFor = (freedom: Freedom) => (freedom === 'look' ? READ_TOOLS : [...READ_TOOLS, changeTool(freedom)]);
+const toolsFor = (s: AiSettings) => {
+  const read = READ_TOOLS.filter((t) => allowedTool(t.function.name, s.access));
+  return s.freedom === 'look' ? read : [...read, changeTool(s.freedom, s.access)];
+};
+
+const ACCESS_WORDS: Record<keyof AiAccess, string> = { logs: 'app logs', files: 'files on the server', history: 'Activity and Restore', server: 'details of the server itself' };
 
 async function snapshotText(list?: DeepContainerMetadata[]): Promise<string> {
   const all = list || (await apps().catch(() => []));
@@ -722,8 +746,8 @@ export async function warm(): Promise<void> {
   const model = settings.auto ? await modelFor('quick') : await modelFor('fixer');
   if (!model) return;
   lastWarm = Date.now();
-  const tools = toolsFor(settings.freedom);
-  const convo = [{ role: 'system', content: systemPrompt(settings.freedom) }];
+  const tools = toolsFor(settings);
+  const convo = [{ role: 'system', content: systemPrompt(settings.freedom, settings.access) }];
   const wasLoaded = await modelLoaded(model);
   try {
     const r = await ollama<EngineStats>(
@@ -782,6 +806,7 @@ export async function chat(messages: ChatMessage[], opts: { focus?: string; role
   record('info', 'system', `Asked the AI: ${question.slice(0, 160)}`, { model, task: route.task, effort: route.effort });
 
   // The obvious lookups, all at once, before the AI starts
+  route.lookups = route.lookups.filter((l) => allowedTool(l.name, settings.access));
   if (route.lookups.length) ui.phase({ label: `Looking up ${route.lookups.length === 1 ? 'one thing' : `${route.lookups.length} things`} first`, detail: 'So the AI doesn’t have to ask for them one at a time' });
   const looked = (
     await Promise.all(
@@ -799,8 +824,8 @@ export async function chat(messages: ChatMessage[], opts: { focus?: string; role
     )
   ).filter(Boolean) as { l: { name: string; args: Record<string, unknown> }; result: string }[];
 
-  const tools = toolsFor(freedom);
-  const base: Msg[] = [{ role: 'system', content: systemPrompt(freedom) }, ...history, { role: 'user', content: userTurn(question, await snapshotText(list), opts.focus) }];
+  const tools = toolsFor(settings);
+  const base: Msg[] = [{ role: 'system', content: systemPrompt(freedom, settings.access) }, ...history, { role: 'user', content: userTurn(question, await snapshotText(list), opts.focus) }];
   // What was looked up, in the form the model expects (as if it had asked), for this model and any that takes over
   const evidence: Msg[] = looked.length
     ? [{ role: 'assistant', content: '', tool_calls: looked.map((x) => ({ function: { name: x.l.name, arguments: x.l.args } })) }, ...looked.map((x) => ({ role: 'tool', tool_name: x.l.name, content: x.result }))]
@@ -891,6 +916,11 @@ export async function chat(messages: ChatMessage[], opts: { focus?: string; role
           lastProblem = problem;
           convo.push({ role: 'tool', tool_name: name, content: `The plan was rejected: ${problem}` });
         }
+        continue;
+      }
+      if (!allowedTool(name, settings.access)) {
+        ui.step(`Wanted to use ${name.replace(/_/g, ' ')}, which you haven’t allowed`, 'lookup').fail();
+        convo.push({ role: 'tool', tool_name: name, content: 'Not allowed: the person has turned this off in AI Settings.' });
         continue;
       }
       ui.phase({ label: doingLabel(name, args) });

@@ -92,7 +92,7 @@ import {
 } from './server/restoreService';
 import { systemDiagnostics, systemReport, appDiagnostics, appLogs } from './server/diagnosticsService';
 import { getSystemSpecs } from './server/systemSpecs';
-import { aiStatus, saveAiSettings, installModel, cancelDownload, removeModel, warmUpEngine, catalogModel, stopEngine, installEngineNow } from './server/aiService';
+import { aiStatus, saveAiSettings, installModel, installBundle as installAiBundle, cancelDownload, removeModel, warmUpEngine, catalogModel, stopEngine, installEngineNow } from './server/aiService';
 import { chat as aiChat, runPlan, getPlan, warm as aiWarm } from './server/aiAgent';
 import { learnActivity, recentCommands } from './server/commandLog';
 import { seedAiExample } from './server/aiExample';
@@ -867,6 +867,8 @@ async function startServer() {
     const patch: Record<string, unknown> = {};
     for (const k of ['quickModel', 'fixerModel', 'freedom']) if (k in b) patch[k] = b[k] || undefined;
     if ('auto' in b) patch.auto = b.auto !== false;
+    if (b.access && typeof b.access === 'object') patch.access = b.access;
+    if ('setupAt' in b) patch.setupAt = b.setupAt ? new Date().toISOString() : undefined;
     res.json(saveAiSettings(patch));
   });
 
@@ -878,6 +880,15 @@ async function startServer() {
     if (req.body?.role === 'fixer') saveAiSettings({ fixerModel: model });
     if (req.body?.role === 'both') saveAiSettings({ quickModel: model, fixerModel: model });
     res.json(installModel(model));
+  });
+
+  // The recommended models, set up as one pipeline
+  app.post('/api/ai/models/install-bundle', async (req, res) => {
+    try {
+      res.json(await installAiBundle(Array.isArray(req.body?.items) ? req.body.items : []));
+    } catch (e) {
+      res.status(400).json({ error: (e as Error).message });
+    }
   });
 
   app.post('/api/ai/engine/install', async (_req, res) => {

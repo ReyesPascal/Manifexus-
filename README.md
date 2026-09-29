@@ -56,6 +56,8 @@ Manifexus is a lightweight, self-hosted central command hub that automatically t
 
 ### 8. Ask Manifexus: a built-in AI that stays on your server
 * **Private and free:** the AI engine (Ollama) is built into Manifexus. Models are downloaded once, on request, into `/data/ai`; nothing leaves your network and there are no keys or costs.
+* **Guided setup:** the first time you open Ask (or Fix with AI), a short setup picks the models, what it may do, what it may look at and how hard it thinks. The models download as one pipeline while you choose: one after another, smallest first, each checked, loaded into memory and tested (which also measures its speed on your server) while the next downloads.
+* **Choose what it sees:** app logs, files on the server, Activity and Restore, and server details can each be turned off in setup or AI Settings. Apps, stacks and Diagnostics are always available; passwords, tokens and keys are always hidden.
 * **Picked for your server:** Manifexus reads your processor, memory, graphics card and disk space and recommends a quick helper (explanations, summaries) and a fixer (finding causes, planning fixes) that fit without squeezing your apps. Only one runs at a time, and it frees its memory a few minutes after you're done.
 * **Sees everything Manifexus sees:** apps, stacks, compose and `.env` files, logs, Activity, Restore, Diagnostics and the server itself. Passwords and tokens are always hidden from it.
 * **Fixes with your OK:** proposed changes show a before/after of every file. Making them takes a backup first, uses the same progress tracker as moves, is saved in Restore (Undo This Fix) and recorded in Activity.
