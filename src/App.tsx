@@ -93,7 +93,7 @@ export default function App() {
   };
   // Moves started by dragging an app onto a stack: shown in their new stack straight away while the real
   // move (with a backup, always) runs in the background
-  const [pendingMoves, setPendingMoves] = useState<Record<string, { from: string; service: string; to: string; progress?: MoveProgress }>>({});
+  const [pendingMoves, setPendingMoves] = useState<Record<string, { from: string; service: string; to: string; via?: string[]; progress?: MoveProgress }>>({});
   // A short message at the bottom of the screen (a move finished, or couldn't)
   const [notice, setNotice] = useState<{ text: string; tone?: 'error' } | null>(null);
   useEffect(() => {
@@ -405,115 +405,201 @@ export default function App() {
       console.error('Failed to save the stack icon:', err);
     }
   };
-  // Drag an app onto a stack: it shows there at once, and the move runs in the background with a backup of
-  // the app's own data. A move waits only for earlier moves that touch one of its stacks (where the app comes
-  // from, or where it goes); moves between other stacks run at the same time.
-  const stackQueues = useRef(new Map<string, Promise<void>>());
+  // Drag an app onto a stack: it shows there at once, every time. Behind the scenes each drop is a job; jobs
+  // headed for the same stack are batched into one real move (one change to its file, one start), backed up
+  // as always. A batch waits only while one of its stacks is being changed by another move; batches between
+  // other stacks run at the same time. Dropping an app again changes where it's going (or queues a follow-up
+  // if it's already on its way).
+  type MoveJob = { id: number; visual: string; service: string; helperServices: string[]; name: string; from: string; to: string; running: boolean };
+  const jobs = useRef<MoveJob[]>([]);
+  const jobSeq = useRef(0);
+  const busyStacks = useRef(new Set<string>());
+  const scheduleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const latest = useRef({ fetchData, stackLabel, setPendingMoves, setNotice });
+  latest.current = { fetchData, stackLabel, setPendingMoves, setNotice };
+
+  // What the dashboard shows: one entry per app being moved, through every stack on its way
+  const syncVisual = (visual: string, patch?: Partial<MoveProgress>) => {
+    const mine = jobs.current.filter((j) => j.visual === visual);
+    latest.current.setPendingMoves((p) => {
+      const n = { ...p };
+      if (!mine.length) delete n[visual];
+      else {
+        const first = mine[0];
+        const last = mine[mine.length - 1];
+        const prev = n[visual];
+        n[visual] = {
+          from: first.from,
+          service: first.service,
+          to: last.to,
+          via: Array.from(new Set(mine.flatMap((j) => [j.from, j.to]))),
+          progress: { ...(prev?.progress || { step: 0, since: Date.now(), waiting: true }), ...(patch || {}) },
+        };
+      }
+      return n;
+    });
+  };
+
+  const runBatch = async (to: string, batch: MoveJob[]) => {
+    const { fetchData: refresh, stackLabel: label, setNotice: notify } = latest.current;
+    const where = label(to);
+    const stacks = [to, ...batch.map((j) => j.from)];
+    stacks.forEach((k) => busyStacks.current.add(k));
+    batch.forEach((j) => (j.running = true));
+    const progress = (patch: Partial<MoveProgress>) => batch.forEach((j) => syncVisual(j.visual, patch));
+    progress({ waiting: false, since: Date.now(), step: 0 });
+    const took: (number | undefined)[] = [];
+    const prepStart = Date.now();
+    let text = '';
+    let tone: 'error' | undefined;
+    try {
+      const now = await fetch('/api/containers', { cache: 'no-store' }).then((r) => r.json());
+      const list: DeepContainerMetadata[] = now.containers || [];
+      const find = (proj: string, svc: string) => list.find((x) => x.compose?.project === proj && x.compose?.service === svc && !/__moving_/.test(x.name || ''));
+      const ids: string[] = [];
+      const missing: string[] = [];
+      for (const j of batch) {
+        const app = find(j.from, j.service);
+        if (!app) {
+          missing.push(j.name);
+          continue;
+        }
+        ids.push(app.id, ...(j.helperServices.map((h) => find(j.from, h)).filter(Boolean).map((h) => h!.id)));
+      }
+      if (!ids.length) throw new Error(`${missing.join(', ')} ${missing.length === 1 ? 'isn’t' : 'aren’t'} where ${missing.length === 1 ? 'it was' : 'they were'} anymore`);
+      const dir = list.find((x) => x.compose?.project === to)?.compose?.workingDir || (now.emptyStacks || []).find((e: { project: string }) => e.project === to)?.workingDir;
+      if (!dir) throw new Error(`Manifexus couldn’t find ${where}’s folder`);
+      const pr = await fetch('/api/stacks/plan-merge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sourceContainerIds: ids, targetStackName: to, targetDirectory: dir, mode: 'existing-stack', volumeHandling: 'preserve-absolute' }),
+      });
+      const plan = await pr.json().catch(() => ({}));
+      if (!pr.ok) throw new Error(plan.error || 'the move couldn’t be prepared');
+      took[0] = (Date.now() - prepStart) / 1000;
+      const res = await fetch('/api/stacks/execute-merge-stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sourceContainerIds: ids, targetStackName: plan.targetStackName, targetDirectory: plan.targetDirectory, yamlContent: plan.generatedComposeYaml, backupData: true, backupScope: 'app' }),
+      });
+      if (!res.ok || !res.body) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j.error || `the server answered ${res.status}`);
+      }
+      // Read the progress to its end: completed, failed or put back
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      let outcome: { type: string; log?: string } | null = null;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const parts = buf.split('\n\n');
+        buf = parts.pop() || '';
+        for (const part of parts) {
+          const line = part.split('\n').find((l) => l.startsWith('data: '));
+          if (!line) continue;
+          try {
+            const e = JSON.parse(line.slice(6));
+            if (['completed', 'failed', 'auto_reverted', 'error'].includes(e.type)) outcome = e;
+            if (e.type === 'log' && /waiting for another move/i.test(e.log || '')) progress({ waiting: true });
+            if (e.type === 'step_update' && e.stepIndex && e.status === 'running') progress({ step: e.stepIndex, since: Date.now(), waiting: false });
+            if (e.type === 'step_update' && e.stepIndex && e.status === 'success') {
+              if (e.durationMs) took[e.stepIndex] = e.durationMs / 1000;
+              progress({ step: e.stepIndex, since: Date.now(), done: e.stepIndex, waiting: false });
+            }
+            if (e.type === 'completed') progress({ step: 7, since: Date.now(), done: 6 });
+          } catch {
+            // a malformed line
+          }
+        }
+      }
+      const names = batch.filter((j) => !missing.includes(j.name)).map((j) => j.name);
+      const who = names.length <= 3 ? names.join(', ').replace(/, ([^,]*)$/, ' and $1') : `${names.length} apps`;
+      if (outcome?.type === 'completed') {
+        learnMoveSteps(took);
+        text = `${who} moved to ${where}. You can undo ${names.length === 1 ? 'it' : 'them'} from Restore.`;
+        if (missing.length) {
+          text += ` ${missing.join(', ')} wasn’t moved (it had already moved).`;
+        }
+      } else if (outcome?.type === 'auto_reverted') {
+        text = `${who} couldn’t move (${outcome.log || 'something went wrong'}), so everything was put back.`;
+        tone = 'error';
+      } else {
+        text = `${who} couldn’t move${outcome?.log ? `: ${outcome.log}` : '. Check Activity for what happened.'}`;
+        tone = 'error';
+      }
+    } catch (e) {
+      text = `${batch.map((j) => j.name).join(', ')} couldn’t move: ${(e as Error).message}.`;
+      tone = 'error';
+    }
+    // A failed move ends its app's journey here: its later hops (if any) are dropped too
+    const failedVisuals = tone === 'error' ? new Set(batch.map((j) => j.visual)) : new Set<string>();
+    await refresh(false);
+    jobs.current = jobs.current.filter((j) => !batch.includes(j) && !failedVisuals.has(j.visual));
+    batch.forEach((j) => syncVisual(j.visual));
+    stacks.forEach((k) => busyStacks.current.delete(k));
+    notify({ text, tone });
+    schedule(0);
+  };
+
+  // Start every batch that can go now: all waiting jobs for a stack, if none of their stacks is busy
+  const schedule = (delay = 2500) => {
+    if (scheduleTimer.current) clearTimeout(scheduleTimer.current);
+    scheduleTimer.current = setTimeout(() => {
+      const waiting = jobs.current.filter((j) => !j.running);
+      // An app's first waiting hop only (later hops wait for it)
+      const ready = waiting.filter((j) => !jobs.current.some((k) => k.visual === j.visual && k.id < j.id));
+      const targets = Array.from(new Set(ready.map((j) => j.to)));
+      for (const to of targets) {
+        if (busyStacks.current.has(to)) continue;
+        const batch = ready.filter((j) => j.to === to && !busyStacks.current.has(j.from));
+        if (!batch.length) continue;
+        void runBatch(to, batch);
+      }
+    }, delay);
+  };
+
   const moveInBackground = (appId: string, to: string) => {
     const c = containers.find((x) => x.id === appId);
     if (!c) return;
-    const from = c.compose?.project || '';
-    if (from === to) return;
     const service = c.compose?.service || c.cleanName;
-    const helperServices = (helpersOf.get(c.id) || []).map((h) => h.compose?.service).filter(Boolean) as string[];
-    const key = `${from}/${service}`;
-    if (pendingMoves[key]) return;
-    const name = (c.customName || c.friendlyName || c.cleanName).replace(/^\//, '');
-    const where = stackLabel(to);
-    setPendingMoves((p) => ({ ...p, [key]: { from, service, to, progress: { step: 0, since: Date.now(), waiting: true } } }));
-    const progress = (patch: Partial<MoveProgress>) =>
-      setPendingMoves((p) => (p[key] ? { ...p, [key]: { ...p[key], progress: { ...(p[key].progress as MoveProgress), ...patch } } } : p));
-    const finish = async (text: string, tone?: 'error') => {
-      await fetchData(false);
-      setPendingMoves((p) => {
-        const n = { ...p };
-        delete n[key];
-        return n;
-      });
-      setNotice({ text, tone });
-    };
-    const job = async () => {
-      try {
-        // Fresh details now it's this move's turn (an earlier move may have changed things)
-        progress({ waiting: false, since: Date.now() });
-        const took: (number | undefined)[] = [];
-        const prepStart = Date.now();
-        const now = await fetch('/api/containers', { cache: 'no-store' }).then((r) => r.json());
-        const list: DeepContainerMetadata[] = now.containers || [];
-        const find = (svc: string) => list.find((x) => x.compose?.project === from && x.compose?.service === svc && !/__moving_/.test(x.name || ''));
-        const app = find(service);
-        if (!app) throw new Error('it isn’t in its stack anymore');
-        const dir = list.find((x) => x.compose?.project === to)?.compose?.workingDir || (now.emptyStacks || []).find((e: { project: string }) => e.project === to)?.workingDir;
-        if (!dir) throw new Error(`Manifexus couldn’t find ${where}’s folder`);
-        const ids = [app.id, ...helperServices.map(find).filter(Boolean).map((h) => h!.id)];
-        const pr = await fetch('/api/stacks/plan-merge', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sourceContainerIds: ids, targetStackName: to, targetDirectory: dir, mode: 'existing-stack', volumeHandling: 'preserve-absolute' }),
-        });
-        const plan = await pr.json().catch(() => ({}));
-        if (!pr.ok) throw new Error(plan.error || 'the move couldn’t be prepared');
-        took[0] = (Date.now() - prepStart) / 1000;
-        const res = await fetch('/api/stacks/execute-merge-stream', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            sourceContainerIds: ids,
-            targetStackName: plan.targetStackName,
-            targetDirectory: plan.targetDirectory,
-            yamlContent: plan.generatedComposeYaml,
-            backupData: true,
-            backupScope: 'app',
-          }),
-        });
-        if (!res.ok || !res.body) {
-          const j = await res.json().catch(() => ({}));
-          throw new Error(j.error || `the server answered ${res.status}`);
-        }
-        // Read the progress to its end: completed, failed or put back
-        const reader = res.body.getReader();
-        const dec = new TextDecoder();
-        let buf = '';
-        let outcome: { type: string; log?: string } | null = null;
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buf += dec.decode(value, { stream: true });
-          const parts = buf.split('\n\n');
-          buf = parts.pop() || '';
-          for (const part of parts) {
-            const line = part.split('\n').find((l) => l.startsWith('data: '));
-            if (!line) continue;
-            try {
-              const e = JSON.parse(line.slice(6));
-              if (['completed', 'failed', 'auto_reverted', 'error'].includes(e.type)) outcome = e;
-              // Progress: the server's steps as they start and finish
-              if (e.type === 'log' && /waiting for another move/i.test(e.log || '')) progress({ waiting: true });
-              if (e.type === 'step_update' && e.stepIndex && e.status === 'running') progress({ step: e.stepIndex, since: Date.now(), waiting: false });
-              if (e.type === 'step_update' && e.stepIndex && e.status === 'success' && e.durationMs) took[e.stepIndex] = e.durationMs / 1000;
-              if (e.type === 'step_update' && e.stepIndex && e.status === 'success') progress({ step: e.stepIndex, since: Date.now(), done: e.stepIndex, waiting: false });
-              if (e.type === 'completed') progress({ step: 7, since: Date.now(), done: 6 });
-            } catch {
-              // a malformed line
-            }
-          }
-        }
-        if (outcome?.type === 'completed') learnMoveSteps(took);
-        if (outcome?.type === 'completed') await finish(`${name} moved to ${where}. You can undo it from Restore.`);
-        else if (outcome?.type === 'auto_reverted') await finish(`${name} couldn’t move (${outcome.log || 'something went wrong'}), so everything was put back.`, 'error');
-        else await finish(`${name} couldn’t move${outcome?.log ? `: ${outcome.log}` : '. Check Activity for what happened.'}`, 'error');
-      } catch (e) {
-        await finish(`${name} couldn’t move: ${(e as Error).message}.`, 'error');
+    const project = c.compose?.project || '';
+    // Is this app already on its way somewhere?
+    const visualEntry = Object.entries(pendingMoves).find(([, m]) => m.service === service && (m.via || [m.from, m.to]).includes(project));
+    if (visualEntry) {
+      const [visual] = visualEntry;
+      const mine = jobs.current.filter((j) => j.visual === visual);
+      const last = mine[mine.length - 1];
+      if (!last || last.to === to) return;
+      if (!last.running) {
+        // Not started yet: just change where it's going (or cancel, if it's back where it started)
+        if (last.from === to) jobs.current = jobs.current.filter((j) => j !== last);
+        else last.to = to;
+      } else {
+        // Already moving: go on from there once it arrives
+        jobs.current.push({ ...last, id: ++jobSeq.current, from: last.to, to, running: false });
       }
-    };
-    const queues = stackQueues.current;
-    const stacks = Array.from(new Set([from, to]));
-    const before = stacks.map((k) => queues.get(k)).filter(Boolean) as Promise<void>[];
-    const run: Promise<void> = Promise.all(before).then(job, job);
-    for (const k of stacks) queues.set(k, run);
-    void run.then(() => {
-      for (const k of stacks) if (queues.get(k) === run) queues.delete(k);
+      syncVisual(visual);
+      schedule();
+      return;
+    }
+    if (project === to) return;
+    const visual = `${project}/${service}`;
+    jobs.current.push({
+      id: ++jobSeq.current,
+      visual,
+      service,
+      helperServices: (helpersOf.get(c.id) || []).map((h) => h.compose?.service).filter(Boolean) as string[],
+      name: (c.customName || c.friendlyName || c.cleanName).replace(/^\//, ''),
+      from: project,
+      to,
+      running: false,
     });
+    syncVisual(visual, { step: 0, since: Date.now(), waiting: true });
+    // A short pause (2.5 s after the last drop) lets drops into the same stack go together as one move
+    schedule();
   };
 
   // One-click New Stack: Enter on the name creates it (the folder gets a safe version of the name)
@@ -751,8 +837,8 @@ export default function App() {
     const isAside = (c: DeepContainerMetadata) => /__moving_/.test(c.name || c.cleanName);
     const hasNew = new Set(filteredContainers.filter((c) => !isAside(c)).map((c) => `${c.compose.project}/${c.compose.service}`));
     for (const c of filteredContainers) {
-      const move = pending.find((m) => m.service === c.compose.service && (m.from === c.compose.project || m.to === c.compose.project));
-      if (isAside(c) && (!move || hasNew.has(`${move.to}/${c.compose.service}`))) continue;
+      const move = pending.find((m) => m.service === c.compose.service && (m.via || [m.from, m.to]).includes(c.compose.project || ''));
+      if (isAside(c) && (!move || (move.via || [move.to]).some((st) => hasNew.has(`${st}/${c.compose.service}`)))) continue;
       if (c.compose.isCompose && c.compose.project) {
         const proj = move ? move.to : c.compose.project;
         if (!stacksMap[proj]) {
@@ -800,7 +886,7 @@ export default function App() {
     <AppCard
       key={c.id}
       {...(() => {
-        const m = Object.values(pendingMoves).find((x) => x.service === c.compose.service && (x.from === c.compose.project || x.to === c.compose.project));
+        const m = Object.values(pendingMoves).find((x) => x.service === c.compose.service && (x.via || [x.from, x.to]).includes(c.compose.project || ''));
         return m ? { busy: `Moving to ${stackLabel(m.to)}…`, moveProgress: m.progress } : {};
       })()}
       inStack={inStack}

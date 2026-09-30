@@ -272,8 +272,8 @@ export const AppCard: React.FC<AppCardProps> = ({ container, inStack, stackName,
       // Lets the dashboard glide this card to its new place when stacks change (see ShelfGrid); keyed by the
       // compose service, which stays the same when an app moves to another stack
       data-flip={`app:${container.compose?.service || container.cleanName}`}
-      // Zoomed out, drag it onto another stack to move it there
-      draggable={Boolean(canDrag && !busy)}
+      // Drag it onto another stack to move it there (even while it's moving: it changes where it's going)
+      draggable={Boolean(canDrag)}
       onDragStart={(e) => {
         e.dataTransfer.setData(DRAG_TYPE, container.id);
         e.dataTransfer.effectAllowed = 'move';
