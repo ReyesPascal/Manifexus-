@@ -103,8 +103,14 @@ export default function App() {
   }, [notice]);
   // New Stack: a new stack appears right away with its name ready to type; Enter creates it
   const [draftStack, setDraftStack] = useState(false);
-  // Zoomed out: every stack at once, smaller
-  const [zoomedOut, setZoomedOut] = useState(false);
+  // The dashboard is always shown zoomed out (every stack at once, apps dragged between them), except on a
+  // phone, where cards stay full size to stay readable and easy to tap
+  const [zoomedOut, setZoomedOut] = useState(() => typeof window === 'undefined' || window.innerWidth >= 768);
+  useEffect(() => {
+    const on = () => setZoomedOut(window.innerWidth >= 768);
+    window.addEventListener('resize', on);
+    return () => window.removeEventListener('resize', on);
+  }, []);
   const openMoveForApp = (c: DeepContainerMetadata) => {
     setMoveInitialDestination(undefined);
     setMoveInitialAppId(c.id);
@@ -910,8 +916,6 @@ export default function App() {
           stopped={isLoading ? undefined : stats.stopped}
           ports={isLoading ? undefined : stats.ports}
           onShowPorts={() => setIsPortsOpen(true)}
-          zoomedOut={zoomedOut}
-          onZoom={viewMode === 'compose' ? () => setZoomedOut((z) => !z) : undefined}
           groupItems={[
             { key: 'group', label: 'New Group…', onSelect: () => setIsGroupManagerOpen(true) },
             ...(viewMode === 'groups' ? [{ key: 'edit', label: 'Edit Groups…', divider: true, onSelect: () => setIsGroupManagerOpen(true) }] : []),

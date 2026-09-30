@@ -480,7 +480,7 @@ function placeStacks(apps: number[], C: number): Place[] {
  * a status update or a small window drag doesn't animate. Off for people who ask for reduced motion.
  */
 const lastSeen = new Map<string, { x: number; y: number; at: number }>();
-function useGlide(container: React.RefObject<HTMLElement>, signature: string) {
+function useGlide(container: React.RefObject<HTMLElement>, signature: string, zoom = 1) {
   const prevSig = useRef<string | null>(null);
   useLayoutEffect(() => {
     const root = container.current;
@@ -509,11 +509,12 @@ function useGlide(container: React.RefObject<HTMLElement>, signature: string) {
     for (const [n, d] of deltas) {
       const parent = n.parentElement?.closest<HTMLElement>('[data-flip]');
       const pd = parent ? deltas.get(parent) : undefined;
-      const dx = d.dx - (pd?.dx || 0), dy = d.dy - (pd?.dy || 0);
+      // Measured on screen; inside a zoomed-out dashboard, moves are drawn at that zoom
+      const dx = (d.dx - (pd?.dx || 0)) / zoom, dy = (d.dy - (pd?.dy || 0)) / zoom;
       if (Math.abs(dx) < 2 && Math.abs(dy) < 2) continue;
       const isApp = n.dataset.flip!.startsWith('app:');
       // Apps that change stacks travel further: a touch longer, lifted above the rest while they fly
-      const far = Math.hypot(dx, dy) > 400;
+      const far = Math.hypot(dx, dy) * zoom > 400;
       n.animate(
         [
           { transform: `translate(${dx}px, ${dy}px)${isApp && far ? ' scale(1.03)' : ''}`, zIndex: isApp ? 30 : 1 },
@@ -527,9 +528,11 @@ function useGlide(container: React.RefObject<HTMLElement>, signature: string) {
 
 export const ShelfGrid: React.FC<{ children: React.ReactNode; zoom?: number }> = ({ children, zoom = 1 }) => {
   const ref = useRef<HTMLDivElement>(null);
+  // The room on screen, measured outside the zoom; zoomed out, the dashboard gets 1/zoom times as much
+  const outer = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(() => (typeof window !== 'undefined' ? Math.min(window.innerWidth - 32, 1232) : 1232));
   useEffect(() => {
-    const el = ref.current;
+    const el = outer.current;
     if (!el) return;
     const ro = new ResizeObserver(([e]) => {
       const w = Math.round(e.contentRect.width);
@@ -539,7 +542,7 @@ export const ShelfGrid: React.FC<{ children: React.ReactNode; zoom?: number }> =
     return () => ro.disconnect();
   }, []);
   const items = React.Children.toArray(children).filter(React.isValidElement) as React.ReactElement<{ span?: number; id?: string }>[];
-  const C = Math.max(1, Math.floor((width + GAP) / (MIN_COL + GAP)));
+  const C = Math.max(1, Math.floor((width / zoom + GAP) / (MIN_COL + GAP)));
   // "Not in a Stack" isn't a stack: it sits on its own at the bottom, full width, and never changes how the stacks fit
   const stacks = items.filter((c) => c.props.id !== 'stack:none');
   const loose = items.filter((c) => c.props.id === 'stack:none');
@@ -549,9 +552,10 @@ export const ShelfGrid: React.FC<{ children: React.ReactNode; zoom?: number }> =
   );
   // What the arrangement is: columns, and each stack's place, size and apps (not their status)
   const signature = C + '|' + places.map((p) => `${stacks[p.i].key}@${p.col},${p.row},${p.w}x${p.h}:${stacks[p.i].props.span}`).join(';') + '|' + loose.map((c) => c.props.span).join(',');
-  useGlide(ref, signature);
+  useGlide(ref, signature, zoom);
   return (
     // Zoomed out, the dashboard is drawn smaller, so more columns fit and the stacks re-fit (and glide) to them
+    <div ref={outer}>
     <div ref={ref} className="flex flex-col gap-3 sm:gap-4" style={zoom !== 1 ? ({ zoom } as React.CSSProperties) : undefined}>
       <div className="grid gap-3 sm:gap-4" style={{ gridTemplateColumns: `repeat(${C}, minmax(0, 1fr))` }}>
         {places.map(({ i, col, row, w, h }) => (
@@ -570,6 +574,7 @@ export const ShelfGrid: React.FC<{ children: React.ReactNode; zoom?: number }> =
           <CellCols.Provider value={C}>{c}</CellCols.Provider>
         </div>
       ))}
+    </div>
     </div>
   );
 };

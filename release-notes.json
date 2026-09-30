@@ -4,14 +4,17 @@
     {
       "version": "1.11",
       "date": "2026-09-29",
-      "headline": "Much faster drag-and-drop moves.",
+      "headline": "Every stack at a glance, and faster, safer drag-and-drop moves.",
       "new": [],
       "improved": [
+        "The dashboard now always shows every stack at once (zoomed out), so you can drag apps between stacks without scrolling. Phones keep full-size cards so they stay easy to read and tap.",
         "Moving an app by dragging it is much faster: Manifexus backs up just that app's own data (its volumes and the folders it keeps in its stack), instead of both whole stacks. Shared folders like a media library are left alone, as a move never touches them. You can still undo every move from Restore.",
         "Drop several apps in a row and they move one after another, in the order you dropped them, so two moves never change the same stack at once."
       ],
       "fixed": [
-        "After an app finishes moving, the stacks no longer shift a second time: apps keep the same order (by name) before and after a move."
+        "After an app finishes moving, the stacks no longer shift a second time: apps keep the same order (by name) before and after a move.",
+        "Moves no longer run at the same time. Two moves into the same stack could overwrite each other and fail (\"no such service\"); now each waits its turn, even from another browser tab.",
+        "Zoomed out, stacks no longer run past the right edge of the window, and they glide straight to their new places instead of overshooting."
       ]
     },
     {

@@ -158,6 +158,10 @@ async function startServer() {
     };
   }
 
+  // Moves run one at a time (see execute-merge-stream)
+  let moveLock: Promise<void> = Promise.resolve();
+  let moveBusy = false;
+
   // Server Changes: while it's off, nothing that changes the server runs (moves, restores, fixes,
   // new or deleted stacks, cleanup). Looking, and starting, stopping or restarting apps, always work.
   const CHANGE_ROUTES: RegExp[] = [
@@ -846,6 +850,14 @@ async function startServer() {
         return;
       }
 
+      // One move at a time: two moves changing the same compose file at once would undo each other
+      const turn = moveLock.then(() => undefined);
+      let release: () => void = () => undefined;
+      moveLock = new Promise<void>((r) => (release = r));
+      if (moveBusy) sendEvent({ type: 'log', log: 'Waiting for the move before it to finish…', timestamp: new Date().toISOString() });
+      await turn;
+      moveBusy = true;
+      try {
       // Execute the 7 sequential steps with real-time SSE streaming
       await executeStreamingPipeline(
         {
@@ -860,6 +872,10 @@ async function startServer() {
         },
         sendEvent
       );
+      } finally {
+        moveBusy = false;
+        release();
+      }
     } catch (err) {
       sendEvent({ type: 'failed', log: (err as Error).message });
     } finally {
