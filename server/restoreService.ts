@@ -410,6 +410,18 @@ const servicesOf = (text?: string | null): string[] => {
   }
 };
 
+/** An app both files list, whose settings differ between them (so the restore must recreate it) */
+function changedService(before: string | null | undefined, after: string | null | undefined, name: string): boolean {
+  try {
+    const a = yaml.parse(before || '')?.services?.[name];
+    const b = yaml.parse(after || '')?.services?.[name];
+    if (a === undefined || b === undefined) return false;
+    return JSON.stringify(a) !== JSON.stringify(b);
+  } catch {
+    return true;
+  }
+}
+
 // ----------------------------------------------------------------------------
 // Review: what a restore will do, and whether anything changed since
 // ----------------------------------------------------------------------------
@@ -690,16 +702,36 @@ export async function executeRestore(id: string, emit: Emit, opts: { filesOnly?:
           log(`${t.project}’s apps are all running in other stacks; nothing to start here.`);
           return;
         }
-        // Compose makes the stack match the file: apps no longer in it are removed, missing ones started
-        const up = await runComposeCapture(
-          t.dir,
-          !services.length ? 'down --remove-orphans' : skipped.length && namesOk ? `up -d --remove-orphans ${keep.join(' ')}` : 'up -d --remove-orphans'
-        );
-        if (!up.ok) {
-          const why = composeErrorTail(up.output);
+        // Compose makes the stack match the file: apps no longer in it are removed, missing ones started.
+        // Apps the restore doesn't change are never recreated: a different Compose version (the server's
+        // own vs Manifexus's) sees every container as changed, which would restart the whole stack.
+        const fail = (out: string) => {
+          const why = composeErrorTail(out);
           throw new Error(`Docker couldn’t start ${t.project}${why ? `: ${why.split('\n').pop()}` : '.'}`);
+        };
+        if (!services.length) {
+          const down = await runComposeCapture(t.dir, 'down --remove-orphans');
+          if (!down.ok) fail(down.output);
+          log(`${t.project} has no apps.`);
+          return;
         }
-        log(services.length ? `${t.project} is running.` : `${t.project} has no apps.`);
+        const only = skipped.length && namesOk ? ` ${keep.join(' ')}` : '';
+        const up = await runComposeCapture(t.dir, `up -d --no-recreate --remove-orphans${only}`);
+        if (!up.ok) fail(up.output);
+        // Then apply the changes: recreate just the apps whose settings this restore changed
+        const changed = keep.filter((n) => changedService(current, compose, n));
+        if (changed.length) {
+          if (!changed.every((n) => /^[A-Za-z0-9._-]+$/.test(n))) {
+            const all = await runComposeCapture(t.dir, `up -d --remove-orphans${only}`);
+            if (!all.ok) fail(all.output);
+          } else {
+            const re = await runComposeCapture(t.dir, `up -d --no-deps ${changed.join(' ')}`);
+            if (!re.ok) fail(re.output);
+            log(`Updated ${joinNames(changed)} with ${changed.length === 1 ? 'its' : 'their'} restored settings.`);
+          }
+        }
+        const untouched = keep.filter((n) => servicesOf(current).includes(n) && !changed.includes(n));
+        log(`${t.project} is running.${untouched.length ? ` ${joinNames(untouched)} kept running without a restart.` : ''}`);
       });
     }
 

@@ -556,7 +556,7 @@ function placeStacks(apps: number[], C: number, ids: string[]): Place[] {
  * a status update or a small window drag doesn't animate. Off for people who ask for reduced motion.
  */
 const lastSeen = new Map<string, { x: number; y: number; at: number }>();
-function useGlide(container: React.RefObject<HTMLElement>, signature: string, zoom = 1) {
+function useGlide(container: React.RefObject<HTMLElement | null>, signature: string, zoom = 1) {
   const prevSig = useRef<string | null>(null);
   useLayoutEffect(() => {
     const root = container.current;

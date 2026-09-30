@@ -11,7 +11,8 @@
         "Folders it shares with other apps, like a media library or downloads, are never touched, and the screen tells you which ones those are."
       ],
       "fixed": [
-        "Restore now puts back an app's own data even when the rest of its stack is still there."
+        "Restore now puts back an app's own data even when the rest of its stack is still there.",
+        "Restoring a stack no longer restarts its other apps. Only the apps the restore brings back or changes are started; everything else keeps running."
       ]
     },
     {
