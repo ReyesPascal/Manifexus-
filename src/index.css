@@ -107,8 +107,30 @@ body {
   background: #0a0f1d;
 }
 
-/* An app card being dragged to another stack: its place stays faintly visible */
-.mfx-dragging { opacity: 0.4; }
+/* App cards lift and grow when you point at one (bigger when the dashboard is zoomed out, so it's easy to
+   read), and shrink back while you drag it. Uses `scale`, not `transform`, so it never fights the glide.
+   The stack it's in comes forward too, so the card is never drawn under the next stack. */
+[data-lift] {
+  transition: scale 280ms cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 280ms ease, background-color 200ms ease, opacity 200ms ease;
+}
+@media (hover: hover) and (pointer: fine) {
+  [data-lift]:hover:not(.mfx-dragging) {
+    scale: var(--mfx-lift, 1.05);
+    z-index: 20;
+    background-color: rgba(40, 48, 74, 0.97) !important;
+    box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.16), 0 24px 48px -16px rgba(0, 0, 0, 0.75), 0 8px 18px -8px rgba(0, 0, 0, 0.5);
+    /* A moment before it grows, so sweeping across the dashboard doesn't make every card jump */
+    transition-delay: 90ms;
+  }
+  .mfx-lift-host:has([data-lift]:hover) { z-index: 15; position: relative; }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-lift] { transition: background-color 200ms ease; }
+  [data-lift]:hover { scale: none !important; }
+}
+
+/* An app card being dragged to another stack: it shrinks back into place and stays faintly visible */
+.mfx-dragging { opacity: 0.4; scale: 0.94; }
 
 /* A new stack pops in */
 @keyframes mfx-pop {

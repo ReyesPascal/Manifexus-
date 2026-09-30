@@ -576,7 +576,18 @@ function useGlide(container: React.RefObject<HTMLElement>, signature: string, zo
       const id = n.dataset.flip!;
       if (count.get(id)! > 1) continue;
       const r = n.getBoundingClientRect();
-      const pos = { x: r.left + window.scrollX, y: r.top + window.scrollY, at: now };
+      // A card you're pointing at is drawn bigger around its middle: measure where it really sits
+      let left = r.left, top = r.top;
+      if (n.hasAttribute('data-lift')) {
+        const cs = getComputedStyle(n);
+        const sc = cs.scale && cs.scale !== 'none' ? parseFloat(cs.scale) : 1;
+        if (sc && sc !== 1) {
+          const [ox, oy] = cs.transformOrigin.split(' ').map((v) => parseFloat(v) || 0);
+          left -= ox * zoom * (1 - sc);
+          top -= oy * zoom * (1 - sc);
+        }
+      }
+      const pos = { x: left + window.scrollX, y: top + window.scrollY, at: now };
       const before = lastSeen.get(id);
       lastSeen.set(id, pos);
       if (!animate || !before || now - before.at > 5 * 60 * 1000) continue;
@@ -640,13 +651,19 @@ export const ShelfGrid: React.FC<{ children: React.ReactNode; zoom?: number }> =
   return (
     // Zoomed out, the dashboard is drawn smaller, so more columns fit and the stacks re-fit (and glide) to them
     <div ref={outer}>
-    <div ref={ref} className="flex flex-col gap-3 sm:gap-4" style={zoom !== 1 ? ({ zoom } as React.CSSProperties) : undefined}>
+    <div
+      ref={ref}
+      data-zoom={zoom}
+      className="flex flex-col gap-3 sm:gap-4"
+      // How much an app card grows when you point at it: to about full size when zoomed out, a gentle lift otherwise
+      style={{ ...(zoom !== 1 ? { zoom } : null), ['--mfx-lift' as string]: zoom < 1 ? String(Math.min(1.5, 0.95 / zoom)) : '1.05' } as React.CSSProperties}
+    >
       <div className="grid gap-3 sm:gap-4" style={{ gridTemplateColumns: `repeat(${C}, minmax(0, 1fr))` }}>
         {places.map(({ i, col, row, w, h, cols }) => (
           <div
             key={stacks[i].key ?? i}
             data-flip={`stack:${stacks[i].props.id ?? stacks[i].key}`}
-            className="flex flex-col min-w-0"
+            className="mfx-lift-host flex flex-col min-w-0"
             style={{ gridColumn: `${col + 1} / span ${w}`, gridRow: `${row + 1} / span ${h}` }}
           >
             <CellCols.Provider value={cols}>{stacks[i]}</CellCols.Provider>
@@ -654,7 +671,7 @@ export const ShelfGrid: React.FC<{ children: React.ReactNode; zoom?: number }> =
         ))}
       </div>
       {loose.map((c, i) => (
-        <div key={c.key ?? `loose${i}`} className="flex flex-col min-w-0 mt-2 sm:mt-3">
+        <div key={c.key ?? `loose${i}`} className="mfx-lift-host flex flex-col min-w-0 mt-2 sm:mt-3">
           <CellCols.Provider value={C}>{c}</CellCols.Provider>
         </div>
       ))}

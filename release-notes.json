@@ -8,7 +8,9 @@
       "new": [
         "A stack whose apps aren't running right now (taken down, or never started) shows how many apps it has and a Start button that brings them all up."
       ],
-      "improved": [],
+      "improved": [
+        "Point at an app card and it grows so it's easy to read, lifting above the stacks around it. Start dragging it and it shrinks back to its normal size, so it's easy to drop into another stack."
+      ],
       "fixed": [
         "Stacks could go missing from the dashboard when none of their apps were there, for example after moving all of them away. Manifexus now finds every stack folder in your stacks location, and next to your other stacks, even though those folders aren't shared with it.",
         "Tips that appear when you point at something were sometimes hidden behind the search field or the stacks. Every tip in the app now shows on top, stays inside the window, and has the same look (keyboard focus shows them too)."

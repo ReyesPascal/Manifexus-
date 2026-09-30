@@ -273,14 +273,47 @@ export const AppCard: React.FC<AppCardProps> = ({ container, inStack, stackName,
       // compose service, which stays the same when an app moves to another stack
       data-flip={`app:${container.compose?.service || container.cleanName}`}
       // Drag it onto another stack to move it there (even while it's moving: it changes where it's going)
+      data-lift=""
+      // Grows toward the middle of the screen, so near an edge it's never cut off
+      onPointerEnter={(e) => {
+        if (e.pointerType === 'touch') return;
+        const el = e.currentTarget;
+        const r = el.getBoundingClientRect();
+        const lift = parseFloat(getComputedStyle(el).getPropertyValue('--mfx-lift')) || 1.05;
+        const growX = (r.width * (lift - 1)) / 2, growY = (r.height * (lift - 1)) / 2;
+        const x = r.left - growX < 8 ? 'left' : r.right + growX > window.innerWidth - 8 ? 'right' : 'center';
+        const y = r.top - growY < 8 ? 'top' : r.bottom + growY > window.innerHeight - 8 ? 'bottom' : 'center';
+        el.style.transformOrigin = `${x} ${y}`;
+      }}
       draggable={Boolean(canDrag)}
       onDragStart={(e) => {
         e.dataTransfer.setData(DRAG_TYPE, container.id);
         e.dataTransfer.effectAllowed = 'move';
-        e.currentTarget.classList.add('mfx-dragging');
+        const el = e.currentTarget;
+        // What you carry is the card at its normal (small) size, not the grown one under the pointer
+        const r = el.getBoundingClientRect();
+        const cs = getComputedStyle(el);
+        const sc = cs.scale && cs.scale !== 'none' ? parseFloat(cs.scale) : 1;
+        if (sc > 1.01) {
+          const zoomEl = el.closest<HTMLElement>('[data-zoom]');
+          const z = zoomEl ? parseFloat(zoomEl.dataset.zoom || '1') || 1 : 1;
+          const ghost = document.createElement('div');
+          ghost.style.cssText = `position:fixed;top:-2000px;left:-2000px;pointer-events:none;zoom:${z}`;
+          const copy = el.cloneNode(true) as HTMLElement;
+          copy.removeAttribute('data-lift');
+          copy.removeAttribute('data-flip');
+          copy.style.cssText = `width:${el.offsetWidth}px;height:${el.offsetHeight}px;scale:none;transform:none;background:rgba(40,48,74,0.97);border-radius:18px;box-shadow:0 18px 40px -12px rgba(0,0,0,0.7)`;
+          ghost.appendChild(copy);
+          document.body.appendChild(ghost);
+          // Keep the same spot of the card under the pointer
+          const fx = (e.clientX - r.left) / r.width, fy = (e.clientY - r.top) / r.height;
+          e.dataTransfer.setDragImage(ghost.firstChild as Element, fx * el.offsetWidth * z, fy * el.offsetHeight * z);
+          setTimeout(() => ghost.remove(), 0);
+        }
+        el.classList.add('mfx-dragging');
       }}
       onDragEnd={(e) => e.currentTarget.classList.remove('mfx-dragging')}
-      className={`group/card relative flex flex-col gap-4 rounded-[18px] p-4 cursor-pointer text-left transition-colors ${busyLabel || container.state === 'restarting' ? 'mfx-busy' : ''} focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0A84FF] ${
+      className={`group/card relative flex flex-col gap-4 rounded-[18px] p-4 cursor-pointer text-left ${busyLabel || container.state === 'restarting' ? 'mfx-busy' : ''} focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0A84FF] ${
         running ? 'bg-white/[0.07] hover:bg-white/[0.10]' : 'bg-white/[0.045] hover:bg-white/[0.075]'
       }`}
       style={{ fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", Roboto, sans-serif' }}
