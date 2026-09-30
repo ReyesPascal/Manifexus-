@@ -4,12 +4,17 @@
     {
       "version": "1.10",
       "date": "2026-09-29",
-      "headline": "Stacks glide into place, and turn to fill the gaps.",
-      "new": [],
+      "headline": "Drag apps between stacks, see everything at once, and make a stack in one click.",
+      "new": [
+        "Drag and drop. Drag an app onto another stack and it moves there right away. The real move runs in the background, backed up every time, and a message tells you when it's done (you can undo it from Restore). The stack glows while you drag over it. If something goes wrong, everything is put back and you're told why.",
+        "Zoom Out. See every stack at once, smaller, so moving apps around is easy. Tap Zoom In to go back.",
+        "New Stack in one click. A new stack appears right away with its name ready to type; press Return and it's made."
+      ],
       "improved": [
         "Stacks and apps glide to their new places when something changes: add or move an app, or resize the window, and you can follow where everything went. An app moved to another stack flies across to it. Turned off if your device is set to reduce motion.",
         "When the usual shapes would leave gaps (on narrower windows especially), a small stack turns, its apps stacked instead of side by side, to fill them.",
-        "A stack that sits beside taller neighbours spreads its apps evenly instead of leaving empty space at the bottom."
+        "A stack that sits beside taller neighbours spreads its apps evenly instead of leaving empty space at the bottom.",
+        "New stacks pop in, and an app that's restarting or moving has a soft blue ring around its card until it's done."
       ],
       "fixed": []
     },

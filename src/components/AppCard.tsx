@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { DeepContainerMetadata, UserGroup } from '../types';
 import { MenuButton, MenuItem } from './ui/ios';
-import { InlineName, RenameButton } from './Shelf';
+import { DRAG_TYPE, InlineName, RenameButton } from './Shelf';
 import { helperKind } from '../appHelpers';
 
 interface AppCardProps {
@@ -22,6 +22,8 @@ interface AppCardProps {
   onMoveApp?: (container: DeepContainerMetadata) => void;
   /** Rename it right on the card (empty goes back to its own name) */
   onRename?: (containerId: string, name: string) => void;
+  /** Something is happening to it in the background, like "Moving to Media…" */
+  busy?: string;
 }
 
 const STATE: Record<string, { label: string; color: string }> = {
@@ -137,7 +139,7 @@ const InfoGlyph = () => (
  * and Move and Details beside it. The bottom row runs it: one clear action (Open its web page, or
  * Start it) with Restart and Stop beside it. Tapping the card also opens Details.
  */
-export const AppCard: React.FC<AppCardProps> = ({ container, inStack, stackName, helpers = [], hostAddress, groups, onInspect, onAction, onSetPrimaryPort, onMoveApp, onRename }) => {
+export const AppCard: React.FC<AppCardProps> = ({ container, inStack, stackName, helpers = [], hostAddress, groups, onInspect, onAction, onSetPrimaryPort, onMoveApp, onRename, busy }) => {
   const [acting, setActing] = useState<'start' | 'stop' | 'restart'>();
   const [renaming, setRenaming] = useState(false);
   // A new name shows straight away, before the refresh brings it back from the server
@@ -181,7 +183,7 @@ export const AppCard: React.FC<AppCardProps> = ({ container, inStack, stackName,
       : []),
   ];
 
-  const busyLabel = acting === 'start' ? 'Starting…' : acting === 'stop' ? 'Stopping…' : acting === 'restart' ? 'Restarting…' : undefined;
+  const busyLabel = busy || (acting === 'start' ? 'Starting…' : acting === 'stop' ? 'Stopping…' : acting === 'restart' ? 'Restarting…' : undefined);
 
   return (
     <div
@@ -198,7 +200,15 @@ export const AppCard: React.FC<AppCardProps> = ({ container, inStack, stackName,
       // Lets the dashboard glide this card to its new place when stacks change (see ShelfGrid); keyed by the
       // compose service, which stays the same when an app moves to another stack
       data-flip={`app:${container.compose?.service || container.cleanName}`}
-      className={`group/card relative flex flex-col gap-4 rounded-[18px] p-4 cursor-pointer text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0A84FF] ${
+      // Drag it onto another stack to move it there
+      draggable={!busy}
+      onDragStart={(e) => {
+        e.dataTransfer.setData(DRAG_TYPE, container.id);
+        e.dataTransfer.effectAllowed = 'move';
+        e.currentTarget.classList.add('mfx-dragging');
+      }}
+      onDragEnd={(e) => e.currentTarget.classList.remove('mfx-dragging')}
+      className={`group/card relative flex flex-col gap-4 rounded-[18px] p-4 cursor-pointer text-left transition-colors ${busyLabel || container.state === 'restarting' ? 'mfx-busy' : ''} focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0A84FF] ${
         running ? 'bg-white/[0.07] hover:bg-white/[0.10]' : 'bg-white/[0.045] hover:bg-white/[0.075]'
       }`}
       style={{ fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", Roboto, sans-serif' }}

@@ -91,6 +91,20 @@ export default function App() {
     setMoveInitialDestination(project);
     setIsMergeModalOpen(true);
   };
+  // Moves started by dragging an app onto a stack: shown in their new stack straight away while the real
+  // move (with a backup, always) runs in the background
+  const [pendingMoves, setPendingMoves] = useState<Record<string, { from: string; service: string; to: string }>>({});
+  // A short message at the bottom of the screen (a move finished, or couldn't)
+  const [notice, setNotice] = useState<{ text: string; tone?: 'error' } | null>(null);
+  useEffect(() => {
+    if (!notice) return;
+    const t = setTimeout(() => setNotice(null), notice.tone === 'error' ? 9000 : 5000);
+    return () => clearTimeout(t);
+  }, [notice]);
+  // New Stack: a new stack appears right away with its name ready to type; Enter creates it
+  const [draftStack, setDraftStack] = useState(false);
+  // Zoomed out: every stack at once, smaller
+  const [zoomedOut, setZoomedOut] = useState(false);
   const openMoveForApp = (c: DeepContainerMetadata) => {
     setMoveInitialDestination(undefined);
     setMoveInitialAppId(c.id);
@@ -385,6 +399,104 @@ export default function App() {
       console.error('Failed to save the stack icon:', err);
     }
   };
+  // Drag an app onto a stack: it shows there at once, and the move runs in the background with a backup
+  const moveInBackground = async (appId: string, to: string) => {
+    const c = containers.find((x) => x.id === appId);
+    if (!c) return;
+    const from = c.compose?.project || '';
+    if (from === to) return;
+    const service = c.compose?.service || c.cleanName;
+    const key = `${from}/${service}`;
+    const name = (c.customName || c.friendlyName || c.cleanName).replace(/^\//, '');
+    const where = stackLabel(to);
+    const dir = groupedByComposeStacks.stacksMap[to]?.workingDir;
+    if (!dir) {
+      setNotice({ text: `Couldn’t find ${where}’s folder, so ${name} stayed where it was.`, tone: 'error' });
+      return;
+    }
+    setPendingMoves((p) => ({ ...p, [key]: { from, service, to } }));
+    const finish = async (text: string, tone?: 'error') => {
+      await fetchData(false);
+      setPendingMoves((p) => {
+        const n = { ...p };
+        delete n[key];
+        return n;
+      });
+      setNotice({ text, tone });
+    };
+    try {
+      const ids = [c.id, ...(helpersOf.get(c.id) || []).map((h) => h.id)];
+      const pr = await fetch('/api/stacks/plan-merge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sourceContainerIds: ids, targetStackName: to, targetDirectory: dir, mode: 'existing-stack', volumeHandling: 'preserve-absolute' }),
+      });
+      const plan = await pr.json().catch(() => ({}));
+      if (!pr.ok) throw new Error(plan.error || 'The move couldn’t be prepared.');
+      const res = await fetch('/api/stacks/execute-merge-stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sourceContainerIds: ids, targetStackName: plan.targetStackName, targetDirectory: plan.targetDirectory, yamlContent: plan.generatedComposeYaml, backupData: true }),
+      });
+      if (!res.ok || !res.body) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j.error || `The server answered ${res.status}.`);
+      }
+      // Read the progress to its end: completed, failed or put back
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      let outcome: { type: string; log?: string } | null = null;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const parts = buf.split('\n\n');
+        buf = parts.pop() || '';
+        for (const part of parts) {
+          const line = part.split('\n').find((l) => l.startsWith('data: '));
+          if (!line) continue;
+          try {
+            const e = JSON.parse(line.slice(6));
+            if (['completed', 'failed', 'auto_reverted', 'error'].includes(e.type)) outcome = e;
+          } catch {
+            // a malformed line
+          }
+        }
+      }
+      if (outcome?.type === 'completed') await finish(`${name} moved to ${where}. You can undo it from Restore.`);
+      else if (outcome?.type === 'auto_reverted') await finish(`${name} couldn’t move (${outcome.log || 'something went wrong'}), so everything was put back.`, 'error');
+      else await finish(`${name} couldn’t move${outcome?.log ? `: ${outcome.log}` : '. Check Activity for what happened.'}`, 'error');
+    } catch (e) {
+      await finish(`${name} couldn’t move: ${(e as Error).message}`, 'error');
+    }
+  };
+
+  // One-click New Stack: Enter on the name creates it (the folder gets a safe version of the name)
+  const createStackNamed = async (name: string) => {
+    const label = name.trim();
+    const slug = label.toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/-{2,}/g, '-').replace(/^-+|-+$/g, '');
+    if (slug.length < 2 || slug === 'manifexus') {
+      setNotice({ text: 'Give the stack a name with at least 2 letters or numbers.', tone: 'error' });
+      return;
+    }
+    if (groupedByComposeStacks.stacksMap[slug]) {
+      setNotice({ text: `There’s already a stack called ${slug}.`, tone: 'error' });
+      return;
+    }
+    try {
+      const r = await fetch('/api/stacks/create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ stackName: slug }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j.success) throw new Error(r.status === 409 ? `A folder called ${slug} is already there.` : j.error || 'The stack couldn’t be made.');
+      if (label !== slug) await handleRenameStack(j.stack?.project || slug, label);
+      await fetchData(false);
+      setDraftStack(false);
+      setNotice({ text: `${label} is ready. Drag apps onto it, or tap its +.` });
+    } catch (e) {
+      setNotice({ text: (e as Error).message, tone: 'error' });
+    }
+  };
+
   const handleRenameStack = async (project: string, name: string) => {
     const stackNames = { ...(config?.stackNames || {}) };
     if (name.trim() && name.trim() !== project) stackNames[project] = name.trim();
@@ -590,9 +702,15 @@ export default function App() {
       };
     }
 
+    const pending = Object.values(pendingMoves);
+    // During a move the old container is set aside (renamed …__moving_…) until the new one is up: show one card
+    const isAside = (c: DeepContainerMetadata) => /__moving_/.test(c.name || c.cleanName);
+    const hasNew = new Set(filteredContainers.filter((c) => !isAside(c)).map((c) => `${c.compose.project}/${c.compose.service}`));
     for (const c of filteredContainers) {
+      const move = pending.find((m) => m.service === c.compose.service && (m.from === c.compose.project || m.to === c.compose.project));
+      if (isAside(c) && (!move || hasNew.has(`${move.to}/${c.compose.service}`))) continue;
       if (c.compose.isCompose && c.compose.project) {
-        const proj = c.compose.project;
+        const proj = move ? move.to : c.compose.project;
         if (!stacksMap[proj]) {
           stacksMap[proj] = {
             containers: [],
@@ -611,7 +729,7 @@ export default function App() {
     const label = (c: DeepContainerMetadata) => (c.customName || c.friendlyName || c.cleanName).replace(/^\//, '');
     standalone.sort((a, b) => label(a).localeCompare(label(b), undefined, { numeric: true, sensitivity: 'base' }));
     return { stacksMap, standalone };
-  }, [filteredContainers, emptyStacks, searchQuery, config?.stackNames]);
+  }, [filteredContainers, emptyStacks, searchQuery, config?.stackNames, pendingMoves]);
 
   // Simple / Advanced and Show Commands, for every screen
   useEffect(() => setPrefsFromConfig(config), [config]);
@@ -635,6 +753,7 @@ export default function App() {
   const card = (c: DeepContainerMetadata, inStack = false) => (
     <AppCard
       key={c.id}
+      busy={Object.values(pendingMoves).some((m) => m.service === c.compose.service && (m.from === c.compose.project || m.to === c.compose.project)) ? `Moving to ${stackLabel(Object.values(pendingMoves).find((m) => m.service === c.compose.service)!.to)}…` : undefined}
       inStack={inStack}
       stackName={c.compose?.project ? stackLabel(c.compose.project) : undefined}
       onRename={handleRenameApp}
@@ -724,7 +843,10 @@ export default function App() {
           isRefreshing={isRefreshing}
           search={searchQuery}
           onSearch={setSearchQuery}
-          onNewStack={() => setIsCreateStackModalOpen(true)}
+          onNewStack={() => {
+            setViewMode('compose');
+            setDraftStack(true);
+          }}
         />
 
         {/* Standby / Demo Mode Notification Banner (Visible when socket is not attached) */}
@@ -768,6 +890,8 @@ export default function App() {
           stopped={isLoading ? undefined : stats.stopped}
           ports={isLoading ? undefined : stats.ports}
           onShowPorts={() => setIsPortsOpen(true)}
+          zoomedOut={zoomedOut}
+          onZoom={viewMode === 'compose' ? () => setZoomedOut((z) => !z) : undefined}
           groupItems={[
             { key: 'group', label: 'New Group…', onSelect: () => setIsGroupManagerOpen(true) },
             ...(viewMode === 'groups' ? [{ key: 'edit', label: 'Edit Groups…', divider: true, onSelect: () => setIsGroupManagerOpen(true) }] : []),
@@ -860,7 +984,22 @@ export default function App() {
 
         {/* BY STACK */}
         {!isLoading && viewMode === 'compose' && (
-          <ShelfGrid>
+          <ShelfGrid zoom={zoomedOut ? 0.62 : 1}>
+            {draftStack && (
+              <Shelf
+                key="__new"
+                id="stack:__new"
+                span={0}
+                startRenaming
+                title="New Stack"
+                rename={{ original: 'New Stack', onSave: (n) => void createStackNamed(n) }}
+                icon={<StackIcon name="New Stack" apps={[]} />}
+                status={<span>Not made yet</span>}
+                onCancelRename={() => setDraftStack(false)}
+              >
+                <ShelfNote>Type a name and press Return. Then drag apps onto it.</ShelfNote>
+              </Shelf>
+            )}
             {Object.entries(groupedByComposeStacks.stacksMap)
               .filter(([, d]) => d.containers.length > 0 || statusFilter === 'all')
               .map(([projectName, stackData]) => {
@@ -872,6 +1011,7 @@ export default function App() {
                   <Shelf
                     key={projectName}
                     span={span}
+                    onDropApp={own ? undefined : (appId) => void moveInBackground(appId, projectName)}
                     id={`stack:${projectName}`}
                     title={stackLabel(projectName)}
                     rename={{ original: projectName, onSave: (n) => void handleRenameStack(projectName, n) }}
@@ -961,6 +1101,16 @@ export default function App() {
           </ShelfGrid>
         )}
       </main>
+
+      {/* A short message: a move finished, or couldn't */}
+      {notice && (
+        <div role="status" className="mfx-pop fixed z-[45] left-1/2 bottom-6 -translate-x-1/2 max-w-[min(92vw,560px)] flex items-center gap-3 pl-4 pr-2 py-2.5 rounded-full text-[14px]"
+          style={{ fontFamily: ios.font, background: 'rgba(22,30,54,0.72)', backdropFilter: 'blur(24px) saturate(170%)', boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.18), inset 0 0 0 1px rgba(255,255,255,0.1), 0 20px 40px -20px rgba(0,0,0,0.8)', color: notice.tone === 'error' ? '#FFB4A8' : '#fff' }}>
+          <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: notice.tone === 'error' ? ios.red : ios.green }} aria-hidden />
+          <span className="min-w-0">{notice.text}</span>
+          <button type="button" onClick={() => setNotice(null)} aria-label="Dismiss" className="w-7 h-7 rounded-full flex-shrink-0 flex items-center justify-center text-white/60 hover:text-white hover:bg-white/10">✕</button>
+        </div>
+      )}
 
       <footer className="px-4 lg:px-6 pt-6 pb-8 text-center text-[12px]" style={{ color: 'rgba(235,235,245,0.35)', fontFamily: ios.font }}>
         Manifexus{softwareUpdate?.current.version ? ` ${softwareUpdate.current.version}` : ''} · {hostAddress}

@@ -8,6 +8,9 @@ import { MenuButton, MenuItem, ios } from './ui/ios';
  * one glass panel per stack or group, with its apps on quiet tiles inside.
  */
 
+/** What an app card carries while it's dragged to another stack */
+export const DRAG_TYPE = 'application/x-manifexus-app';
+
 export const displayFont = '"Inter Tight", "SF Pro Display", -apple-system, system-ui, sans-serif';
 
 /**
@@ -235,11 +238,18 @@ export const Shelf: React.FC<{
   forceOpen?: boolean;
   /** How many app columns it asks for in the ShelfGrid (its app count) */
   span?: number;
+  /** An app dragged onto it from the dashboard (the app's id) */
+  onDropApp?: (appId: string) => void;
+  /** Open with its name ready to type (a new stack) */
+  startRenaming?: boolean;
+  /** Typing the name was cancelled (Escape, or left empty) */
+  onCancelRename?: () => void;
   /** Rename it on the dashboard; `original` is its real name (the folder's), shown as the placeholder */
   rename?: { original: string; onSave: (name: string) => void };
   children: React.ReactNode;
-}> = ({ id, title, icon, status, action, menu, forceOpen, rename, children }) => {
-  const [renaming, setRenaming] = useState(false);
+}> = ({ id, title, icon, status, action, menu, forceOpen, rename, onDropApp, startRenaming, onCancelRename, children }) => {
+  const [renaming, setRenaming] = useState(Boolean(startRenaming));
+  const [over, setOver] = useState(false);
   const [folded, setFolded] = useState(() => readFolded().has(id));
   const open = forceOpen || !folded;
   const toggle = () => {
@@ -251,7 +261,37 @@ export const Shelf: React.FC<{
   };
   const bodyId = `shelf-${id.replace(/[^a-z0-9_-]/gi, '_')}`;
   return (
-    <section className={`rounded-[22px] min-w-0 ${open ? 'flex-1 flex flex-col' : ''}`} style={{ ...panelStyle, fontFamily: ios.font }} aria-label={title}>
+    <section
+      // Pops in when it first appears; glows blue while an app is dragged over it
+      className={`mfx-pop rounded-[22px] min-w-0 transition-shadow duration-200 ${open ? 'flex-1 flex flex-col' : ''}`}
+      style={{
+        ...panelStyle,
+        fontFamily: ios.font,
+        ...(over ? { boxShadow: `${panelStyle.boxShadow}, inset 0 0 0 2px rgba(100,181,255,0.85), 0 0 36px rgba(10,132,255,0.35)` } : null),
+      }}
+      aria-label={title}
+      onDragOver={
+        onDropApp
+          ? (e) => {
+              if (!e.dataTransfer.types.includes(DRAG_TYPE)) return;
+              e.preventDefault();
+              e.dataTransfer.dropEffect = 'move';
+              if (!over) setOver(true);
+            }
+          : undefined
+      }
+      onDragLeave={onDropApp ? (e) => !e.currentTarget.contains(e.relatedTarget as Node) && setOver(false) : undefined}
+      onDrop={
+        onDropApp
+          ? (e) => {
+              e.preventDefault();
+              setOver(false);
+              const appId = e.dataTransfer.getData(DRAG_TYPE);
+              if (appId) onDropApp(appId);
+            }
+          : undefined
+      }
+    >
       <header className="group/head flex items-center gap-3 pl-4 pr-3 sm:pl-5 sm:pr-4 py-3.5">
         {/* Tapping the icon, name or status folds the stack; the ✎ beside the name renames it */}
         <div className="group flex-1 min-w-0 flex items-center gap-3 cursor-pointer" onClick={renaming ? undefined : toggle}>
@@ -266,7 +306,10 @@ export const Shelf: React.FC<{
                     setRenaming(false);
                     rename.onSave(n);
                   }}
-                  onCancel={() => setRenaming(false)}
+                  onCancel={() => {
+                    setRenaming(false);
+                    onCancelRename?.();
+                  }}
                   className="text-[19px] leading-[24px] h-[28px] font-semibold"
                   style={{ fontFamily: displayFont, letterSpacing: '-0.02em' }}
                 />
@@ -482,7 +525,7 @@ function useGlide(container: React.RefObject<HTMLElement>, signature: string) {
   });
 }
 
-export const ShelfGrid: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+export const ShelfGrid: React.FC<{ children: React.ReactNode; zoom?: number }> = ({ children, zoom = 1 }) => {
   const ref = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(() => (typeof window !== 'undefined' ? Math.min(window.innerWidth - 32, 1232) : 1232));
   useEffect(() => {
@@ -508,7 +551,8 @@ export const ShelfGrid: React.FC<{ children: React.ReactNode }> = ({ children })
   const signature = C + '|' + places.map((p) => `${stacks[p.i].key}@${p.col},${p.row},${p.w}x${p.h}:${stacks[p.i].props.span}`).join(';') + '|' + loose.map((c) => c.props.span).join(',');
   useGlide(ref, signature);
   return (
-    <div ref={ref} className="flex flex-col gap-3 sm:gap-4">
+    // Zoomed out, the dashboard is drawn smaller, so more columns fit and the stacks re-fit (and glide) to them
+    <div ref={ref} className="flex flex-col gap-3 sm:gap-4" style={zoom !== 1 ? ({ zoom } as React.CSSProperties) : undefined}>
       <div className="grid gap-3 sm:gap-4" style={{ gridTemplateColumns: `repeat(${C}, minmax(0, 1fr))` }}>
         {places.map(({ i, col, row, w, h }) => (
           <div
@@ -616,7 +660,10 @@ export const LibraryBar: React.FC<{
   onShowPorts?: () => void;
   /** Group actions (New Group, Edit Groups), while groups are shown */
   groupItems?: MenuItem[];
-}> = ({ showGroups = false, view, onView, count, filter, onFilter, running, stopped, ports, onShowPorts, groupItems = [] }) => {
+  /** Zoomed out: every stack at once, smaller, for moving things around */
+  zoomedOut?: boolean;
+  onZoom?: () => void;
+}> = ({ showGroups = false, view, onView, count, filter, onFilter, running, stopped, ports, onShowPorts, groupItems = [], zoomedOut, onZoom }) => {
   const label = 'text-[12px] font-semibold uppercase tracking-[0.08em]';
   const toggle = (f: Filter) => onFilter(filter === f ? 'all' : f);
   const tab = (v: 'compose' | 'groups', text: string) => (
@@ -668,6 +715,26 @@ export const LibraryBar: React.FC<{
         />
         <span className="w-px h-3.5 mx-1" style={{ background: 'rgba(255,255,255,0.12)' }} aria-hidden />
         <Stat value={ports} word={ports === 1 ? 'Port' : 'Ports'} tip="Ports in use on your server. Click to see which app uses each one." onClick={onShowPorts} />
+        {onZoom && (
+          <>
+            <span className="w-px h-3.5 mx-1" style={{ background: 'rgba(255,255,255,0.12)' }} aria-hidden />
+            <button
+              type="button"
+              onClick={onZoom}
+              aria-pressed={Boolean(zoomedOut)}
+              title={zoomedOut ? 'Back to the normal size' : 'See every stack at once, to move apps around easily'}
+              className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full text-[13px] transition-colors hover:bg-white/[0.06] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0A84FF]"
+              style={{ color: zoomedOut ? '#64B5FF' : 'rgba(235,235,245,0.75)', background: zoomedOut ? 'rgba(10,132,255,0.16)' : undefined }}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden>
+                <circle cx="11" cy="11" r="7" />
+                <path d="m20 20-3.5-3.5" />
+                {zoomedOut ? <path d="M8 11h6M11 8v6" /> : <path d="M8 11h6" />}
+              </svg>
+              {zoomedOut ? 'Zoom In' : 'Zoom Out'}
+            </button>
+          </>
+        )}
       </div>
       {showGroups && groupItems.length > 0 && (
         <MenuButton
