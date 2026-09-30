@@ -24,6 +24,8 @@ interface AppCardProps {
   onRename?: (containerId: string, name: string) => void;
   /** Something is happening to it in the background, like "Moving to Media…" */
   busy?: string;
+  /** Can be dragged onto another stack (only while the dashboard is zoomed out) */
+  canDrag?: boolean;
 }
 
 const STATE: Record<string, { label: string; color: string }> = {
@@ -139,7 +141,7 @@ const InfoGlyph = () => (
  * and Move and Details beside it. The bottom row runs it: one clear action (Open its web page, or
  * Start it) with Restart and Stop beside it. Tapping the card also opens Details.
  */
-export const AppCard: React.FC<AppCardProps> = ({ container, inStack, stackName, helpers = [], hostAddress, groups, onInspect, onAction, onSetPrimaryPort, onMoveApp, onRename, busy }) => {
+export const AppCard: React.FC<AppCardProps> = ({ container, inStack, stackName, helpers = [], hostAddress, groups, onInspect, onAction, onSetPrimaryPort, onMoveApp, onRename, busy, canDrag }) => {
   const [acting, setActing] = useState<'start' | 'stop' | 'restart'>();
   const [renaming, setRenaming] = useState(false);
   // A new name shows straight away, before the refresh brings it back from the server
@@ -200,8 +202,8 @@ export const AppCard: React.FC<AppCardProps> = ({ container, inStack, stackName,
       // Lets the dashboard glide this card to its new place when stacks change (see ShelfGrid); keyed by the
       // compose service, which stays the same when an app moves to another stack
       data-flip={`app:${container.compose?.service || container.cleanName}`}
-      // Drag it onto another stack to move it there
-      draggable={!busy}
+      // Zoomed out, drag it onto another stack to move it there
+      draggable={Boolean(canDrag && !busy)}
       onDragStart={(e) => {
         e.dataTransfer.setData(DRAG_TYPE, container.id);
         e.dataTransfer.effectAllowed = 'move';

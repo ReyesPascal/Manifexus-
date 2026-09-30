@@ -6,8 +6,8 @@
       "date": "2026-09-29",
       "headline": "Drag apps between stacks, see everything at once, and make a stack in one click.",
       "new": [
-        "Drag and drop. Drag an app onto another stack and it moves there right away. The real move runs in the background, backed up every time, and a message tells you when it's done (you can undo it from Restore). The stack glows while you drag over it. If something goes wrong, everything is put back and you're told why.",
-        "Zoom Out. See every stack at once, smaller, so moving apps around is easy. Tap Zoom In to go back.",
+        "Drag and drop. Zoom out, then drag an app onto another stack and it moves there right away. The real move runs in the background, backed up every time, and a message tells you when it's done (you can undo it from Restore). The stack glows while you drag over it. If something goes wrong, everything is put back and you're told why.",
+        "Zoom Out. See every stack at once, smaller, and drag apps between them. Tap Zoom In to go back.",
         "New Stack in one click. A new stack appears right away with its name ready to type; press Return and it's made."
       ],
       "improved": [

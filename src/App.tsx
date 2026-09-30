@@ -755,6 +755,7 @@ export default function App() {
       key={c.id}
       busy={Object.values(pendingMoves).some((m) => m.service === c.compose.service && (m.from === c.compose.project || m.to === c.compose.project)) ? `Moving to ${stackLabel(Object.values(pendingMoves).find((m) => m.service === c.compose.service)!.to)}…` : undefined}
       inStack={inStack}
+      canDrag={zoomedOut}
       stackName={c.compose?.project ? stackLabel(c.compose.project) : undefined}
       onRename={handleRenameApp}
       container={c}
@@ -1011,7 +1012,7 @@ export default function App() {
                   <Shelf
                     key={projectName}
                     span={span}
-                    onDropApp={own ? undefined : (appId) => void moveInBackground(appId, projectName)}
+                    onDropApp={own || !zoomedOut ? undefined : (appId) => void moveInBackground(appId, projectName)}
                     id={`stack:${projectName}`}
                     title={stackLabel(projectName)}
                     rename={{ original: projectName, onSave: (n) => void handleRenameStack(projectName, n) }}

@@ -722,7 +722,7 @@ export const LibraryBar: React.FC<{
               type="button"
               onClick={onZoom}
               aria-pressed={Boolean(zoomedOut)}
-              title={zoomedOut ? 'Back to the normal size' : 'See every stack at once, to move apps around easily'}
+              title={zoomedOut ? 'Back to the normal size' : 'See every stack at once. Zoomed out, drag an app onto another stack to move it.'}
               className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full text-[13px] transition-colors hover:bg-white/[0.06] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0A84FF]"
               style={{ color: zoomedOut ? '#64B5FF' : 'rgba(235,235,245,0.75)', background: zoomedOut ? 'rgba(10,132,255,0.16)' : undefined }}
             >
