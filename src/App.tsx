@@ -26,7 +26,7 @@ import {
 import { PortsSheet } from './components/PortsSheet';
 import { SoftwareUpdateSheet, SoftwareUpdateState } from './components/SoftwareUpdateSheet';
 import { ActivitySheet } from './components/ActivitySheet';
-import { AppCard } from './components/AppCard';
+import { AppCard, MoveProgress, learnMoveSteps } from './components/AppCard';
 import { helperParents, helpersByApp } from './appHelpers';
 import { StackIcon, StackIconChoice } from './stackIcons';
 import { AppDetailsSheet } from './components/AppDetailsSheet';
@@ -93,7 +93,7 @@ export default function App() {
   };
   // Moves started by dragging an app onto a stack: shown in their new stack straight away while the real
   // move (with a backup, always) runs in the background
-  const [pendingMoves, setPendingMoves] = useState<Record<string, { from: string; service: string; to: string }>>({});
+  const [pendingMoves, setPendingMoves] = useState<Record<string, { from: string; service: string; to: string; progress?: MoveProgress }>>({});
   // A short message at the bottom of the screen (a move finished, or couldn't)
   const [notice, setNotice] = useState<{ text: string; tone?: 'error' } | null>(null);
   useEffect(() => {
@@ -420,7 +420,9 @@ export default function App() {
     if (pendingMoves[key]) return;
     const name = (c.customName || c.friendlyName || c.cleanName).replace(/^\//, '');
     const where = stackLabel(to);
-    setPendingMoves((p) => ({ ...p, [key]: { from, service, to } }));
+    setPendingMoves((p) => ({ ...p, [key]: { from, service, to, progress: { step: 0, since: Date.now(), waiting: true } } }));
+    const progress = (patch: Partial<MoveProgress>) =>
+      setPendingMoves((p) => (p[key] ? { ...p, [key]: { ...p[key], progress: { ...(p[key].progress as MoveProgress), ...patch } } } : p));
     const finish = async (text: string, tone?: 'error') => {
       await fetchData(false);
       setPendingMoves((p) => {
@@ -433,6 +435,9 @@ export default function App() {
     const job = async () => {
       try {
         // Fresh details now it's this move's turn (an earlier move may have changed things)
+        progress({ waiting: false, since: Date.now() });
+        const took: (number | undefined)[] = [];
+        const prepStart = Date.now();
         const now = await fetch('/api/containers', { cache: 'no-store' }).then((r) => r.json());
         const list: DeepContainerMetadata[] = now.containers || [];
         const find = (svc: string) => list.find((x) => x.compose?.project === from && x.compose?.service === svc && !/__moving_/.test(x.name || ''));
@@ -448,6 +453,7 @@ export default function App() {
         });
         const plan = await pr.json().catch(() => ({}));
         if (!pr.ok) throw new Error(plan.error || 'the move couldn’t be prepared');
+        took[0] = (Date.now() - prepStart) / 1000;
         const res = await fetch('/api/stacks/execute-merge-stream', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -481,11 +487,18 @@ export default function App() {
             try {
               const e = JSON.parse(line.slice(6));
               if (['completed', 'failed', 'auto_reverted', 'error'].includes(e.type)) outcome = e;
+              // Progress: the server's steps as they start and finish
+              if (e.type === 'log' && /waiting for another move/i.test(e.log || '')) progress({ waiting: true });
+              if (e.type === 'step_update' && e.stepIndex && e.status === 'running') progress({ step: e.stepIndex, since: Date.now(), waiting: false });
+              if (e.type === 'step_update' && e.stepIndex && e.status === 'success' && e.durationMs) took[e.stepIndex] = e.durationMs / 1000;
+              if (e.type === 'step_update' && e.stepIndex && e.status === 'success') progress({ step: e.stepIndex, since: Date.now(), done: e.stepIndex, waiting: false });
+              if (e.type === 'completed') progress({ step: 7, since: Date.now(), done: 6 });
             } catch {
               // a malformed line
             }
           }
         }
+        if (outcome?.type === 'completed') learnMoveSteps(took);
         if (outcome?.type === 'completed') await finish(`${name} moved to ${where}. You can undo it from Restore.`);
         else if (outcome?.type === 'auto_reverted') await finish(`${name} couldn’t move (${outcome.log || 'something went wrong'}), so everything was put back.`, 'error');
         else await finish(`${name} couldn’t move${outcome?.log ? `: ${outcome.log}` : '. Check Activity for what happened.'}`, 'error');
@@ -786,7 +799,10 @@ export default function App() {
   const card = (c: DeepContainerMetadata, inStack = false) => (
     <AppCard
       key={c.id}
-      busy={Object.values(pendingMoves).some((m) => m.service === c.compose.service && (m.from === c.compose.project || m.to === c.compose.project)) ? `Moving to ${stackLabel(Object.values(pendingMoves).find((m) => m.service === c.compose.service)!.to)}…` : undefined}
+      {...(() => {
+        const m = Object.values(pendingMoves).find((x) => x.service === c.compose.service && (x.from === c.compose.project || x.to === c.compose.project));
+        return m ? { busy: `Moving to ${stackLabel(m.to)}…`, moveProgress: m.progress } : {};
+      })()}
       inStack={inStack}
       canDrag={zoomedOut}
       stackName={c.compose?.project ? stackLabel(c.compose.project) : undefined}

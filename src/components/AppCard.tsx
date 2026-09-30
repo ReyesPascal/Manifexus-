@@ -4,6 +4,74 @@ import { MenuButton, MenuItem } from './ui/ios';
 import { DRAG_TYPE, InlineName, RenameButton } from './Shelf';
 import { helperKind } from '../appHelpers';
 
+/** Where a move is: the server's step (1–6; 0 while it's prepared, 7 when done), since when, and whether it waits its turn */
+export interface MoveProgress {
+  step: number;
+  since: number;
+  done?: number;
+  waiting?: boolean;
+}
+
+// How long each step of a move takes (seconds): preparing, checking, stopping, backing up, updating the old
+// stack, starting in the new one, checking it runs. Starts from typical times, then learns this server's real
+// times after every move (kept in this browser), so the bar gets more accurate the more you move.
+const DEFAULT_STEP_SECONDS = [2, 2, 1, 4, 2, 6, 2];
+const STEP_KEY = 'manifexus.moveStepSeconds';
+function stepSeconds(): number[] {
+  try {
+    const saved = JSON.parse(localStorage.getItem(STEP_KEY) || 'null');
+    if (Array.isArray(saved) && saved.length === DEFAULT_STEP_SECONDS.length && saved.every((x) => typeof x === 'number' && x > 0)) return saved;
+  } catch {
+    // private window: the typical times
+  }
+  return DEFAULT_STEP_SECONDS;
+}
+/** After a move: blend in how long each step really took */
+export function learnMoveSteps(seconds: (number | undefined)[]): void {
+  const cur = stepSeconds();
+  const next = cur.map((c, i) => (seconds[i] && seconds[i]! > 0 ? Math.round((c * 0.5 + Math.min(600, seconds[i]!) * 0.5) * 10) / 10 : c));
+  try {
+    localStorage.setItem(STEP_KEY, JSON.stringify(next));
+  } catch {
+    // not kept
+  }
+}
+
+/** Percent done: finished steps count fully; the running one creeps toward its end but never claims it */
+function movePercent(p: MoveProgress, now: number): number {
+  const STEP_SECONDS = stepSeconds();
+  const STEP_TOTAL = STEP_SECONDS.reduce((a, b) => a + b, 0);
+  const step = Math.min(p.step, STEP_SECONDS.length);
+  if (step >= STEP_SECONDS.length) return 100;
+  const before = STEP_SECONDS.slice(0, step).reduce((a, b) => a + b, 0);
+  const finished = p.done === p.step;
+  const elapsed = (now - p.since) / 1000;
+  const within = finished ? 1 : p.waiting ? 0 : 0.9 * (1 - Math.exp(-elapsed / STEP_SECONDS[step]));
+  return Math.min(99, Math.round(((before + within * STEP_SECONDS[step]) / STEP_TOTAL) * 100));
+}
+
+const MoveBar: React.FC<{ progress: MoveProgress }> = ({ progress }) => {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 250);
+    return () => clearInterval(t);
+  }, []);
+  const pct = movePercent(progress, now);
+  return (
+    <div className="mt-1.5 flex items-center gap-2" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct} aria-label="Move progress">
+      <div className="flex-1 h-[4px] rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.1)' }}>
+        <div
+          className="h-full rounded-full transition-[width] duration-300 ease-out"
+          style={{ width: `${Math.max(3, pct)}%`, background: 'linear-gradient(90deg, #0A84FF, #64B5FF)', boxShadow: '0 0 8px rgba(10,132,255,0.5)' }}
+        />
+      </div>
+      <span className="text-[12px] tabular-nums flex-shrink-0" style={{ color: 'rgba(235,235,245,0.6)' }}>
+        {progress.waiting ? 'Waiting' : `${pct}%`}
+      </span>
+    </div>
+  );
+};
+
 interface AppCardProps {
   container: DeepContainerMetadata;
   /** Shown inside its stack's section, so the stack name isn't repeated */
@@ -24,6 +92,8 @@ interface AppCardProps {
   onRename?: (containerId: string, name: string) => void;
   /** Something is happening to it in the background, like "Moving to Media…" */
   busy?: string;
+  /** A move in progress: shows a small bar with how far along it is */
+  moveProgress?: MoveProgress;
   /** Can be dragged onto another stack (only while the dashboard is zoomed out) */
   canDrag?: boolean;
 }
@@ -141,7 +211,7 @@ const InfoGlyph = () => (
  * and Move and Details beside it. The bottom row runs it: one clear action (Open its web page, or
  * Start it) with Restart and Stop beside it. Tapping the card also opens Details.
  */
-export const AppCard: React.FC<AppCardProps> = ({ container, inStack, stackName, helpers = [], hostAddress, groups, onInspect, onAction, onSetPrimaryPort, onMoveApp, onRename, busy, canDrag }) => {
+export const AppCard: React.FC<AppCardProps> = ({ container, inStack, stackName, helpers = [], hostAddress, groups, onInspect, onAction, onSetPrimaryPort, onMoveApp, onRename, busy, canDrag, moveProgress }) => {
   const [acting, setActing] = useState<'start' | 'stop' | 'restart'>();
   const [renaming, setRenaming] = useState(false);
   // A new name shows straight away, before the refresh brings it back from the server
@@ -242,7 +312,7 @@ export const AppCard: React.FC<AppCardProps> = ({ container, inStack, stackName,
           )}
           <div className="mt-0.5 flex items-center gap-1.5 text-[13px] leading-[18px] min-w-0" style={{ color: 'rgba(235,235,245,0.6)' }}>
             <span className="w-[7px] h-[7px] rounded-full flex-shrink-0" style={{ background: busyLabel ? '#0A84FF' : running && downHelpers.length ? '#FF9F0A' : st.color }} aria-hidden />
-            <span className="flex-shrink-0">{busyLabel || st.label}</span>
+            <span className={busyLabel ? 'truncate' : 'flex-shrink-0'} title={busyLabel}>{busyLabel || st.label}</span>
             {running && !busyLabel && downHelpers.length > 0 && (
               <>
                 <span aria-hidden>·</span>
@@ -266,6 +336,7 @@ export const AppCard: React.FC<AppCardProps> = ({ container, inStack, stackName,
               </>
             )}
           </div>
+          {moveProgress && <MoveBar progress={moveProgress} />}
         </div>
         {/* Managing the app: Move and Details, in the same capsule as Restart and Stop */}
         <div className="flex items-stretch h-[32px] rounded-[10px] overflow-hidden flex-shrink-0" style={{ background: 'rgba(255,255,255,0.06)' }}>
