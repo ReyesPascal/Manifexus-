@@ -20,6 +20,11 @@ Bring that standard to every change:
   and explain the reasoning in a sentence.
 - Check your work visually (desktop and phone) before calling it done.
 
+## Working with the owner
+
+- Once a question is answered, treat that answer as done. On later turns, focus on what's being asked now,
+  and don't go back over an earlier answer unless the owner asks about it or points out a problem with it.
+
 ## The look
 
 - Apple-style: minimal, calm and elegant, never boxy or sprawling, but still informative.
