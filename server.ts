@@ -35,6 +35,7 @@ import {
   deleteHostStack,
   EmptyComposeStack,
 } from './server/stackService';
+import { deleteApps, planAppDelete } from './server/appDeleteService';
 import {
   checkPrivilegeStatus,
   executeAutomatedStackMerge,
@@ -183,6 +184,7 @@ async function startServer() {
   // new or deleted stacks, cleanup). Looking, and starting, stopping or restarting apps, always work.
   const CHANGE_ROUTES: RegExp[] = [
     /^\/api\/stacks\/(create|delete|execute-merge|execute-merge-stream)$/,
+    /^\/api\/apps\/delete$/,
     /^\/api\/restore\/[^/]+\/(run|copy)$/,
     /^\/api\/ai\/plans\/[^/]+\/run$/,
     /^\/api\/diagnostics\/autofix$/,
@@ -752,6 +754,35 @@ async function startServer() {
 
       const result = await deleteHostStack({ projectName, targetDirectory, skipDataBackup: skipDataBackup === true });
       res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // Delete one app (with its database or cache): what it would remove and back up…
+  app.post('/api/apps/delete-plan', async (req, res) => {
+    try {
+      const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(String) : [];
+      if (!ids.length) return res.status(400).json({ error: 'Which app?' });
+      res.json(await planAppDelete(ids));
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  // …and doing it. Waits for any move or other change to the same stack to finish first.
+  app.post('/api/apps/delete', async (req, res) => {
+    try {
+      const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(String) : [];
+      if (!ids.length) return res.status(400).json({ error: 'Which app?' });
+      const { containers } = await getContainersList();
+      const dirs = containers.filter((c) => ids.includes(c.id)).map((c) => c.compose?.workingDir || '');
+      const release = await lockStacks(dirs, () => undefined);
+      try {
+        res.json(await deleteApps({ ids, skipDataBackup: req.body?.skipDataBackup === true, label: typeof req.body?.label === 'string' ? req.body.label : undefined }));
+      } finally {
+        release();
+      }
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
     }

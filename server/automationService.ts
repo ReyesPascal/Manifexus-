@@ -215,7 +215,7 @@ async function renameContainer(idOrName: string, newName: string): Promise<boole
   }
 }
 
-async function startContainer(idOrName: string): Promise<void> {
+export async function startContainer(idOrName: string): Promise<void> {
   try {
     await queryDockerEngine(`/containers/${encodeURIComponent(idOrName)}/start`, 'POST');
   } catch {
@@ -224,7 +224,7 @@ async function startContainer(idOrName: string): Promise<void> {
 }
 
 /** Stop with a short grace period (the Docker API client times out at 10s), then poll until stopped. */
-async function stopContainerAndWait(idOrName: string, maxWaitMs = 60000): Promise<void> {
+export async function stopContainerAndWait(idOrName: string, maxWaitMs = 60000): Promise<void> {
   try {
     await queryDockerEngine(`/containers/${encodeURIComponent(idOrName)}/stop?t=8`, 'POST');
   } catch {
@@ -243,8 +243,30 @@ async function stopContainerAndWait(idOrName: string, maxWaitMs = 60000): Promis
   }
 }
 
+/**
+ * Everything needed to recreate a standalone (docker run) app exactly: its settings, and how it's
+ * attached to its networks. Restore creates the container again from this.
+ */
+export async function standaloneSpec(id: string): Promise<Record<string, unknown>> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const inspect = await queryDockerEngine<any>(`/containers/${id}/json`);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const endpoints: Record<string, any> = {};
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  for (const [net, ep] of Object.entries<any>(inspect.NetworkSettings?.Networks || {})) {
+    endpoints[net] = {
+      Aliases: (ep.Aliases || []).filter((a: string) => !String(inspect.Id).startsWith(a)),
+      IPAMConfig: ep.IPAMConfig || undefined,
+      Links: ep.Links || undefined,
+    };
+  }
+  const cfg = { ...(inspect.Config || {}) };
+  if (cfg.Hostname && String(inspect.Id).startsWith(cfg.Hostname)) delete cfg.Hostname;
+  return { ...cfg, HostConfig: inspect.HostConfig, NetworkingConfig: { EndpointsConfig: endpoints } };
+}
+
 /** Removes the given services from a compose file's text; returns the new text. */
-function removeServicesFromCompose(composeText: string, services: string[]): string {
+export function removeServicesFromCompose(composeText: string, services: string[]): string {
   const doc = yaml.parseDocument(composeText);
   for (const svc of services) {
     doc.deleteIn(['services', svc]);
@@ -442,21 +464,7 @@ export async function executeStreamingPipeline(
         const originalName = c.name.replace(/^\//, '');
         // A standalone (docker run) app has no compose file to go back to: keep its full definition
         if (!c.compose?.project && !isDemo) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const inspect = await queryDockerEngine<any>(`/containers/${c.id}/json`);
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const endpoints: Record<string, any> = {};
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          for (const [net, ep] of Object.entries<any>(inspect.NetworkSettings?.Networks || {})) {
-            endpoints[net] = {
-              Aliases: (ep.Aliases || []).filter((a: string) => !String(inspect.Id).startsWith(a)),
-              IPAMConfig: ep.IPAMConfig || undefined,
-              Links: ep.Links || undefined,
-            };
-          }
-          const cfg = { ...(inspect.Config || {}) };
-          if (cfg.Hostname && String(inspect.Id).startsWith(cfg.Hostname)) delete cfg.Hostname;
-          standaloneApps.push({ name: originalName, spec: { ...cfg, HostConfig: inspect.HostConfig, NetworkingConfig: { EndpointsConfig: endpoints } } });
+          standaloneApps.push({ name: originalName, spec: await standaloneSpec(c.id) });
           log(`Saved ${c.cleanName}’s settings, so a restore can recreate it exactly.`, 2);
         }
         log(`Stopping ${c.cleanName}...`, 2);

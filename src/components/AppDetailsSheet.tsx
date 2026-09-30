@@ -287,7 +287,9 @@ export const AppDetailsSheet: React.FC<{
   onFixWithAI?: (r: FixRequest) => void;
   /** Another screen is open on top of this one */
   covered?: boolean;
-}> = ({ container, system, groups, hostAddress, helpers = [], partOf, onOpenApp, onClose, onSaveOverride, onAction, onOpenUpdates, onOpenRestore, onOpenSettings, onOpenActivity, onFixWithAI, covered }) => {
+  /** Opens Delete App for this app (with its database or cache) */
+  onDeleteApp?: () => void;
+}> = ({ container, system, groups, hostAddress, helpers = [], partOf, onOpenApp, onClose, onSaveOverride, onAction, onOpenUpdates, onOpenRestore, onOpenSettings, onOpenActivity, onFixWithAI, covered, onDeleteApp }) => {
   const open = Boolean(container);
   const [stack, setStack] = useState<View[]>(['overview']);
   const view = stack[stack.length - 1];
@@ -703,6 +705,19 @@ export const AppDetailsSheet: React.FC<{
             {!system && <Row onClick={() => push('customize')} leading={<NavTile d={G.pencil} color="#FF9F0A" />} title="Customize" subtitle={FEATURES.groups ? 'Name, group, launch link, icon and notes' : 'Name, launch link, icon and notes'} chevron />}
           </Group>
         </section>
+
+        {/* Last, on its own, like every destructive action */}
+        {!system && !partOf && onDeleteApp && (
+          <section>
+            <Group>
+              <Row onClick={onDeleteApp} title={<span style={{ color: ios.red }}>Delete App…</span>} />
+            </Group>
+            <SectionFooter>
+              Removes {container.customName || container.friendlyName || container.cleanName}
+              {helpers.length ? ` and its ${helpers.length === 1 ? helperKind(helpers[0]).toLowerCase() : 'helpers'}` : ''} from this server. It’s backed up first, so you can bring it back from Restore.
+            </SectionFooter>
+          </section>
+        )}
       </div>
     );
     const checkedAt = system ? sys?.checkedAt : diag?.checkedAt;

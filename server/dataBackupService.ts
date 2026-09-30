@@ -243,9 +243,19 @@ function shellQuote(s: string): string {
  * (normal for apps that keep running, e.g. logs); that is a warning, not a failed backup. Exit 2+
  * is a real error.
  */
+/**
+ * Archive /src into `file`. GNU tar (the Manifexus image) keeps going past files that change while it
+ * reads; BusyBox tar (Alpine-based helper images) doesn't know those options, so it gets the plain form.
+ */
 function tarScript(file: string): string {
   const f = shellQuote(file);
-  return `tar --warning=no-file-changed --warning=no-file-removed -C /src -czpf ${f} . ; rc=$?; [ $rc -le 1 ] && [ -s ${f} ]`;
+  return `if tar --version 2>/dev/null | grep -q GNU; then tar --warning=no-file-changed --warning=no-file-removed -C /src -czpf ${f} . ; else tar -C /src -czf ${f} . ; fi; rc=$?; [ $rc -le 1 ] && [ -s ${f} ]`;
+}
+
+/** Unpack an archive into /dst, keeping owners and permissions (BusyBox does that by default as root) */
+function untarScript(file: string): string {
+  const f = shellQuote(file);
+  return `if tar --version 2>/dev/null | grep -q GNU; then tar -C /dst -xzpf ${f}; else tar -C /dst -xzf ${f}; fi`;
 }
 
 /**
@@ -486,49 +496,94 @@ export async function archiveStackData(params: {
  * its stack folder (like ./config). Shared folders outside the stack (a media library, downloads) are left
  * out: a move never touches them, and they can be huge. Restore puts these back like any stack backup.
  */
-export async function archiveAppData(params: {
+export interface AppDataParams {
   apps: { name: string; workingDir?: string; mounts: { type: string; name?: string; source: string }[] }[];
   /** Every stack folder on the server: an app's own folders live inside one (its own, or another stack's) */
   stackDirs?: string[];
   /** Folders other apps mount: shared, so not this app's own */
   sharedDirs?: string[];
-  archiveDir: string;
-  log?: (msg: string) => void;
-}): Promise<DataArchiveEntry[]> {
+  /** Volumes other apps mount: shared, so not this app's own */
+  sharedVolumes?: string[];
+}
+
+/**
+ * What belongs to these apps alone: their Docker volumes, and the folders they use inside a stack
+ * folder (like ./config). Shared things (a media library, downloads, a volume another app also uses)
+ * are listed separately and never counted as the app's own.
+ */
+export async function appOwnData(params: AppDataParams): Promise<{
+  own: { kind: 'volume' | 'directory'; source: string; app: string }[];
+  shared: string[];
+}> {
+  const own: { kind: 'volume' | 'directory'; source: string; app: string }[] = [];
+  const shared = new Set<string>();
+  const done = new Set<string>();
+  const stackDirs = (params.stackDirs || []).filter(Boolean).map((d) => path.posix.normalize(d).replace(/\/+$/, ''));
+  for (const app of params.apps) {
+    const base = app.workingDir ? path.posix.normalize(app.workingDir).replace(/\/+$/, '') : '';
+    for (const m of app.mounts) {
+      if (m.type === 'volume' && m.name) {
+        if (done.has('v:' + m.name)) continue;
+        if ((params.sharedVolumes || []).includes(m.name)) {
+          shared.add(m.name);
+          continue;
+        }
+        done.add('v:' + m.name);
+        own.push({ kind: 'volume', source: m.name, app: app.name });
+      } else if (m.type === 'bind' && m.source) {
+        const src = path.posix.normalize(m.source).replace(/\/+$/, '');
+        if (src === '/var/run/docker.sock' || src.startsWith('/var/run/') || src.startsWith('/etc/') || src.startsWith('/dev/') || src.startsWith('/proc/') || src.startsWith('/sys/')) continue;
+        // The app's own folders: inside a stack folder (its own, or another stack's), not a whole stack folder,
+        // and not used by any other app (shared data like downloads or a media library is left alone)
+        const dirs = Array.from(new Set([base, ...stackDirs].filter(Boolean)));
+        if (!dirs.some((d) => src.startsWith(d + '/'))) {
+          shared.add(src);
+          continue;
+        }
+        if (done.has('d:' + src)) continue;
+        if ((params.sharedDirs || []).some((x) => x === src || x.startsWith(src + '/') || src.startsWith(x + '/'))) {
+          shared.add(src);
+          continue;
+        }
+        if ([...done].some((d) => d.startsWith('d:') && src.startsWith(d.slice(2) + '/'))) continue;
+        if (!(await hostDirectoryExists(src))) continue;
+        done.add('d:' + src);
+        own.push({ kind: 'directory', source: src, app: app.name });
+      }
+    }
+  }
+  return { own, shared: Array.from(shared) };
+}
+
+/** How big each of an app's own volumes and folders is */
+export async function measureAppData(items: { kind: 'volume' | 'directory'; source: string }[]): Promise<{ kind: 'volume' | 'directory'; source: string; bytes: number }[]> {
+  const out = [];
+  for (const it of items) out.push({ ...it, bytes: await measure(it.source) });
+  return out;
+}
+
+export async function archiveAppData(params: AppDataParams & { archiveDir: string; log?: (msg: string) => void }): Promise<DataArchiveEntry[]> {
   const log = params.log || (() => {});
   const dataDir = path.join(params.archiveDir, 'data');
   fs.mkdirSync(dataDir, { recursive: true });
   const entries: DataArchiveEntry[] = [];
-  const done = new Set<string>();
   const safe = (x: string) => x.replace(/[^a-zA-Z0-9_.-]/g, '_').slice(0, 80);
-  for (const app of params.apps) {
-    const base = app.workingDir ? path.posix.normalize(app.workingDir).replace(/\/+$/, '') : '';
-    for (const m of app.mounts) {
-      if (m.type === 'volume' && m.name && !done.has('v:' + m.name)) {
-        done.add('v:' + m.name);
-        const file = path.join(dataDir, `${safe(app.name)}__vol__${safe(m.name)}.tar.gz`);
-        log(`Backing up ${app.name}’s volume ${m.name}...`);
-        const code = await runHelper(tarScript(file), [`${m.name}:/src:ro`], DEFAULT_HELPER_TIMEOUT_MS, [], { purpose: `Back up volume ${m.name}` });
-        if (code !== 0 || !fs.existsSync(file)) throw new Error(`Backing up volume ${m.name} failed (exit ${code}).`);
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const vol = await queryDockerEngine<any>(`/volumes/${encodeURIComponent(m.name)}`, 'GET').catch(() => null);
-        entries.push({ kind: 'volume', source: m.name, archiveFile: file, bytes: fs.statSync(file).size, volumeLabels: vol?.Labels || {}, volumeDriver: vol?.Driver || 'local' });
-      } else if (m.type === 'bind' && base && m.source) {
-        const src = path.posix.normalize(m.source).replace(/\/+$/, '');
-        // The app's own folders: inside a stack folder (its own, or another stack's), not a whole stack folder,
-        // and not used by any other app (shared data like downloads or a media library is left alone)
-        const dirs = Array.from(new Set([base, ...(params.stackDirs || [])].filter(Boolean).map((d) => path.posix.normalize(d).replace(/\/+$/, ''))));
-        if (!dirs.some((d) => src.startsWith(d + '/')) || done.has('d:' + src)) continue;
-        if ((params.sharedDirs || []).some((x) => x === src || x.startsWith(src + '/') || src.startsWith(x + '/'))) continue;
-        if ([...done].some((d) => d.startsWith('d:') && src.startsWith(d.slice(2) + '/'))) continue;
-        if (!(await hostDirectoryExists(src))) continue;
-        done.add('d:' + src);
-        const file = path.join(dataDir, `${safe(app.name)}__dir__${safe(src)}.tar.gz`);
-        log(`Backing up ${src}...`);
-        const code = await runHelper(tarScript(file), [`${src}:/src:ro`], DEFAULT_HELPER_TIMEOUT_MS, [], { purpose: `Back up folder ${src}` });
-        if (code !== 0 || !fs.existsSync(file)) throw new Error(`Backing up folder ${src} failed (exit ${code}).`);
-        entries.push({ kind: 'directory', source: src, archiveFile: file, bytes: fs.statSync(file).size });
-      }
+  const { own } = await appOwnData(params);
+  for (const it of own) {
+    if (it.kind === 'volume') {
+      const file = path.join(dataDir, `${safe(it.app)}__vol__${safe(it.source)}.tar.gz`);
+      log(`Backing up ${it.app}’s volume ${it.source}...`);
+      const code = await runHelper(tarScript(file), [`${it.source}:/src:ro`], DEFAULT_HELPER_TIMEOUT_MS, [], { purpose: `Back up volume ${it.source}` });
+      if (code !== 0 || !fs.existsSync(file)) throw new Error(`Backing up volume ${it.source} failed (exit ${code}).`);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const vol = await queryDockerEngine<any>(`/volumes/${encodeURIComponent(it.source)}`, 'GET').catch(() => null);
+      entries.push({ kind: 'volume', source: it.source, archiveFile: file, bytes: fs.statSync(file).size, volumeLabels: vol?.Labels || {}, volumeDriver: vol?.Driver || 'local' });
+    } else {
+      const file = path.join(dataDir, `${safe(it.app)}__dir__${safe(it.source)}.tar.gz`);
+      log(`Backing up ${it.source}...`);
+      const code = await runHelper(tarScript(file), [`${it.source}:/src:ro`], DEFAULT_HELPER_TIMEOUT_MS, [], { purpose: `Back up folder ${it.source}` });
+      if (code !== 0 || !fs.existsSync(file)) throw new Error(`Backing up folder ${it.source} failed (exit ${code}).`);
+      entries.push({ kind: 'directory', source: it.source, archiveFile: file, bytes: fs.statSync(file).size });
     }
   }
   return entries;
@@ -558,7 +613,7 @@ export async function restoreStackData(
         continue;
       }
       log(`Restoring folder ${e.source} from backup...`);
-      const code = await runHelper(`mkdir -p /dst && tar -C /dst -xzpf ${shellQuote(e.archiveFile)}`, [
+      const code = await runHelper(`mkdir -p /dst && ${untarScript(e.archiveFile)}`, [
         `${e.source}:/dst`,
       ], DEFAULT_HELPER_TIMEOUT_MS, [], { purpose: `Restore folder ${e.source}` });
       if (code !== 0) throw new Error(`Restoring folder ${e.source} failed (exit ${code}).`);
@@ -584,7 +639,7 @@ export async function restoreStackData(
         });
       }
       log(`Restoring volume ${e.source} from backup...`);
-      const code = await runHelper(`tar -C /dst -xzpf ${shellQuote(e.archiveFile)}`, [`${e.source}:/dst`], DEFAULT_HELPER_TIMEOUT_MS, [], {
+      const code = await runHelper(untarScript(e.archiveFile), [`${e.source}:/dst`], DEFAULT_HELPER_TIMEOUT_MS, [], {
         purpose: `Restore volume ${e.source}`,
       });
       if (code !== 0) throw new Error(`Restoring volume ${e.source} failed (exit ${code}).`);
@@ -690,7 +745,7 @@ export function formatBytes(bytes: number): string {
  */
 export async function extractArchiveTo(entry: DataArchiveEntry, destHostDir: string): Promise<void> {
   if (!fs.existsSync(entry.archiveFile)) throw new Error(`The backup file for ${entry.source} is missing.`);
-  const code = await runHelper(`mkdir -p /dst && tar -C /dst -xzpf ${shellQuote(entry.archiveFile)}`, [`${destHostDir}:/dst`], DEFAULT_HELPER_TIMEOUT_MS, [], {
+  const code = await runHelper(`mkdir -p /dst && ${untarScript(entry.archiveFile)}`, [`${destHostDir}:/dst`], DEFAULT_HELPER_TIMEOUT_MS, [], {
     purpose: `Restore ${entry.kind === 'volume' ? 'volume' : 'folder'} ${entry.source} into ${destHostDir}`,
   });
   if (code !== 0) throw new Error(`Copying ${entry.source} into ${destHostDir} failed (exit ${code}).`);

@@ -28,7 +28,9 @@ export interface MergeHistoryRecord {
   archiveSizeBytes: number;
   summary: string;
   logs?: string[];
-  type?: 'MERGE' | 'COMPOSE_INSTALL' | 'STACK_DELETE' | 'RESTORE' | 'FIX';
+  type?: 'MERGE' | 'COMPOSE_INSTALL' | 'STACK_DELETE' | 'RESTORE' | 'FIX' | 'APP_DELETE';
+  /** APP_DELETE records: the app deleted (with its database or cache) and where it lived; no workingDir = a standalone app */
+  deletedApps?: { names: string[]; project?: string; workingDir?: string };
   // Present on STACK_DELETE records: what is needed to re-provision and re-register the stack on revert
   deletedStack?: {
     project: string;

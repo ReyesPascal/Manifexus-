@@ -133,6 +133,8 @@ export interface RestorePoint {
   onlyCopy: boolean;
   /** A deleted stack that had no apps */
   emptyStack: boolean;
+  /** A deleted app (not a whole stack): its stack, or none for a standalone app */
+  deletedApp?: { stack?: string };
   activityId?: string;
   restoreActivityId?: string;
 }
@@ -145,10 +147,14 @@ const isSnapshotRecord = (r: MergeHistoryRecord) => r.type === 'RESTORE' || r.ty
 function kindOf(r: MergeHistoryRecord): RestoreKind {
   if (r.type === 'RESTORE') return 'restore';
   if (r.type === 'FIX') return 'fix';
+  if (r.type === 'APP_DELETE') return 'delete';
   if (r.type === 'STACK_DELETE' || r.id.startsWith('delete_')) return 'delete';
   if (r.type === 'COMPOSE_INSTALL') return 'install';
   return 'move';
 }
+
+/** A whole stack was deleted (its folder went away), not just one app from it */
+const isStackDelete = (r: MergeHistoryRecord) => kindOf(r) === 'delete' && r.type !== 'APP_DELETE';
 
 /** Stack folders a change touched */
 function touchedDirs(r: MergeHistoryRecord): Set<string> {
@@ -186,6 +192,10 @@ function titleOf(r: MergeHistoryRecord): { title: string; detail?: string } {
     const stacks = joinNames(stackNames(r)) || 'stacks';
     if (r.summary?.startsWith('undid')) return { title: `Undid a restore of ${stacks}`, detail: r.summary };
     return { title: `Restored ${stacks}`, detail: r.summary || undefined };
+  }
+  if (r.type === 'APP_DELETE') {
+    const stack = r.deletedApps?.project;
+    return { title: `Deleted ${joinNames(appNames(r)) || 'an app'}`, detail: stack ? `from ${stack}` : 'standalone app' };
   }
   if (kind === 'delete') {
     const n = r.deletedStack?.serviceCount ?? 0;
@@ -270,7 +280,8 @@ function toPoint(r: MergeHistoryRecord, all: MergeHistoryRecord[], keepDays: num
     },
     newer: state === 'available' ? chainFor(r, all).length - 1 : 0,
     onlyCopy: kind === 'delete' && state === 'available',
-    emptyStack: kind === 'delete' && (r.deletedStack?.serviceCount ?? 0) === 0,
+    emptyStack: isStackDelete(r) && (r.deletedStack?.serviceCount ?? 0) === 0,
+    deletedApp: r.type === 'APP_DELETE' ? { stack: r.deletedApps?.project } : undefined,
     activityId: r.activityId,
     restoreActivityId: r.revertActivityId,
   };
@@ -329,7 +340,7 @@ function beforeOf(r: MergeHistoryRecord, dir: string): StackTarget {
     const snap = (r.dirSnapshots || []).find((d) => norm(d.dir) === dir)!;
     return { dir, project: snap.project, exists: snap.existed, compose: snap.compose, env: snap.env, data: projectVolumesIn(archives, snap.project, dir), losesApps: false, from: at };
   }
-  if (kindOf(r) === 'delete') {
+  if (isStackDelete(r)) {
     return {
       dir,
       project: r.deletedStack?.project || r.targetStackName,
@@ -450,7 +461,7 @@ export async function planRestore(id: string): Promise<RestorePlan | null> {
     // Expected current state = how the newest change touching each stack left it
     const expected = new Map<string, { content: string | null; by: MergeHistoryRecord } | 'unknown'>();
     for (const r of [...chain].reverse()) {
-      if (kindOf(r) === 'delete') expected.set(path.posix.join(norm(r.targetDirectory), 'docker-compose.yml'), { content: null, by: r });
+      if (isStackDelete(r)) expected.set(path.posix.join(norm(r.targetDirectory), 'docker-compose.yml'), { content: null, by: r });
       else if (r.resultFiles?.length) for (const f of r.resultFiles) expected.set(norm(f.path), { content: f.content, by: r });
       else for (const d of touchedDirs(r)) expected.set(path.posix.join(d, 'docker-compose.yml'), 'unknown');
     }
@@ -517,7 +528,7 @@ export async function planRestore(id: string): Promise<RestorePlan | null> {
     stacks,
     checks,
     canRestore: point.state === 'available' && !checks.some((c) => c.level === 'block'),
-    canRestoreFilesOnly: point.state === 'available' && chain.length === 1 && kindOf(target) === 'delete',
+    canRestoreFilesOnly: point.state === 'available' && chain.length === 1 && isStackDelete(target),
   };
 }
 
@@ -547,6 +558,14 @@ export async function executeRestore(id: string, emit: Emit, opts: { filesOnly?:
   const targets = targetsFor(chain);
   const standalone = standaloneFor(chain);
   const startApps = !(opts.filesOnly && plan.canRestoreFilesOnly);
+  // Deleted apps' own data (their volumes and folders), by the stack folder they lived in ('' = a
+  // standalone app). Put back before the app starts again; live data is never overwritten.
+  const appData = new Map<string, DataArchiveEntry[]>();
+  for (const r of chain) {
+    if (r.type !== 'APP_DELETE') continue;
+    const k = norm(r.deletedApps?.workingDir);
+    appData.set(k, [...(appData.get(k) || []), ...(r.dataArchives || []).filter((a) => fs.existsSync(a.archiveFile))]);
+  }
 
   // This restore's own backup: how every stack looked just before it
   const restoreId = `restore_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
@@ -640,6 +659,7 @@ export async function executeRestore(id: string, emit: Emit, opts: { filesOnly?:
           if (t.data.length) await restoreStackData(t.data, { log });
           else log('No saved files for this folder; putting the compose file back.');
         }
+        if (appData.get(t.dir)?.length) await restoreStackData(appData.get(t.dir)!, { log });
         const compose = t.compose && t.compose.trim() ? t.compose : 'services: {}\n';
         if (!(await writeHostFile(file, compose))) throw new Error(`Couldn’t write ${file}.`);
         if (t.env) await writeHostFile(envFile, t.env);
@@ -685,6 +705,7 @@ export async function executeRestore(id: string, emit: Emit, opts: { filesOnly?:
 
     if (standalone.length) {
       await run(async (log) => {
+        if (appData.get('')?.length) await restoreStackData(appData.get('')!, { log });
         for (const a of standalone) {
           if (await containerExists(a.name)) {
             log(`${a.name} already exists; left as it is.`);

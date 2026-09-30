@@ -2,6 +2,19 @@
   "_about": "What's new in each version of Manifexus, newest first. Shown in Updates. Write for people, not developers: short, plain sentences about what they can now do. The newest entry's version is what gets built and tagged; older entries can give the \"commit\" they were released from.",
   "releases": [
     {
+      "version": "2.3",
+      "date": "2026-09-30",
+      "headline": "Delete an app you no longer need, safely, with everything backed up first.",
+      "new": [
+        "Delete App. At the bottom of any app's Details, Delete App removes the app from your dashboard and your server, together with its own database or cache. The rest of its stack keeps running.",
+        "Everything is backed up first: its settings, its place in the stack's compose file, and its own data (its volumes and the folders only it uses). You see exactly what it keeps and how big it is before you say yes. Bring it back anytime from Restore, just as it was.",
+        "Folders it shares with other apps, like a media library or downloads, are never touched, and the screen tells you which ones those are."
+      ],
+      "fixed": [
+        "Restore now puts back an app's own data even when the rest of its stack is still there."
+      ]
+    },
+    {
       "version": "2.2",
       "date": "2026-09-30",
       "headline": "Every stack shows up, and every tip is easy to read.",

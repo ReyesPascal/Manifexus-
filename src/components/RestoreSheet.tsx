@@ -51,6 +51,8 @@ interface RestorePoint {
   newer: number;
   onlyCopy: boolean;
   emptyStack: boolean;
+  /** A deleted app (not a whole stack), and the stack it was in */
+  deletedApp?: { stack?: string };
   activityId?: string;
   restoreActivityId?: string;
 }
@@ -299,6 +301,8 @@ const Detail: React.FC<{
   const [busy, setBusy] = useState(false);
   const hasBackup = p.state !== 'archived' && !p.backup.deletedAt;
   const from = p.kind === 'move' ? p.stacks.filter((s) => s !== p.stacks[0]) : [];
+  // What a delete took away: one app, or a whole stack
+  const gone = p.deletedApp ? p.apps[0] || 'this app' : p.stacks[0];
 
   const pin = async (on: boolean) => {
     onChanged({ ...p, pinned: on });
@@ -353,7 +357,16 @@ const Detail: React.FC<{
               <Row title="To" trailing={<span>{p.stacks[0]}</span>} />
             </>
           )}
-          {p.kind === 'delete' && (
+          {p.kind === 'delete' && p.deletedApp && (
+            <>
+              <Row title="App" trailing={<span>{p.apps.join(', ')}</span>} />
+              <Row title="Was In" trailing={<span>{p.deletedApp.stack || 'No stack (standalone)'}</span>} />
+              {(p.backup.folders.length > 0 || p.backup.volumes.length > 0) && (
+                <Row title="Its Data" trailing={<span>{[p.backup.folders.length ? plural(p.backup.folders.length, 'folder') : '', p.backup.volumes.length ? plural(p.backup.volumes.length, 'volume') : ''].filter(Boolean).join(', ')}</span>} />
+              )}
+            </>
+          )}
+          {p.kind === 'delete' && !p.deletedApp && (
             <>
               <Row title="Stack" trailing={<span>{p.stacks[0]}</span>} />
               {p.detail && <Row title="Apps" trailing={<span>{p.detail}</span>} />}
@@ -462,7 +475,7 @@ const Detail: React.FC<{
           </Group>
           <SectionFooter>
             {p.onlyCopy
-              ? `Removes it from Restore with its backup. The backup is the only copy of ${p.stacks[0]}, so it couldn’t be brought back.`
+              ? `Removes it from Restore with its backup. The backup is the only copy of ${gone}, so it couldn’t be brought back.`
               : 'Removes it from Restore with its backup. Your stacks and their data aren’t touched.'}
           </SectionFooter>
         </section>
@@ -470,10 +483,10 @@ const Detail: React.FC<{
 
       <Alert
         open={confirmDelete}
-        title={p.onlyCopy ? `Delete the only copy of ${p.stacks[0]}?` : 'Delete this change?'}
+        title={p.onlyCopy ? `Delete the only copy of ${gone}?` : 'Delete this change?'}
         message={
           p.onlyCopy
-            ? `${p.stacks[0]}’s files and settings will be gone for good. This can’t be undone.`
+            ? `${gone}’s files and settings will be gone for good. This can’t be undone.`
             : 'Your stacks and their data stay as they are. You just won’t be able to restore to before this change.'
         }
         confirmLabel="Delete"
@@ -812,7 +825,7 @@ export const RestoreSheet: React.FC<{
       ids,
       title: what || `Delete ${n === 1 ? 'this change' : `${n} changes`}?`,
       message: only.length
-        ? `${only.map((p) => p.stacks[0]).join(', ')} ${only.length === 1 ? 'was deleted and this is its only copy' : 'were deleted and these are their only copies'}, so ${only.length === 1 ? 'it' : 'they'} couldn’t be brought back. Everything else just can’t be restored anymore; your stacks aren’t touched.`
+        ? `${only.map((p) => (p.deletedApp ? p.apps[0] : p.stacks[0])).join(', ')} ${only.length === 1 ? 'was deleted and this is its only copy' : 'were deleted and these are their only copies'}, so ${only.length === 1 ? 'it' : 'they'} couldn’t be brought back. Everything else just can’t be restored anymore; your stacks aren’t touched.`
         : 'They can’t be restored anymore. Your stacks and their data aren’t touched.',
     });
   };

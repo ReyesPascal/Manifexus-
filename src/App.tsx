@@ -26,8 +26,8 @@ import {
 import { PortsSheet } from './components/PortsSheet';
 import { SoftwareUpdateSheet, SoftwareUpdateState } from './components/SoftwareUpdateSheet';
 import { ActivitySheet } from './components/ActivitySheet';
-import { AppCard, MoveProgress, learnMoveSteps } from './components/AppCard';
-import { helperParents, helpersByApp } from './appHelpers';
+import { AppCard, AppIcon, MoveProgress, learnMoveSteps } from './components/AppCard';
+import { helperKind, helperParents, helpersByApp } from './appHelpers';
 import { StackIcon, StackIconChoice } from './stackIcons';
 import { AppDetailsSheet } from './components/AppDetailsSheet';
 import { AssistantSheet } from './components/AssistantSheet';
@@ -40,6 +40,7 @@ import { SettingsModal } from './components/SettingsModal';
 import { SimulateContainerModal } from './components/SimulateContainerModal';
 import { MoveAppsModal } from './components/MoveAppsModal';
 import { DeleteStackDialog, DeleteStackTarget } from './components/DeleteStackDialog';
+import { DeleteAppDialog, DeleteAppTarget } from './components/DeleteAppDialog';
 import { HostAutomationModal } from './components/HostAutomationModal';
 import { GettingStartedSheet, Tour } from './components/GettingStarted';
 import { ManifexusHeroHeader } from './components/ManifexusHeroHeader';
@@ -170,6 +171,7 @@ export default function App() {
 
   // Directive 5: Auto-Updater state
   const [deleteStackTarget, setDeleteStackTarget] = useState<DeleteStackTarget | null>(null);
+  const [deleteAppTarget, setDeleteAppTarget] = useState<DeleteAppTarget | null>(null);
 
   // Software Update: state comes from the server, which checks on its own schedule
   const [softwareUpdate, setSoftwareUpdate] = useState<SoftwareUpdateState | null>(null);
@@ -1378,6 +1380,21 @@ export default function App() {
           setOverDetails('assistant');
           setFixRequest(r);
         }}
+        onDeleteApp={
+          inspectContainer
+            ? () => {
+                const c = inspectContainer;
+                const helpers = helpersOf.get(c.id) || [];
+                setDeleteAppTarget({
+                  ids: [c.id, ...helpers.map((h) => h.id)],
+                  name: c.customName || c.friendlyName || c.cleanName,
+                  icon: <AppIcon container={c} size={56} />,
+                  stack: c.compose?.isCompose && c.compose.project ? stackLabel(c.compose.project) : undefined,
+                  helpers: helpers.map((h) => helperKind(h).toLowerCase()),
+                });
+              }
+            : undefined
+        }
         onOpenActivity={(filter) => {
           setOverDetails('activity');
           setActivity({ open: true, filter });
@@ -1549,6 +1566,17 @@ export default function App() {
         onClose={() => setIsPortsOpen(false)}
         containers={containers.filter((c) => !c.isHidden)}
         hostAddress={config?.hostAddress || 'localhost'}
+      />
+
+      <DeleteAppDialog
+        target={deleteAppTarget}
+        onCancel={() => setDeleteAppTarget(null)}
+        onDeleted={(message) => {
+          setDeleteAppTarget(null);
+          setInspectContainer(null);
+          setNotice({ text: message });
+          fetchData(true);
+        }}
       />
 
       <DeleteStackDialog

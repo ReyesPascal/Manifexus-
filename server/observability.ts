@@ -222,6 +222,7 @@ const ROUTES: [string, RegExp, Describer][] = [
   ['POST', /^\/api\/stacks\/create$/, (_r, b) => ({ type: 'stack', title: `Create stack ${b?.stackName || ''}`.trim() })],
   ['POST', /^\/api\/cleanup\/run$/, (_r, b) => ({ type: 'delete', title: `Clean up ${Array.isArray(b?.paths) ? b.paths.length : ''} unused folder${Array.isArray(b?.paths) && b.paths.length === 1 ? '' : 's'}`.replace('  ', ' ') })],
   ['POST', /^\/api\/stacks\/delete$/, (_r, b) => ({ type: 'delete', title: `Delete stack ${b?.projectName || ''}`.trim() })],
+  ['POST', /^\/api\/apps\/delete$/, (_r, b) => ({ type: 'delete', title: `Delete ${b?.label || 'app'}`.trim() })],
   ['POST', /^\/api\/restore\/([^/]+)\/run$/, () => ({ type: 'undo', title: 'Restore' })],
   ['POST', /^\/api\/ai\/plans\/([^/]+)\/run$/, () => ({ type: 'fix', title: 'Fix with the built-in AI' })],
   ['POST', /^\/api\/ai\/settings$/, () => ({ type: 'settings', title: 'Change AI settings' })],
@@ -254,7 +255,7 @@ const ROUTES: [string, RegExp, Describer][] = [
 
 /** Read-only POSTs and the log API itself: no activity, low-detail request event only. */
 // Background requests the person didn't ask for directly: logged, but not listed in Activity
-const QUIET = [/^\/api\/stacks\/data-footprint$/, /^\/api\/logs(\/|$)/, /^\/api\/ai\/warm$/, /^\/api\/diagnostics\/autofix$/];
+const QUIET = [/^\/api\/stacks\/data-footprint$/, /^\/api\/apps\/delete-plan$/, /^\/api\/logs(\/|$)/, /^\/api\/ai\/warm$/, /^\/api\/diagnostics\/autofix$/];
 
 export function requestTracker(req: Request, res: Response, next: NextFunction) {
   if (!req.path.startsWith('/api/')) return next();

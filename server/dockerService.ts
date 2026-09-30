@@ -1432,6 +1432,11 @@ export function mergeDemoContainersIntoStack(
   return true;
 }
 
+// Remove single sample apps in demo mode
+export function removeDemoContainers(ids: string[]): void {
+  demoContainers = demoContainers.filter((c) => !ids.includes(c.id));
+}
+
 // Helper to remove mock stack containers in demo mode
 export function removeDemoContainersByProject(projectName: string): void {
   const norm = projectName.toLowerCase();
