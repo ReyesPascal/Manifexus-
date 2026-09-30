@@ -798,6 +798,8 @@ export default function App() {
   }, [visibleApps, emptyStacks, containers]);
   const [isPortsOpen, setIsPortsOpen] = useState(false);
   const [stackDetails, setStackDetails] = useState<string | null>(null);
+  /** Stack Details for the apps not in a stack */
+  const LOOSE = '\u0000loose';
   const [isCleanupOpen, setIsCleanupOpen] = useState(false);
 
   // Grouped containers by Custom User Groups
@@ -1149,7 +1151,6 @@ export default function App() {
               .filter(([, d]) => d.containers.length > 0 || statusFilter === 'all')
               .map(([projectName, stackData]) => {
                 const apps = stackData.containers;
-                const composePath = stackData.configFiles?.split(',')[0] || (stackData.workingDir ? `${stackData.workingDir}/docker-compose.yml` : undefined);
                 const own = projectName.toLowerCase() === 'manifexus';
                 const span = shelfSpan(apps.length);
                 return (
@@ -1164,41 +1165,7 @@ export default function App() {
                     status={<Health apps={apps} alsoCheck={apps.flatMap((a) => helpersOf.get(a.id) || [])} />}
                     forceOpen={apps.some((c) => c.state === 'restarting' || c.state === 'dead')}
                     action={own ? undefined : { label: 'Add App', onClick: () => openMoveForStack(projectName), title: `Move apps into ${projectName}` }}
-                    menu={[
-                      ...stackActionItems(apps),
-                      ...(composePath
-                        ? [
-                            {
-                              key: 'compose',
-                              label: 'Edit Compose File…',
-                              divider: apps.length > 0,
-                              onSelect: () => {
-                                setTerminalTargetFile(composePath);
-                                setTerminalStackName(projectName);
-                                setIsTerminalModalOpen(true);
-                              },
-                            },
-                          ]
-                        : []),
-                      { key: 'details', label: 'Stack Details', divider: !composePath && apps.length > 0, onSelect: () => setStackDetails(projectName) },
-                      ...(own
-                        ? []
-                        : [
-                            {
-                              key: 'delete',
-                              label: 'Delete Stack…',
-                              destructive: true,
-                              divider: true,
-                              onSelect: () =>
-                                setDeleteStackTarget({
-                                  projectName,
-                                  targetDirectory: stackData.workingDir,
-                                  servicesCount: apps.length,
-                                  apps: apps.map((c) => ({ id: c.id, name: (c.customName || c.friendlyName || c.cleanName).replace(/^\//, ''), iconUrl: c.iconUrl })),
-                                }),
-                            },
-                          ]),
-                    ]}
+                    onDetails={() => setStackDetails(projectName)}
                   >
                     {apps.length > 0 ? (
                       <TileGrid span={span}>{apps.map((c) => card(c, true))}</TileGrid>
@@ -1226,19 +1193,7 @@ export default function App() {
                     <Health apps={groupedByComposeStacks.standalone} /> <span className="hidden sm:inline">· Started with docker run</span>
                   </span>
                 }
-                menu={[
-                  ...stackActionItems(groupedByComposeStacks.standalone),
-                  {
-                    key: 'move',
-                    label: 'Move into a Stack…',
-                    divider: true,
-                    onSelect: () => {
-                      setMoveInitialDestination(undefined);
-                      setMoveInitialAppId(undefined);
-                      setIsMergeModalOpen(true);
-                    },
-                  },
-                ]}
+                onDetails={() => setStackDetails(LOOSE)}
               >
                 <TileGrid span={shelfSpan(groupedByComposeStacks.standalone.length)}>{groupedByComposeStacks.standalone.map((c) => card(c))}</TileGrid>
               </Shelf>
@@ -1265,6 +1220,33 @@ export default function App() {
       <CleanupSheet open={isCleanupOpen} onClose={() => setIsCleanupOpen(false)} onChanged={() => fetchData(false)} />
 
       {/* One stack: its apps, where it lives, and actions */}
+      {/* Apps not in a stack: the same Details screen, without the parts only a stack has */}
+      {stackDetails === LOOSE && (
+        <StackDetailsSheet
+          project="Not in a Stack"
+          apps={groupedByComposeStacks.standalone}
+          helpersOf={helpersOf}
+          icon={<FolderIcon apps={groupedByComposeStacks.standalone} size={72} />}
+          note="Started with docker run"
+          addLabel="Move into a Stack"
+          actions={stackActionItems(groupedByComposeStacks.standalone)}
+          onClose={() => setStackDetails(null)}
+          onOpenApp={(c) => {
+            setStackDetails(null);
+            setInspectContainer(c);
+          }}
+          onAddApp={() => {
+            setStackDetails(null);
+            setMoveInitialDestination(undefined);
+            setMoveInitialAppId(undefined);
+            setIsMergeModalOpen(true);
+          }}
+          onOpenRestore={() => {
+            setStackDetails(null);
+            setIsRestoreOpen(true);
+          }}
+        />
+      )}
       {(() => {
         const d = stackDetails ? groupedByComposeStacks.stacksMap[stackDetails] : undefined;
         const composeFile = d?.configFiles?.split(',')[0] || (d?.workingDir ? `${d.workingDir}/docker-compose.yml` : undefined);
@@ -1280,6 +1262,8 @@ export default function App() {
             workingDir={d?.workingDir}
             composeFile={composeFile}
             onClose={() => setStackDetails(null)}
+            actions={stackActionItems(d?.containers || [])}
+            onRename={stackDetails ? (n) => void handleRenameStack(stackDetails, n) : undefined}
             onOpenApp={(c) => {
               setStackDetails(null);
               setInspectContainer(c);

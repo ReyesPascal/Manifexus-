@@ -284,7 +284,7 @@ const TOUR: TourStep[] = [
   { target: 'button[aria-label*="to Docker"]', title: 'Connected to Docker', text: 'The light on the logo shows Manifexus can reach Docker: green means all is well.', tryIt: { hint: 'Point at the logo to see details', on: 'hover' } },
   { target: 'label:has(input[aria-label="Search apps"])', title: 'Find any app', text: 'Search by name, port or stack.', tryIt: { hint: 'Type a letter to try it', on: 'input' } },
   { target: '[role="group"][aria-label="Your apps"]', title: 'Running, Stopped and Ports', text: 'Tap Running or Stopped to show only those apps. Tap it again to show everything. Ports shows which app uses each port.', tryIt: { hint: 'Tap Running or Stopped', on: 'click' } },
-  { target: 'section[aria-label]:not([aria-label="Not in a Stack"])', title: 'Stacks', text: 'A stack is a folder of apps that belong together. Tap its name to fold it away; ⋯ has everything else, like Rename, Stack Details and Delete.' },
+  { target: 'section[aria-label]:not([aria-label="Not in a Stack"])', title: 'Stacks', text: 'A stack is a folder of apps that belong together. Tap its name to fold it away, + to add an app, and ⓘ for its details: rename it, start or stop all its apps, edit its compose file, or delete it.' },
   { target: '[data-flip^="app:"]', title: 'Your apps', text: 'Open, Restart and Stop are right on each card. Tap a card for its details: health, logs, storage and more.' },
   { target: '[data-flip^="app:"]', title: 'Move apps by dragging', text: 'Drag an app onto another stack. It moves right away, and the real move happens in the background, backed up so you can undo it.' },
   { target: 'button', title: 'New Stack', text: 'Make a stack in one click: type its name and press Return. Then drag apps onto it.' },

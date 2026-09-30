@@ -2,6 +2,19 @@
   "_about": "What's new in each version of Manifexus, newest first. Shown in Updates. Write for people, not developers: short, plain sentences about what they can now do. The newest entry's version is what gets built and tagged; older entries can give the \"commit\" they were released from.",
   "releases": [
     {
+      "version": "2.1",
+      "date": "2026-09-30",
+      "headline": "Everything about a stack, one tap away.",
+      "new": [],
+      "improved": [
+        "Each stack now has a Details button (ⓘ), just like app cards. It opens one screen for the whole stack: its apps, Rename, Start, Restart or Stop All, Edit Compose File, where it lives, Restore and Delete. The ⋯ menus on stacks are gone.",
+        "Apps not in a stack get the same Details button, with Start, Restart or Stop All and Move into a Stack."
+      ],
+      "fixed": [
+        "Menus could open hidden behind the stacks below them. Menus now always show on top."
+      ]
+    },
+    {
       "version": "2.0",
       "date": "2026-09-29",
       "headline": "Manifexus 2.0: a friendly welcome, and a tour of your dashboard.",

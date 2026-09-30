@@ -5,6 +5,7 @@
  * Colors follow Apple's dark-mode system palette so the pieces read as one family.
  */
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 export const ios = {
   sheet: '#1c1c1e',
@@ -743,7 +744,8 @@ export const MenuButton: React.FC<{
           </>
         )}
       </button>
-      {open && (
+      {/* On the page itself, so no panel (or a zoomed or gliding stack) can cover or clip it */}
+      {open && createPortal(
         <div
           ref={menuRef}
           role="menu"
@@ -801,7 +803,8 @@ export const MenuButton: React.FC<{
               )}
             </React.Fragment>
           ))}
-        </div>
+        </div>,
+        document.body,
       )}
     </>
   );

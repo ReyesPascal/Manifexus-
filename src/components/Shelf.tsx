@@ -43,6 +43,13 @@ const Chevron: React.FC<{ open: boolean }> = ({ open }) => (
   </svg>
 );
 
+const InfoGlyph = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M12 11v5.5M12 7.6v.01" strokeWidth="2.6" />
+  </svg>
+);
+
 const MoreGlyph = () => (
   <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
     <circle cx="5" cy="12" r="1.9" />
@@ -234,6 +241,8 @@ export const Shelf: React.FC<{
   /** A quiet primary action beside the menu, e.g. + Add App */
   action?: { label: string; onClick: () => void; title?: string };
   menu?: MenuItem[];
+  /** Opens the stack's details (shown as ⓘ, like on app cards; takes the place of the ⋯ menu) */
+  onDetails?: () => void;
   /** Keep it open even if folded before (e.g. an app in it has a problem) */
   forceOpen?: boolean;
   /** How many app columns it asks for in the ShelfGrid (its app count) */
@@ -247,7 +256,7 @@ export const Shelf: React.FC<{
   /** Rename it on the dashboard; `original` is its real name (the folder's), shown as the placeholder */
   rename?: { original: string; onSave: (name: string) => void };
   children: React.ReactNode;
-}> = ({ id, title, icon, status, action, menu, forceOpen, rename, onDropApp, startRenaming, onCancelRename, children }) => {
+}> = ({ id, title, icon, status, action, menu, onDetails, forceOpen, rename, onDropApp, startRenaming, onCancelRename, children }) => {
   const [renaming, setRenaming] = useState(Boolean(startRenaming));
   const [over, setOver] = useState(false);
   const [folded, setFolded] = useState(() => readFolded().has(id));
@@ -358,7 +367,19 @@ export const Shelf: React.FC<{
             <PlusGlyph size={13} />
           </button>
         )}
-        {menu && menu.length > 0 && (
+        {onDetails && (
+          <button
+            type="button"
+            onClick={onDetails}
+            title="Details"
+            aria-label={`Details for ${title}`}
+            className="inline-flex flex-shrink-0 items-center justify-center w-8 h-8 rounded-full transition-colors hover:brightness-125 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0A84FF]"
+            style={{ background: 'rgba(118,118,128,0.16)', boxShadow: 'inset 0 0 0 0.5px rgba(255,255,255,0.08)', color: 'rgba(255,255,255,0.9)' }}
+          >
+            <InfoGlyph />
+          </button>
+        )}
+        {!onDetails && menu && menu.length > 0 && (
           <MenuButton
             look="bare"
             label={<MoreGlyph />}
@@ -389,7 +410,7 @@ export const Shelf: React.FC<{
  * - When stacks grow or shrink, or the window changes, it solves again and everything glides into place.
  * - Stacks sharing a row line up to the same height.
  */
-const MIN_COL = 320; // narrowest app card column, px (a one-app stack's name, + and ⋯ still fit)
+const MIN_COL = 320; // narrowest app card column, px (a one-app stack's name, + and ⓘ still fit)
 const GAP = 16;
 
 /** Columns (app cards across) for the panel a TileGrid is in; set by ShelfGrid */
