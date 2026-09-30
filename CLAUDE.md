@@ -24,6 +24,8 @@ Bring that standard to every change:
 
 - Once a question is answered, treat that answer as done. On later turns, focus on what's being asked now,
   and don't go back over an earlier answer unless the owner asks about it or points out a problem with it.
+- Before starting a task, write a checklist of every part of it, and tick each item off as it's finished.
+  Before ending a turn, check the list: if anything is still open, keep going, or say what is blocking it.
 
 ## The look
 
