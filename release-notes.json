@@ -2,6 +2,19 @@
   "_about": "What's new in each version of Manifexus, newest first. Shown in Updates. Write for people, not developers: short, plain sentences about what they can now do. The newest entry's version is what gets built and tagged; older entries can give the \"commit\" they were released from.",
   "releases": [
     {
+      "version": "1.11",
+      "date": "2026-09-29",
+      "headline": "Much faster drag-and-drop moves.",
+      "new": [],
+      "improved": [
+        "Moving an app by dragging it is much faster: Manifexus backs up just that app's own data (its volumes and the folders it keeps in its stack), instead of both whole stacks. Shared folders like a media library are left alone, as a move never touches them. You can still undo every move from Restore.",
+        "Drop several apps in a row and they move one after another, in the order you dropped them, so two moves never change the same stack at once."
+      ],
+      "fixed": [
+        "After an app finishes moving, the stacks no longer shift a second time: apps keep the same order (by name) before and after a move."
+      ]
+    },
+    {
       "version": "1.10",
       "date": "2026-09-29",
       "headline": "Drag apps between stacks, see everything at once, and make a stack in one click.",

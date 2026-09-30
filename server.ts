@@ -839,7 +839,7 @@ async function startServer() {
     };
 
     try {
-      const { sourceContainerIds, targetStackName, targetDirectory, yamlContent, backupData } = req.body;
+      const { sourceContainerIds, targetStackName, targetDirectory, yamlContent, backupData, backupScope } = req.body;
       if (!Array.isArray(sourceContainerIds) || sourceContainerIds.length === 0) {
         sendEvent({ type: 'failed', log: 'Source container IDs required' });
         res.end();
@@ -856,6 +856,7 @@ async function startServer() {
           yamlContent: yamlContent || '',
           sourceContainerIds,
           backupData: backupData !== false,
+          backupScope: backupScope === 'app' ? 'app' : 'stacks',
         },
         sendEvent
       );

@@ -399,21 +399,20 @@ export default function App() {
       console.error('Failed to save the stack icon:', err);
     }
   };
-  // Drag an app onto a stack: it shows there at once, and the move runs in the background with a backup
-  const moveInBackground = async (appId: string, to: string) => {
+  // Drag an app onto a stack: it shows there at once, and the move runs in the background with a backup of
+  // the app's own data. Moves wait their turn (one at a time), so two never change the same stack at once.
+  const moveQueue = useRef<Promise<void>>(Promise.resolve());
+  const moveInBackground = (appId: string, to: string) => {
     const c = containers.find((x) => x.id === appId);
     if (!c) return;
     const from = c.compose?.project || '';
     if (from === to) return;
     const service = c.compose?.service || c.cleanName;
+    const helperServices = (helpersOf.get(c.id) || []).map((h) => h.compose?.service).filter(Boolean) as string[];
     const key = `${from}/${service}`;
+    if (pendingMoves[key]) return;
     const name = (c.customName || c.friendlyName || c.cleanName).replace(/^\//, '');
     const where = stackLabel(to);
-    const dir = groupedByComposeStacks.stacksMap[to]?.workingDir;
-    if (!dir) {
-      setNotice({ text: `Couldn’t find ${where}’s folder, so ${name} stayed where it was.`, tone: 'error' });
-      return;
-    }
     setPendingMoves((p) => ({ ...p, [key]: { from, service, to } }));
     const finish = async (text: string, tone?: 'error') => {
       await fetchData(false);
@@ -424,52 +423,70 @@ export default function App() {
       });
       setNotice({ text, tone });
     };
-    try {
-      const ids = [c.id, ...(helpersOf.get(c.id) || []).map((h) => h.id)];
-      const pr = await fetch('/api/stacks/plan-merge', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sourceContainerIds: ids, targetStackName: to, targetDirectory: dir, mode: 'existing-stack', volumeHandling: 'preserve-absolute' }),
-      });
-      const plan = await pr.json().catch(() => ({}));
-      if (!pr.ok) throw new Error(plan.error || 'The move couldn’t be prepared.');
-      const res = await fetch('/api/stacks/execute-merge-stream', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sourceContainerIds: ids, targetStackName: plan.targetStackName, targetDirectory: plan.targetDirectory, yamlContent: plan.generatedComposeYaml, backupData: true }),
-      });
-      if (!res.ok || !res.body) {
-        const j = await res.json().catch(() => ({}));
-        throw new Error(j.error || `The server answered ${res.status}.`);
-      }
-      // Read the progress to its end: completed, failed or put back
-      const reader = res.body.getReader();
-      const dec = new TextDecoder();
-      let buf = '';
-      let outcome: { type: string; log?: string } | null = null;
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += dec.decode(value, { stream: true });
-        const parts = buf.split('\n\n');
-        buf = parts.pop() || '';
-        for (const part of parts) {
-          const line = part.split('\n').find((l) => l.startsWith('data: '));
-          if (!line) continue;
-          try {
-            const e = JSON.parse(line.slice(6));
-            if (['completed', 'failed', 'auto_reverted', 'error'].includes(e.type)) outcome = e;
-          } catch {
-            // a malformed line
+    const job = async () => {
+      try {
+        // Fresh details now it's this move's turn (an earlier move may have changed things)
+        const now = await fetch('/api/containers', { cache: 'no-store' }).then((r) => r.json());
+        const list: DeepContainerMetadata[] = now.containers || [];
+        const find = (svc: string) => list.find((x) => x.compose?.project === from && x.compose?.service === svc && !/__moving_/.test(x.name || ''));
+        const app = find(service);
+        if (!app) throw new Error('it isn’t in its stack anymore');
+        const dir = list.find((x) => x.compose?.project === to)?.compose?.workingDir || (now.emptyStacks || []).find((e: { project: string }) => e.project === to)?.workingDir;
+        if (!dir) throw new Error(`Manifexus couldn’t find ${where}’s folder`);
+        const ids = [app.id, ...helperServices.map(find).filter(Boolean).map((h) => h!.id)];
+        const pr = await fetch('/api/stacks/plan-merge', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sourceContainerIds: ids, targetStackName: to, targetDirectory: dir, mode: 'existing-stack', volumeHandling: 'preserve-absolute' }),
+        });
+        const plan = await pr.json().catch(() => ({}));
+        if (!pr.ok) throw new Error(plan.error || 'the move couldn’t be prepared');
+        const res = await fetch('/api/stacks/execute-merge-stream', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sourceContainerIds: ids,
+            targetStackName: plan.targetStackName,
+            targetDirectory: plan.targetDirectory,
+            yamlContent: plan.generatedComposeYaml,
+            backupData: true,
+            backupScope: 'app',
+          }),
+        });
+        if (!res.ok || !res.body) {
+          const j = await res.json().catch(() => ({}));
+          throw new Error(j.error || `the server answered ${res.status}`);
+        }
+        // Read the progress to its end: completed, failed or put back
+        const reader = res.body.getReader();
+        const dec = new TextDecoder();
+        let buf = '';
+        let outcome: { type: string; log?: string } | null = null;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += dec.decode(value, { stream: true });
+          const parts = buf.split('\n\n');
+          buf = parts.pop() || '';
+          for (const part of parts) {
+            const line = part.split('\n').find((l) => l.startsWith('data: '));
+            if (!line) continue;
+            try {
+              const e = JSON.parse(line.slice(6));
+              if (['completed', 'failed', 'auto_reverted', 'error'].includes(e.type)) outcome = e;
+            } catch {
+              // a malformed line
+            }
           }
         }
+        if (outcome?.type === 'completed') await finish(`${name} moved to ${where}. You can undo it from Restore.`);
+        else if (outcome?.type === 'auto_reverted') await finish(`${name} couldn’t move (${outcome.log || 'something went wrong'}), so everything was put back.`, 'error');
+        else await finish(`${name} couldn’t move${outcome?.log ? `: ${outcome.log}` : '. Check Activity for what happened.'}`, 'error');
+      } catch (e) {
+        await finish(`${name} couldn’t move: ${(e as Error).message}.`, 'error');
       }
-      if (outcome?.type === 'completed') await finish(`${name} moved to ${where}. You can undo it from Restore.`);
-      else if (outcome?.type === 'auto_reverted') await finish(`${name} couldn’t move (${outcome.log || 'something went wrong'}), so everything was put back.`, 'error');
-      else await finish(`${name} couldn’t move${outcome?.log ? `: ${outcome.log}` : '. Check Activity for what happened.'}`, 'error');
-    } catch (e) {
-      await finish(`${name} couldn’t move: ${(e as Error).message}`, 'error');
-    }
+    };
+    moveQueue.current = moveQueue.current.then(job, job);
   };
 
   // One-click New Stack: Enter on the name creates it (the folder gets a safe version of the name)
@@ -725,8 +742,10 @@ export default function App() {
       }
     }
 
-    // By name, numbers in order (test2 before test10)
+    // By name, numbers in order (test2 before test10): the same order before and after a move, so nothing jumps
     const label = (c: DeepContainerMetadata) => (c.customName || c.friendlyName || c.cleanName).replace(/^\//, '');
+    const byName = (a: DeepContainerMetadata, b: DeepContainerMetadata) => label(a).localeCompare(label(b), undefined, { numeric: true, sensitivity: 'base' });
+    for (const st of Object.values(stacksMap)) st.containers.sort(byName);
     standalone.sort((a, b) => label(a).localeCompare(label(b), undefined, { numeric: true, sensitivity: 'base' }));
     return { stacksMap, standalone };
   }, [filteredContainers, emptyStacks, searchQuery, config?.stackNames, pendingMoves]);
@@ -1012,7 +1031,7 @@ export default function App() {
                   <Shelf
                     key={projectName}
                     span={span}
-                    onDropApp={own || !zoomedOut ? undefined : (appId) => void moveInBackground(appId, projectName)}
+                    onDropApp={own || !zoomedOut ? undefined : (appId) => moveInBackground(appId, projectName)}
                     id={`stack:${projectName}`}
                     title={stackLabel(projectName)}
                     rename={{ original: projectName, onSave: (n) => void handleRenameStack(projectName, n) }}

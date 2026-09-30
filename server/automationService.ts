@@ -25,6 +25,7 @@ import { record, setActivityTitle, currentActivityId } from './activityLog';
 import type { MergeHistoryRecord } from './historyService';
 import {
   archiveStackData,
+  archiveAppData,
   runComposeInDir,
   runComposeCapture,
   composeErrorTail,
@@ -184,6 +185,8 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 export interface StreamingPipelineRequestWithBackup extends StreamingPipelineRequest {
   /** Archive stack folders + Compose-owned volumes before moving (default true) */
   backupData?: boolean;
+  /** 'app': back up only the moving apps' own data (quick moves from the dashboard); default: whole stacks */
+  backupScope?: 'app' | 'stacks';
 }
 
 interface MovedContainer {
@@ -469,7 +472,18 @@ export async function executeStreamingPipeline(
       }
       log('Compose files saved for Restore.', 3);
 
-      if (backupData && !isDemo) {
+      if (backupData && !isDemo && req.backupScope === 'app') {
+        // A quick move: only what belongs to the apps being moved (their volumes and their own folders)
+        const archives = await archiveAppData({
+          apps: movingContainers.map((c) => ({ name: friendlyName(c), workingDir: c.compose?.workingDir, mounts: c.mounts || [] })),
+          archiveDir: snapshot.backupArchiveDir,
+          log: (m) => log(m, 3),
+        });
+        record.dataArchives = archives;
+        const bytes = archives.reduce((sum, a) => sum + a.bytes, 0);
+        record.archiveSizeBytes = (record.archiveSizeBytes || 0) + bytes;
+        log(archives.length ? `The app's data is backed up (${formatBytes(bytes)} compressed).` : 'The app keeps no data of its own to back up; its settings are saved.', 3);
+      } else if (backupData && !isDemo) {
         const involved = new Map<string, string>();
         involved.set(req.targetStackName, targetDir);
         for (const g of sourceGroups.values()) involved.set(g.project, g.workingDir);

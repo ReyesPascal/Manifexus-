@@ -482,6 +482,52 @@ export async function archiveStackData(params: {
 }
 
 /**
+ * Backs up just one app's own data, for a quick move: its Docker volumes, and the folders it uses inside
+ * its stack folder (like ./config). Shared folders outside the stack (a media library, downloads) are left
+ * out: a move never touches them, and they can be huge. Restore puts these back like any stack backup.
+ */
+export async function archiveAppData(params: {
+  apps: { name: string; workingDir?: string; mounts: { type: string; name?: string; source: string }[] }[];
+  archiveDir: string;
+  log?: (msg: string) => void;
+}): Promise<DataArchiveEntry[]> {
+  const log = params.log || (() => {});
+  const dataDir = path.join(params.archiveDir, 'data');
+  fs.mkdirSync(dataDir, { recursive: true });
+  const entries: DataArchiveEntry[] = [];
+  const done = new Set<string>();
+  const safe = (x: string) => x.replace(/[^a-zA-Z0-9_.-]/g, '_').slice(0, 80);
+  for (const app of params.apps) {
+    const base = app.workingDir ? path.posix.normalize(app.workingDir).replace(/\/+$/, '') : '';
+    for (const m of app.mounts) {
+      if (m.type === 'volume' && m.name && !done.has('v:' + m.name)) {
+        done.add('v:' + m.name);
+        const file = path.join(dataDir, `${safe(app.name)}__vol__${safe(m.name)}.tar.gz`);
+        log(`Backing up ${app.name}’s volume ${m.name}...`);
+        const code = await runHelper(tarScript(file), [`${m.name}:/src:ro`], DEFAULT_HELPER_TIMEOUT_MS, [], { purpose: `Back up volume ${m.name}` });
+        if (code !== 0 || !fs.existsSync(file)) throw new Error(`Backing up volume ${m.name} failed (exit ${code}).`);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const vol = await queryDockerEngine<any>(`/volumes/${encodeURIComponent(m.name)}`, 'GET').catch(() => null);
+        entries.push({ kind: 'volume', source: m.name, archiveFile: file, bytes: fs.statSync(file).size, volumeLabels: vol?.Labels || {}, volumeDriver: vol?.Driver || 'local' });
+      } else if (m.type === 'bind' && base && m.source) {
+        const src = path.posix.normalize(m.source).replace(/\/+$/, '');
+        // Only the app's own folders inside its stack folder (not the stack folder itself, not shared data)
+        if (!src.startsWith(base + '/') || done.has('d:' + src)) continue;
+        if ([...done].some((d) => d.startsWith('d:') && src.startsWith(d.slice(2) + '/'))) continue;
+        if (!(await hostDirectoryExists(src))) continue;
+        done.add('d:' + src);
+        const file = path.join(dataDir, `${safe(app.name)}__dir__${safe(src)}.tar.gz`);
+        log(`Backing up ${src}...`);
+        const code = await runHelper(tarScript(file), [`${src}:/src:ro`], DEFAULT_HELPER_TIMEOUT_MS, [], { purpose: `Back up folder ${src}` });
+        if (code !== 0 || !fs.existsSync(file)) throw new Error(`Backing up folder ${src} failed (exit ${code}).`);
+        entries.push({ kind: 'directory', source: src, archiveFile: file, bytes: fs.statSync(file).size });
+      }
+    }
+  }
+  return entries;
+}
+
+/**
  * Restores archived data. Directories are restored only if they are missing or `overwrite` is set;
  * volumes are recreated (with their original Compose labels, so Compose adopts them) when missing.
  * Existing live data is never silently overwritten.
