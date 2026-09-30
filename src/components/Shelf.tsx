@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { DeepContainerMetadata } from '../types';
 import { AppIcon } from './AppCard';
 import { MenuButton, MenuItem, ios } from './ui/ios';
@@ -429,6 +429,59 @@ function placeStacks(apps: number[], C: number): Place[] {
   return flex.gaps < plain.gaps || (flex.gaps === plain.gaps && flex.rows < plain.rows) ? flex.places : plain.places;
 }
 
+/**
+ * Gliding (FLIP): after the stacks re-fit, each stack and app card starts where it was and glides to its
+ * new place, so you can follow what moved. An app moved to another stack flies across from the old one.
+ * Positions are remembered by name (stack:…, app:…), so this works even though React draws the moved card anew.
+ * Only when the arrangement really changes (apps added, moved or removed, or a different number of columns);
+ * a status update or a small window drag doesn't animate. Off for people who ask for reduced motion.
+ */
+const lastSeen = new Map<string, { x: number; y: number; at: number }>();
+function useGlide(container: React.RefObject<HTMLElement>, signature: string) {
+  const prevSig = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    const root = container.current;
+    if (!root) return;
+    const reduce = typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const animate = prevSig.current !== null && prevSig.current !== signature && !reduce;
+    prevSig.current = signature;
+    const now = Date.now();
+    const nodes = Array.from(root.querySelectorAll<HTMLElement>('[data-flip]'));
+    // A name shown twice (two stacks with the same service name) can't be followed: leave those be
+    const count = new Map<string, number>();
+    for (const n of nodes) count.set(n.dataset.flip!, (count.get(n.dataset.flip!) || 0) + 1);
+    // First where everything was and is, then glide; a card inside a moving stack only glides by the
+    // difference, because it already moves with its stack
+    const deltas = new Map<HTMLElement, { dx: number; dy: number }>();
+    for (const n of nodes) {
+      const id = n.dataset.flip!;
+      if (count.get(id)! > 1) continue;
+      const r = n.getBoundingClientRect();
+      const pos = { x: r.left + window.scrollX, y: r.top + window.scrollY, at: now };
+      const before = lastSeen.get(id);
+      lastSeen.set(id, pos);
+      if (!animate || !before || now - before.at > 5 * 60 * 1000) continue;
+      deltas.set(n, { dx: before.x - pos.x, dy: before.y - pos.y });
+    }
+    for (const [n, d] of deltas) {
+      const parent = n.parentElement?.closest<HTMLElement>('[data-flip]');
+      const pd = parent ? deltas.get(parent) : undefined;
+      const dx = d.dx - (pd?.dx || 0), dy = d.dy - (pd?.dy || 0);
+      if (Math.abs(dx) < 2 && Math.abs(dy) < 2) continue;
+      const isApp = n.dataset.flip!.startsWith('app:');
+      // Apps that change stacks travel further: a touch longer, lifted above the rest while they fly
+      const far = Math.hypot(dx, dy) > 400;
+      n.animate(
+        [
+          { transform: `translate(${dx}px, ${dy}px)${isApp && far ? ' scale(1.03)' : ''}`, zIndex: isApp ? 30 : 1 },
+          { transform: 'translate(0, 0)', zIndex: isApp ? 30 : 1 },
+        ],
+        { duration: far ? 650 : 480, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' }
+      );
+    }
+  });
+}
+
 export const ShelfGrid: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const ref = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(() => (typeof window !== 'undefined' ? Math.min(window.innerWidth - 32, 1232) : 1232));
@@ -451,12 +504,16 @@ export const ShelfGrid: React.FC<{ children: React.ReactNode }> = ({ children })
     stacks.map((c) => Math.max(0, c.props.span ?? 1)),
     C
   );
+  // What the arrangement is: columns, and each stack's place, size and apps (not their status)
+  const signature = C + '|' + places.map((p) => `${stacks[p.i].key}@${p.col},${p.row},${p.w}x${p.h}:${stacks[p.i].props.span}`).join(';') + '|' + loose.map((c) => c.props.span).join(',');
+  useGlide(ref, signature);
   return (
     <div ref={ref} className="flex flex-col gap-3 sm:gap-4">
       <div className="grid gap-3 sm:gap-4" style={{ gridTemplateColumns: `repeat(${C}, minmax(0, 1fr))` }}>
         {places.map(({ i, col, row, w, h }) => (
           <div
             key={stacks[i].key ?? i}
+            data-flip={`stack:${stacks[i].props.id ?? stacks[i].key}`}
             className="flex flex-col min-w-0"
             style={{ gridColumn: `${col + 1} / span ${w}`, gridRow: `${row + 1} / span ${h}` }}
           >

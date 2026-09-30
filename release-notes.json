@@ -4,9 +4,10 @@
     {
       "version": "1.10",
       "date": "2026-09-29",
-      "headline": "Stacks turn to fill the gaps, on any window size.",
+      "headline": "Stacks glide into place, and turn to fill the gaps.",
       "new": [],
       "improved": [
+        "Stacks and apps glide to their new places when something changes: add or move an app, or resize the window, and you can follow where everything went. An app moved to another stack flies across to it. Turned off if your device is set to reduce motion.",
         "When the usual shapes would leave gaps (on narrower windows especially), a small stack turns, its apps stacked instead of side by side, to fill them.",
         "A stack that sits beside taller neighbours spreads its apps evenly instead of leaving empty space at the bottom."
       ],
