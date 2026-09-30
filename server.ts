@@ -3,6 +3,8 @@ import {
   getBackupFreeBytes,
   provisionStackFolder,
   StackFolderExistsError,
+  runComposeCapture,
+  composeErrorTail,
 } from './server/dataBackupService';
 import express from 'express';
 import http from 'http';
@@ -720,6 +722,22 @@ async function startServer() {
       });
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // Start a stack whose apps aren't there right now (its folder and compose file are): docker compose up -d.
+  // Like starting an app, this works with Server Changes off; it only starts what the compose file says.
+  app.post('/api/stacks/start', async (req, res) => {
+    try {
+      const project = String(req.body?.project || '').trim();
+      if (!project) return res.status(400).json({ ok: false, error: 'Which stack?' });
+      const { containers } = await getContainersList();
+      const found = (await discoverHostComposeStacks(containers)).find((s) => s.project.toLowerCase() === project.toLowerCase());
+      if (!found?.workingDir) return res.status(404).json({ ok: false, error: `Couldn’t find the folder for ${project}.` });
+      const up = await runComposeCapture(found.workingDir, 'up -d', { timeoutMs: 5 * 60 * 1000 });
+      res.json(up.ok ? { ok: true } : { ok: false, error: composeErrorTail(up.output, 3) || `Couldn’t start ${project}.` });
+    } catch (err) {
+      res.status(500).json({ ok: false, error: (err as Error).message });
     }
   });
 

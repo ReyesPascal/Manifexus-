@@ -377,6 +377,7 @@ export async function readHostFile(hostFilePath: string): Promise<string | null>
 export async function writeHostFile(hostFilePath: string, content: string): Promise<boolean> {
   const t = Date.now();
   const ok = await writeHostFileImpl(hostFilePath, content);
+  forgetHostComposeFolders();
   record(ok ? 'info' : 'warn', 'file', `${ok ? 'Wrote' : 'Could not write'} ${hostFilePath} (${content.length} bytes)`, {
     path: hostFilePath,
     via: how(hostFilePath),
@@ -390,6 +391,7 @@ export async function writeHostFile(hostFilePath: string, content: string): Prom
 export async function createHostDirectory(hostDirPath: string): Promise<boolean> {
   const t = Date.now();
   const ok = await createHostDirectoryImpl(hostDirPath);
+  forgetHostComposeFolders();
   record(ok ? 'debug' : 'warn', 'file', `${ok ? 'Folder ready' : 'Could not create folder'}: ${hostDirPath}`, { path: hostDirPath, via: how(hostDirPath), ok }, { durationMs: Date.now() - t });
   return ok;
 }
@@ -403,6 +405,112 @@ export async function checkHostFileExists(hostFilePath: string): Promise<boolean
 export async function deleteHostDirectory(hostDirPath: string): Promise<boolean> {
   const t = Date.now();
   const ok = await deleteHostDirectoryImpl(hostDirPath);
+  forgetHostComposeFolders();
   record(ok ? 'info' : 'warn', 'file', `${ok ? 'Deleted folder' : 'Could not delete folder'} ${hostDirPath}`, { path: hostDirPath, via: how(hostDirPath), ok }, { durationMs: Date.now() - t });
   return ok;
 }
+
+// ----------------------------------------------------------------------------
+// Finding stack folders on the host that Manifexus can't see directly
+// ----------------------------------------------------------------------------
+
+export interface HostComposeFile {
+  /** The stack's folder name (e.g. "usenet-stack") */
+  dir: string;
+  /** docker-compose.yml, compose.yaml, … */
+  file: string;
+  content: string;
+}
+
+const COMPOSE_NAMES = ['docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml'];
+const MARK = '@@MFX-COMPOSE@@';
+
+/**
+ * Lists the compose files one level down in a host folder (each stack's folder), through a short-lived
+ * read-only helper container. Used when the folder isn't mounted into Manifexus, which is the usual
+ * install: without it, a stack whose apps are all gone (moved away, or taken down) would vanish from
+ * the dashboard even though its folder is still there.
+ */
+export async function scanHostComposeFolders(baseDir: string): Promise<HostComposeFile[] | null> {
+  const base = path.posix.normalize(baseDir).replace(/\/+$/, '');
+  if (!base || base === '/' || !base.startsWith('/')) return null;
+  // Mount the folder above, so a folder that doesn't exist is never created on the host
+  const parent = path.posix.dirname(base);
+  const name = path.posix.basename(base).replace(/'/g, `'\\''`);
+  const names = COMPOSE_NAMES.join(' ');
+  const script =
+    `cd '/p/${name}' 2>/dev/null || exit 44; ` +
+    `for d in */; do d="\${d%/}"; case "$d" in .*|node_modules|'*') continue;; esac; ` +
+    `for f in ${names}; do if [ -f "$d/$f" ]; then printf '\\n${MARK}%s/%s\\n' "$d" "$f"; head -c 262144 "$d/$f"; break; fi; done; done`;
+  try {
+    const helperImage = await getBestAvailableImage();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const runner = await queryDockerEngine<any>('/containers/create', 'POST', {
+      Image: helperImage,
+      Entrypoint: [],
+      Cmd: ['sh', '-c', script],
+      Tty: true,
+      Labels: { 'manifexus.helper': 'scan' },
+      HostConfig: { Binds: [`${parent}:/p:ro`], NetworkMode: 'none' },
+    });
+    if (!runner?.Id) return null;
+    try {
+      await queryDockerEngine(`/containers/${runner.Id}/start`, 'POST');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const waitRes = await queryDockerEngine<any>(`/containers/${runner.Id}/wait`, 'POST');
+      if (!waitRes || waitRes.StatusCode !== 0) return waitRes?.StatusCode === 44 ? [] : null;
+      const raw = cleanDockerLogs(await queryDockerEngine<string>(`/containers/${runner.Id}/logs?stdout=1`, 'GET')).replace(/\r\n/g, '\n');
+      const out: HostComposeFile[] = [];
+      for (const part of raw.split(`\n${MARK}`).slice(1)) {
+        const nl = part.indexOf('\n');
+        const rel = part.slice(0, nl < 0 ? undefined : nl).trim();
+        const slash = rel.lastIndexOf('/');
+        if (slash <= 0) continue;
+        out.push({ dir: rel.slice(0, slash), file: rel.slice(slash + 1), content: nl < 0 ? '' : part.slice(nl + 1) });
+      }
+      return out;
+    } finally {
+      await queryDockerEngine(`/containers/${runner.Id}?force=true`, 'DELETE').catch(() => undefined);
+    }
+  } catch (err) {
+    console.warn(`[HostFsService] Couldn't look for stacks in ${base}:`, err);
+    return null;
+  }
+}
+
+/**
+ * Stack folders found through the helper, per folder. Kept for a short while so the dashboard (which asks
+ * every few seconds) doesn't start a helper each time: an answer older than FRESH_MS is refreshed in the
+ * background, and the very first look waits a moment for it.
+ */
+const FRESH_MS = 30_000;
+const scanCache = new Map<string, { at: number; files: HostComposeFile[]; running?: Promise<void> }>();
+
+function forgetHostComposeFolders(): void {
+  for (const v of scanCache.values()) v.at = 0;
+}
+
+export async function hostComposeFolders(baseDir: string): Promise<HostComposeFile[]> {
+  let entry = scanCache.get(baseDir);
+  if (!entry) {
+    entry = { at: 0, files: [] };
+    scanCache.set(baseDir, entry);
+  }
+  const e = entry;
+  if (Date.now() - e.at > FRESH_MS && !e.running) {
+    e.running = scanHostComposeFolders(baseDir)
+      .then((files) => {
+        if (files) e.files = files;
+        e.at = Date.now();
+      })
+      .finally(() => {
+        e.running = undefined;
+      });
+  }
+  // The first time, wait (briefly) so stacks don't appear a few seconds late
+  if (e.running && e.at === 0) {
+    await Promise.race([e.running, new Promise((r) => setTimeout(r, 5000))]);
+  }
+  return e.files;
+}
+

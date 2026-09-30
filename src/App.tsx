@@ -825,7 +825,7 @@ export default function App() {
   const groupedByComposeStacks = useMemo(() => {
     const stacksMap: Record<
       string,
-      { containers: DeepContainerMetadata[]; workingDir?: string; configFiles?: string; isEmpty?: boolean }
+      { containers: DeepContainerMetadata[]; workingDir?: string; configFiles?: string; isEmpty?: boolean; declared?: number }
     > = {};
     const standalone: DeepContainerMetadata[] = [];
 
@@ -842,6 +842,7 @@ export default function App() {
         workingDir: es.workingDir,
         configFiles: es.configFiles,
         isEmpty: true,
+        declared: es.serviceCount || 0,
       };
     }
 
@@ -919,6 +920,26 @@ export default function App() {
   );
 
   // Start, restart or stop every app in a stack or group
+  // A stack whose apps aren't there right now (taken down, or not started yet): docker compose up
+  const [startingStacks, setStartingStacks] = useState<Set<string>>(new Set());
+  const startStack = async (project: string) => {
+    setStartingStacks((s) => new Set(s).add(project));
+    try {
+      const r = await fetch('/api/stacks/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project }) });
+      const out = await r.json().catch(() => ({ ok: false }));
+      await fetchData();
+      setNotice(out.ok ? { text: `${stackLabel(project)} started.` } : { text: out.error || `Couldn’t start ${stackLabel(project)}.`, tone: 'error' });
+    } catch {
+      setNotice({ text: `Couldn’t start ${stackLabel(project)}.`, tone: 'error' });
+    } finally {
+      setStartingStacks((s) => {
+        const n = new Set(s);
+        n.delete(project);
+        return n;
+      });
+    }
+  };
+
   const stackActionItems = (apps: DeepContainerMetadata[]): MenuItem[] => {
     if (!apps.length) return [];
     const run = (action: 'start' | 'stop' | 'restart', only: (c: DeepContainerMetadata) => boolean) =>
@@ -1162,13 +1183,36 @@ export default function App() {
                     title={stackLabel(projectName)}
                     rename={{ original: projectName, onSave: (n) => void handleRenameStack(projectName, n) }}
                     icon={<StackIcon name={stackLabel(projectName)} apps={apps} choice={config?.stackIcons?.[projectName]} />}
-                    status={<Health apps={apps} alsoCheck={apps.flatMap((a) => helpersOf.get(a.id) || [])} />}
+                    status={
+                      apps.length === 0 && (stackData.declared || 0) > 0 ? (
+                        <span className="inline-flex items-center gap-1.5">
+                          {stackData.declared} {stackData.declared === 1 ? 'app' : 'apps'} · <span className="w-[7px] h-[7px] rounded-full inline-block" style={{ background: '#8E8E93' }} aria-hidden /> Not running
+                        </span>
+                      ) : (
+                        <Health apps={apps} alsoCheck={apps.flatMap((a) => helpersOf.get(a.id) || [])} />
+                      )
+                    }
                     forceOpen={apps.some((c) => c.state === 'restarting' || c.state === 'dead')}
                     action={own ? undefined : { label: 'Add App', onClick: () => openMoveForStack(projectName), title: `Move apps into ${projectName}` }}
                     onDetails={() => setStackDetails(projectName)}
                   >
                     {apps.length > 0 ? (
                       <TileGrid span={span}>{apps.map((c) => card(c, true))}</TileGrid>
+                    ) : (stackData.declared || 0) > 0 ? (
+                      <ShelfNote>
+                        {stackData.declared === 1 ? 'Its app isn’t' : `Its ${stackData.declared} apps aren’t`} running right now.
+                        <span className="block mt-3">
+                          <button
+                            type="button"
+                            disabled={startingStacks.has(projectName)}
+                            onClick={() => void startStack(projectName)}
+                            className="h-8 px-5 rounded-full text-[13px] font-semibold text-white disabled:opacity-60"
+                            style={{ background: 'rgba(48,209,88,0.22)', boxShadow: 'inset 0 0 0 0.5px rgba(48,209,88,0.4)' }}
+                          >
+                            {startingStacks.has(projectName) ? 'Starting…' : 'Start'}
+                          </button>
+                        </span>
+                      </ShelfNote>
                     ) : (
                       <ShelfNote>
                         No apps yet.{' '}

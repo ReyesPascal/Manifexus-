@@ -11,6 +11,7 @@ import {
   deleteHostDirectory,
   checkHostFileExists,
   resolveContainerPath,
+  hostComposeFolders,
 } from './hostFsService';
 import { createPreMergeSnapshot, saveMergeHistoryRecord } from './historyService';
 import { getContainersList, removeDemoContainersByProject } from './dockerService';
@@ -948,12 +949,38 @@ export async function discoverHostComposeStacks(
     }
   }
 
-  // 3. Scan directories for subdirectories containing compose files. Only folders that are really
-  // mounted from the host can be scanned; anything else would be Manifexus's own container
-  // filesystem, which is where phantom "stacks" came from.
+  // What one stack folder's compose file says: its name (top-level `name:` or the folder's) and how many apps
+  const consider = (hostSubDir: string, subDirName: string, fileName: string, fileContent: string) => {
+    try {
+      const doc = parseDocument(fileContent);
+      if (doc.errors && doc.errors.length > 0) return;
+      const docName = doc.get('name');
+      const projectName = typeof docName === 'string' && docName.trim() ? docName.trim() : subDirName;
+      const projectKey = projectName.toLowerCase();
+      // Stacks with apps show up through their apps; this is for the ones with none right now
+      if (activeProjects.has(projectKey)) return;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const servicesMap = doc.get('services') as any;
+      const serviceCount = servicesMap && Array.isArray(servicesMap.items) ? servicesMap.items.length : 0;
+      discoveredMap.set(projectKey, {
+        project: projectName,
+        workingDir: hostSubDir,
+        configFiles: path.posix.join(hostSubDir, fileName),
+        serviceCount,
+        source: 'discovered',
+      });
+    } catch {
+      // Ignore a compose file that can't be read
+    }
+  };
+
+  // 3. Look in each folder for stack folders with a compose file. Folders mounted into Manifexus are read
+  // directly; the rest (the usual install) through a small read-only helper, remembered for a short while
+  // so the dashboard stays quick.
   for (const baseDir of baseCandidates) {
     const localBase = resolveContainerPath(baseDir);
     if (!localBase || !fs.existsSync(localBase)) {
+      for (const f of await hostComposeFolders(baseDir)) consider(path.posix.join(baseDir, f.dir), f.dir, f.file, f.content);
       continue;
     }
 
@@ -961,59 +988,19 @@ export async function discoverHostComposeStacks(
       const entries = fs.readdirSync(localBase, { withFileTypes: true });
       for (const entry of entries) {
         if (!entry.isDirectory()) continue;
-
         const subDirName = entry.name;
-        // Skip hidden or system folders
         if (subDirName.startsWith('.') || subDirName === 'node_modules') continue;
-
         const hostSubDir = path.posix.join(baseDir, subDirName);
         const localSubDir = path.join(localBase, subDirName);
-
-        // Candidate compose file names
-        const composeFileNames = [
-          'docker-compose.yml',
-          'docker-compose.yaml',
-          'compose.yml',
-          'compose.yaml',
-        ];
-
-        for (const fileName of composeFileNames) {
+        for (const fileName of ['docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml']) {
           const localComposeFile = path.join(localSubDir, fileName);
           if (fs.existsSync(localComposeFile)) {
             try {
-              const fileContent = fs.readFileSync(localComposeFile, 'utf8');
-              const doc = parseDocument(fileContent);
-
-              if (!doc.errors || doc.errors.length === 0) {
-                // Determine stack project name (from top-level 'name:' or folder name)
-                const docName = doc.get('name');
-                const projectName = typeof docName === 'string' && docName.trim() ? docName.trim() : subDirName;
-                const projectKey = projectName.toLowerCase();
-
-                // If stack has no active containers running, discover it as an empty stack
-                if (!activeProjects.has(projectKey)) {
-                  // Count declared services
-                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                  const servicesMap = doc.get('services') as any;
-                  let serviceCount = 0;
-                  if (servicesMap && typeof servicesMap.items === 'object') {
-                    serviceCount = Array.isArray(servicesMap.items) ? servicesMap.items.length : 0;
-                  }
-
-                  const hostComposeFile = path.posix.join(hostSubDir, fileName);
-                  discoveredMap.set(projectKey, {
-                    project: projectName,
-                    workingDir: hostSubDir,
-                    configFiles: hostComposeFile,
-                    serviceCount,
-                    source: 'discovered',
-                  });
-                }
-              }
+              consider(hostSubDir, subDirName, fileName, fs.readFileSync(localComposeFile, 'utf8'));
             } catch {
-              // Ignore parse errors on corrupted files
+              // Ignore a file that can't be read
             }
-            break; // found compose file in this subfolder
+            break;
           }
         }
       }
