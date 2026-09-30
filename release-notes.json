@@ -4,13 +4,14 @@
     {
       "version": "2.2",
       "date": "2026-09-30",
-      "headline": "Every stack shows up, even when its apps are down.",
+      "headline": "Every stack shows up, and every tip is easy to read.",
       "new": [
         "A stack whose apps aren't running right now (taken down, or never started) shows how many apps it has and a Start button that brings them all up."
       ],
       "improved": [],
       "fixed": [
-        "Stacks could go missing from the dashboard when none of their apps were there, for example after moving all of them away. Manifexus now finds every stack folder in your stacks location, and next to your other stacks, even though those folders aren't shared with it."
+        "Stacks could go missing from the dashboard when none of their apps were there, for example after moving all of them away. Manifexus now finds every stack folder in your stacks location, and next to your other stacks, even though those folders aren't shared with it.",
+        "Tips that appear when you point at something were sometimes hidden behind the search field or the stacks. Every tip in the app now shows on top, stays inside the window, and has the same look (keyboard focus shows them too)."
       ]
     },
     {

@@ -1,3 +1,4 @@
+import { tipProps } from './ui/Tooltip';
 import React from 'react';
 import { Activity, History, Stethoscope, Settings, RefreshCw, Sparkles, Eraser } from 'lucide-react';
 import { DeepContainerMetadata, SystemStatus } from '../types';
@@ -39,30 +40,6 @@ const SearchGlyph = () => (
   </svg>
 );
 
-/** Hover/focus tooltip. Wrap it in an element with the `group` class. */
-const Tip: React.FC<{ text: string; side?: 'top' | 'bottom'; align?: 'center' | 'end' }> = ({
-  text,
-  side = 'top',
-  align = 'center',
-}) => (
-  <span
-    role="tooltip"
-    // Phones have no hover, so tooltips aren't laid out there (they'd widen the page)
-    className={`max-sm:hidden pointer-events-none absolute z-30 w-max max-w-[230px] rounded-[10px] px-2.5 py-1.5 text-[11.5px] leading-snug font-normal normal-case tracking-normal whitespace-normal text-left opacity-0 scale-95 transition-all duration-150 delay-200 group-hover:opacity-100 group-hover:scale-100 group-focus-visible:opacity-100 group-focus-visible:scale-100 ${
-      side === 'top' ? 'bottom-full mb-2 origin-bottom' : 'top-full mt-2 origin-top'
-    } ${align === 'end' ? 'right-0' : 'left-1/2 -translate-x-1/2'}`}
-    style={{
-      background: 'rgba(44,44,46,0.96)',
-      color: 'rgba(235,235,245,0.86)',
-      boxShadow: '0 0 0 0.5px rgba(255,255,255,0.12), 0 10px 30px rgba(0,0,0,0.55)',
-      backdropFilter: 'blur(20px)',
-      fontFamily: ios.font,
-    }}
-  >
-    {text}
-  </span>
-);
-
 /** A button inside the glass toolbar. The label hides on narrower screens; the tooltip always explains it. */
 const ToolButton: React.FC<{
   icon: React.ReactNode;
@@ -71,11 +48,12 @@ const ToolButton: React.FC<{
   onClick: () => void;
   tone?: 'default' | 'blue' | 'red';
   align?: 'center' | 'end';
-}> = ({ icon, label, tip, onClick, tone = 'default', align = 'center' }) => (
+}> = ({ icon, label, tip, onClick, tone = 'default' }) => (
   <button
     type="button"
     onClick={onClick}
     aria-label={label}
+    data-tip={tip}
     className="group relative inline-flex items-center gap-1.5 h-8 px-2.5 xl:px-3 rounded-full text-[13px] font-medium transition-colors hover:bg-white/[0.08] active:bg-white/[0.12] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0A84FF]"
     style={{
       color: tone === 'blue' ? '#6CB6FF' : tone === 'red' ? '#FF8A80' : 'rgba(255,255,255,0.88)',
@@ -84,7 +62,6 @@ const ToolButton: React.FC<{
   >
     {icon}
     <span className="hidden xl:inline">{label}</span>
-    <Tip text={tip} side="bottom" align={align} />
   </button>
 );
 
@@ -133,22 +110,8 @@ export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
               aria-label={`${socketOn ? 'Connected to Docker' : 'Not connected to Docker'}. Dashboard port ${port}. Open Diagnostics`}
               className="group relative flex-shrink-0 w-12 h-12 sm:w-16 sm:h-16 rounded-[14px] [&_svg.mfx]:w-full [&_svg.mfx]:h-full focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0A84FF]"
               style={{ filter: 'drop-shadow(0 10px 22px rgba(47,140,255,0.35))' }}
-            >
-              <span className="block w-full h-full [&>svg]:w-full [&>svg]:h-full">
-                <ManifexusAppIcon size={64} />
-              </span>
-              {/* The light: Manifexus's connection to Docker */}
-              <span
-                className={`absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full ${socketOn ? '' : 'motion-safe:animate-pulse'}`}
-                style={{ background: socketOn ? ios.green : ios.red, boxShadow: '0 0 0 3px #0e1629' }}
-                aria-hidden="true"
-              />
-              {/* What the light means, and where the dashboard lives */}
-              <span
-                role="tooltip"
-                className="max-sm:hidden pointer-events-none absolute z-30 left-0 top-full mt-3 w-[250px] rounded-[12px] px-3.5 py-3 text-left opacity-0 scale-95 origin-top-left transition-all duration-150 delay-150 group-hover:opacity-100 group-hover:scale-100 group-focus-visible:opacity-100 group-focus-visible:scale-100"
-                style={{ background: 'rgba(44,44,46,0.97)', boxShadow: '0 0 0 0.5px rgba(255,255,255,0.12), 0 12px 32px rgba(0,0,0,0.55)', fontFamily: ios.font }}
-              >
+              {...tipProps(
+                <span className="block w-[226px] py-1.5 px-1">
                 <span className="flex items-center gap-2 text-[13.5px] font-semibold" style={{ color: socketOn ? ios.green : '#FF6961' }}>
                   <span className="w-2 h-2 rounded-full" style={{ background: 'currentColor', boxShadow: '0 0 8px currentColor' }} />
                   {socketOn ? 'Connected to Docker' : 'Not connected to Docker'}
@@ -163,7 +126,19 @@ export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
                 <span className="block mt-2 text-[11.5px]" style={{ color: 'rgba(235,235,245,0.45)' }}>
                   Click for Diagnostics
                 </span>
+                              </span>,
+                { wide: true },
+              )}
+            >
+              <span className="block w-full h-full [&>svg]:w-full [&>svg]:h-full">
+                <ManifexusAppIcon size={64} />
               </span>
+              {/* The light: Manifexus's connection to Docker */}
+              <span
+                className={`absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full ${socketOn ? '' : 'motion-safe:animate-pulse'}`}
+                style={{ background: socketOn ? ios.green : ios.red, boxShadow: '0 0 0 3px #0e1629' }}
+                aria-hidden="true"
+              />
             </button>
             <div className="min-w-0">
               <div className="flex items-center gap-2.5 flex-wrap">

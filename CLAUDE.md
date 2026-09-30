@@ -52,6 +52,15 @@ Bring that standard to every change:
 - A screen opened on top of another shows a clear **‹ Back** to where you came from, not a jump to some
   other screen. Don't send people to Activity (or anywhere else) when a focused view on top does the job.
 
+## Things that float (tooltips, menus, popovers)
+
+- Anything that pops up over the page is drawn in the page's top layer, never inside a panel, so nothing
+  (glass, search, the next stack, a sheet) can ever cover or clip it, and it always stays inside the window.
+- Tooltips: give the element a `title` (or `data-tip`); the shared `TooltipLayer` (`src/components/ui/Tooltip.tsx`)
+  shows it in the app's style. For richer content use `tipProps(...)`. Never build a tooltip from an
+  absolutely positioned child.
+- Menus: always the shared `MenuButton` (it does the same). New popovers follow the same rule (portal to the page).
+
 ## Wording
 
 - Short, plain words anyone understands. No jargon, no developer terms, no build codes.
