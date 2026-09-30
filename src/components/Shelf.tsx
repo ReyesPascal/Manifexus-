@@ -385,8 +385,8 @@ export const Shelf: React.FC<{
  * - A stack is as wide as its apps. One with more apps than fit across takes the shape with no empty
  *   slots (4 apps on 3 columns becomes 2 × 2), and the space beside it goes to other stacks. When that
  *   still leaves gaps, a small stack may turn (its apps stacked instead of side by side) to fill them.
- * - Bigger stacks are placed first; each stack goes in the first spot it fits, so smaller stacks fill
- *   the gaps next to bigger ones. When stacks grow or shrink, or the window changes, everything re-fits.
+ * - Stacks go in name order, each in the first spot it fits, so they stay put as apps come and go
+ *   and smaller stacks still fill the gaps next to bigger ones. When stacks grow or shrink, or the window changes, everything re-fits.
  * - Stacks sharing a row line up to the same height.
  */
 const MIN_COL = 320; // narrowest app card column, px (a one-app stack's name, + and ⋯ still fit)
@@ -430,8 +430,9 @@ function shapesFor(n: number, C: number, flexible: boolean): { w: number; h: num
 function placeWith(apps: number[], C: number, flexible: boolean): { places: Place[]; rows: number; gaps: number } {
   const order = apps
     .map((n, i) => ({ i, n }))
-    // Biggest first (the same order on a phone as on a big screen); equal sizes keep their order
-    .sort((a, b) => b.n - a.n || a.i - b.i);
+    // In the order given (by name): each stack keeps its place as apps come and go, instead of stacks
+    // swapping places whenever one grows or shrinks
+    .sort((a, b) => a.i - b.i);
   const taken: boolean[][] = [];
   const free = (r: number, c: number, w: number, h: number) => {
     if (c + w > C) return false;
@@ -544,7 +545,14 @@ export const ShelfGrid: React.FC<{ children: React.ReactNode; zoom?: number }> =
   const items = React.Children.toArray(children).filter(React.isValidElement) as React.ReactElement<{ span?: number; id?: string }>[];
   const C = Math.max(1, Math.floor((width / zoom + GAP) / (MIN_COL + GAP)));
   // "Not in a Stack" isn't a stack: it sits on its own at the bottom, full width, and never changes how the stacks fit
-  const stacks = items.filter((c) => c.props.id !== 'stack:none');
+  // Stacks by name (numbers in order), so they stay put; a stack still being named comes first
+  const stacks = items
+    .filter((c) => c.props.id !== 'stack:none')
+    .sort((a, b) => {
+      const ta = a.props.id === 'stack:__new' ? '' : String((a.props as { title?: string }).title || '');
+      const tb = b.props.id === 'stack:__new' ? '' : String((b.props as { title?: string }).title || '');
+      return ta.localeCompare(tb, undefined, { numeric: true, sensitivity: 'base' });
+    });
   const loose = items.filter((c) => c.props.id === 'stack:none');
   const places = placeStacks(
     stacks.map((c) => Math.max(0, c.props.span ?? 1)),

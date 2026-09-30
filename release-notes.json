@@ -14,7 +14,8 @@
       "fixed": [
         "After an app finishes moving, the stacks no longer shift a second time: apps keep the same order (by name) before and after a move.",
         "Moves no longer run at the same time. Two moves into the same stack could overwrite each other and fail (\"no such service\"); now each waits its turn, even from another browser tab.",
-        "Zoomed out, stacks no longer run past the right edge of the window, and they glide straight to their new places instead of overshooting."
+        "Zoomed out, stacks no longer run past the right edge of the window, and they glide straight to their new places instead of overshooting.",
+        "Stacks no longer swap places when one gains or loses an app. They stay in name order, and only the stacks next to a change shift to make room."
       ]
     },
     {
