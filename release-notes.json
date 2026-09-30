@@ -8,14 +8,15 @@
       "new": [],
       "improved": [
         "The dashboard now always shows every stack at once (zoomed out), so you can drag apps between stacks without scrolling. Phones keep full-size cards so they stay easy to read and tap.",
-        "Moving an app by dragging it is much faster: Manifexus backs up just that app's own data (its volumes and the folders it keeps in its stack), instead of both whole stacks. Shared folders like a media library are left alone, as a move never touches them. You can still undo every move from Restore.",
+        "Moving an app by dragging it is much faster: Manifexus backs up just that app's own data (its volumes, and its own folders in any stack folder) instead of both whole stacks. Shared folders like downloads or a media library are left alone, as a move never touches them. You can still undo every move from Restore.",
         "Drop several apps in a row and they move one after another, in the order you dropped them, so two moves never change the same stack at once."
       ],
       "fixed": [
         "After an app finishes moving, the stacks no longer shift a second time: apps keep the same order (by name) before and after a move.",
         "Moves no longer run at the same time. Two moves into the same stack could overwrite each other and fail (\"no such service\"); now each waits its turn, even from another browser tab.",
         "Zoomed out, stacks no longer run past the right edge of the window, and they glide straight to their new places instead of overshooting.",
-        "Stacks no longer swap places when one gains or loses an app. They stay in name order, and only the stacks next to a change shift to make room."
+        "Stacks no longer swap places when one gains or loses an app. They stay in name order, and only the stacks next to a change shift to make room.",
+        "Moving two apps into the same stack at once could fail with \"no such service\", because both moves rewrote that stack's file at the same time. Moves now take turns."
       ]
     },
     {

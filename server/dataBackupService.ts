@@ -488,6 +488,10 @@ export async function archiveStackData(params: {
  */
 export async function archiveAppData(params: {
   apps: { name: string; workingDir?: string; mounts: { type: string; name?: string; source: string }[] }[];
+  /** Every stack folder on the server: an app's own folders live inside one (its own, or another stack's) */
+  stackDirs?: string[];
+  /** Folders other apps mount: shared, so not this app's own */
+  sharedDirs?: string[];
   archiveDir: string;
   log?: (msg: string) => void;
 }): Promise<DataArchiveEntry[]> {
@@ -511,8 +515,11 @@ export async function archiveAppData(params: {
         entries.push({ kind: 'volume', source: m.name, archiveFile: file, bytes: fs.statSync(file).size, volumeLabels: vol?.Labels || {}, volumeDriver: vol?.Driver || 'local' });
       } else if (m.type === 'bind' && base && m.source) {
         const src = path.posix.normalize(m.source).replace(/\/+$/, '');
-        // Only the app's own folders inside its stack folder (not the stack folder itself, not shared data)
-        if (!src.startsWith(base + '/') || done.has('d:' + src)) continue;
+        // The app's own folders: inside a stack folder (its own, or another stack's), not a whole stack folder,
+        // and not used by any other app (shared data like downloads or a media library is left alone)
+        const dirs = Array.from(new Set([base, ...(params.stackDirs || [])].filter(Boolean).map((d) => path.posix.normalize(d).replace(/\/+$/, ''))));
+        if (!dirs.some((d) => src.startsWith(d + '/')) || done.has('d:' + src)) continue;
+        if ((params.sharedDirs || []).some((x) => x === src || x.startsWith(src + '/') || src.startsWith(x + '/'))) continue;
         if ([...done].some((d) => d.startsWith('d:') && src.startsWith(d.slice(2) + '/'))) continue;
         if (!(await hostDirectoryExists(src))) continue;
         done.add('d:' + src);

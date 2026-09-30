@@ -476,6 +476,10 @@ export async function executeStreamingPipeline(
         // A quick move: only what belongs to the apps being moved (their volumes and their own folders)
         const archives = await archiveAppData({
           apps: movingContainers.map((c) => ({ name: friendlyName(c), workingDir: c.compose?.workingDir, mounts: c.mounts || [] })),
+          stackDirs: Array.from(new Set(containers.map((c) => c.compose?.workingDir).filter(Boolean) as string[])),
+          sharedDirs: containers
+            .filter((c) => !movingContainers.some((m) => m.id === c.id))
+            .flatMap((c) => (c.mounts || []).filter((m) => m.type === 'bind' && m.source).map((m) => m.source)),
           archiveDir: snapshot.backupArchiveDir,
           log: (m) => log(m, 3),
         });
