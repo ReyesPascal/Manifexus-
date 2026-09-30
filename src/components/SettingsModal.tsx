@@ -13,6 +13,8 @@ interface SettingsModalProps {
   privileges?: AutomationPrivileges | null;
   /** Opens the Host Automation & Privileges window */
   onOpenAutomationModal?: () => void;
+  /** Runs Getting Started (setup and tour) again */
+  onRunGettingStarted?: () => void;
   /** Opens the built-in AI's settings */
   onOpenAssistant?: () => void;
   /** Opened from another screen (e.g. Diagnostics): shows "‹ label" to go back to it */
@@ -41,6 +43,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   detectedStacksDir,
   privileges,
   onOpenAutomationModal,
+  onRunGettingStarted,
   backLabel,
   onBack,
   onOpenAssistant,
@@ -182,6 +185,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           />
           <SectionFooter>How often the dashboard checks Docker for new apps and status changes.</SectionFooter>
         </section>
+
+        {onRunGettingStarted && (
+          <section>
+            <Group>
+              <Row onClick={onRunGettingStarted} title="Getting Started" trailing={<span style={{ color: ios.blue }}>Run Again</span>} chevron />
+            </Group>
+            <SectionFooter>The setup and the tour of your dashboard from when you first started Manifexus.</SectionFooter>
+          </section>
+        )}
 
         {onOpenAutomationModal && (
           <section>

@@ -9,7 +9,7 @@ import { BackButton, Group, IconTile, LinkButton, Row, SectionFooter, SectionHea
  * Compose, the stacks folder, running commands), step by step, and only switches on when all of it works.
  */
 
-interface Step {
+export interface Step {
   id: string;
   title: string;
   status: 'running' | 'done' | 'failed' | 'warn';
@@ -26,7 +26,7 @@ interface Props {
   zIndex?: number;
 }
 
-const StepMark: React.FC<{ status: Step['status'] }> = ({ status }) =>
+export const StepMark: React.FC<{ status: Step['status'] }> = ({ status }) =>
   status === 'running' ? (
     <span className="w-[22px] h-[22px] flex items-center justify-center" aria-label="Working">
       <span className="w-[16px] h-[16px] rounded-full border-2 border-white/15 border-t-white/80 animate-spin" />
@@ -42,6 +42,30 @@ const StepMark: React.FC<{ status: Step['status'] }> = ({ status }) =>
       </svg>
     </span>
   );
+
+/** Turns Server Changes on, reporting each step of getting the server ready; true when it's on */
+export async function turnOnServerChanges(onStep: (s: Step) => void): Promise<boolean> {
+  const r = await fetch('/api/system/changes', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ allow: true }) });
+  if (!r.body) throw new Error('Manifexus didn’t answer.');
+  const reader = r.body.getReader();
+  const dec = new TextDecoder();
+  let buf = '';
+  let ok = false;
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    const lines = buf.split('\n');
+    buf = lines.pop() || '';
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      const m = JSON.parse(line);
+      if (m.step) onStep(m.step as Step);
+      if (m.done) ok = Boolean(m.ok);
+    }
+  }
+  return ok;
+}
 
 export const HostAutomationModal: React.FC<Props> = ({ isOpen, onClose, privileges, onRefreshPrivileges, backLabel, zIndex = 80 }) => {
   const [steps, setSteps] = useState<Step[]>([]);

@@ -21,6 +21,8 @@ const DEFAULT_CONFIG: ManifexusConfig = {
   hostAddress: 'localhost',
   defaultViewMode: 'compose',
   refreshIntervalSeconds: 10,
+  // A brand-new install starts with Getting Started
+  onboardingDone: false,
 };
 
 // Ensure directory exists
@@ -45,6 +47,8 @@ export function getConfig(): ManifexusConfig {
       const parsed = JSON.parse(raw);
       return {
         ...DEFAULT_CONFIG,
+        // Settings saved before Getting Started existed: that's an install already in use, so don't start it
+        onboardingDone: parsed.onboardingDone ?? true,
         ...parsed,
         groups: Array.isArray(parsed.groups) && parsed.groups.length > 0 ? parsed.groups : DEFAULT_CONFIG.groups,
       };

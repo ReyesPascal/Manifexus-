@@ -2,6 +2,18 @@
   "_about": "What's new in each version of Manifexus, newest first. Shown in Updates. Write for people, not developers: short, plain sentences about what they can now do. The newest entry's version is what gets built and tagged; older entries can give the \"commit\" they were released from.",
   "releases": [
     {
+      "version": "2.0",
+      "date": "2026-09-29",
+      "headline": "Manifexus 2.0: a friendly welcome, and a tour of your dashboard.",
+      "new": [
+        "Getting Started: the first time you open Manifexus, a short setup helps you choose your server's address, where new stacks go, whether to turn on Server Changes, and Simple or Advanced view.",
+        "An interactive tour shows you where everything is. It highlights each part of the dashboard and lets you try it right there: search, filter, drag an app, open Activity, Restore and more.",
+        "Run the setup and tour again anytime from Settings → Getting Started."
+      ],
+      "improved": [],
+      "fixed": []
+    },
+    {
       "version": "1.12",
       "date": "2026-09-29",
       "headline": "Stacks that always fit together.",

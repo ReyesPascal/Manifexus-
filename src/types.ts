@@ -108,6 +108,8 @@ export interface ManifexusConfig {
   showCommands?: boolean;
   /** Server Changes: off until turned on. Off, Manifexus only looks (and starts, stops or restarts apps) */
   allowServerChanges?: boolean;
+  /** Getting Started (setup and tour) was finished or skipped; false only on a brand-new install */
+  onboardingDone?: boolean;
 }
 
 export interface EmptyComposeStack {

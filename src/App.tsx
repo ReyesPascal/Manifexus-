@@ -41,6 +41,7 @@ import { SimulateContainerModal } from './components/SimulateContainerModal';
 import { MoveAppsModal } from './components/MoveAppsModal';
 import { DeleteStackDialog, DeleteStackTarget } from './components/DeleteStackDialog';
 import { HostAutomationModal } from './components/HostAutomationModal';
+import { GettingStartedSheet, Tour } from './components/GettingStarted';
 import { ManifexusHeroHeader } from './components/ManifexusHeroHeader';
 import { LibraryBar, Shelf, ShelfGrid, shelfSpan, FolderIcon, Health, TileGrid, ShelfNote, panelStyle, displayFont } from './components/Shelf';
 import type { MenuItem } from './components/ui/ios';
@@ -94,6 +95,16 @@ export default function App() {
   // Moves started by dragging an app onto a stack: shown in their new stack straight away while the real
   // move (with a backup, always) runs in the background
   const [pendingMoves, setPendingMoves] = useState<Record<string, { from: string; service: string; to: string; via?: string[]; progress?: MoveProgress }>>({});
+  // Getting Started: setup on a brand-new install (and from Settings), then the tour
+  const [gettingStarted, setGettingStarted] = useState(false);
+  const [touring, setTouring] = useState(false);
+  const offeredSetup = useRef(false);
+  useEffect(() => {
+    if (config && config.onboardingDone === false && !offeredSetup.current) {
+      offeredSetup.current = true;
+      setGettingStarted(true);
+    }
+  }, [config]);
   // A short message at the bottom of the screen (a move finished, or couldn't)
   const [notice, setNotice] = useState<{ text: string; tone?: 'error' } | null>(null);
   useEffect(() => {
@@ -1356,7 +1367,28 @@ export default function App() {
       />
 
       {/* Settings Modal */}
+      <GettingStartedSheet
+        open={gettingStarted}
+        config={config}
+        onSaveConfig={handleSaveConfig}
+        privileges={privileges}
+        onRefreshPrivileges={fetchPrivileges}
+        detectedStacksDir={defaultStacksDir}
+        onClose={(tour) => {
+          setGettingStarted(false);
+          if (tour) {
+            setViewMode('compose');
+            setTimeout(() => setTouring(true), 350);
+          }
+        }}
+      />
+      <Tour open={touring} onClose={() => setTouring(false)} onClearSearch={() => setSearchQuery('')} onShowAll={() => setStatusFilter('all')} />
+
       <SettingsModal
+        onRunGettingStarted={() => {
+          setIsSettingsOpen(false);
+          setGettingStarted(true);
+        }}
         isOpen={isSettingsOpen}
         {...backProps('settings', () => setIsSettingsOpen(false))}
         config={config}
