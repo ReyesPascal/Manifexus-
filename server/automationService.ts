@@ -391,6 +391,44 @@ export async function executeStreamingPipeline(
           break;
         }
       }
+      // The plan was made from the stack as it was then. If apps were added to it since (another move
+      // finished first), keep them: add anything in the stack now that the plan doesn't have
+      if (preMergeTargetCompose) {
+        try {
+          const now = yaml.parseDocument(preMergeTargetCompose);
+          const plan = yaml.parseDocument(req.yamlContent);
+          let added = 0;
+          for (const section of ['services', 'networks', 'volumes']) {
+            const cur = now.get(section);
+            if (!yaml.isMap(cur)) continue;
+            for (const item of cur.items) {
+              const key = String((item.key as yaml.Scalar)?.value ?? item.key);
+              if (plan.hasIn([section, key])) continue;
+              plan.setIn([section, key], item.value);
+              if (section === 'services') added++;
+            }
+          }
+          // …and drop apps that left it since (moved elsewhere), except the ones this move brings in
+          const incoming = new Set(movingContainers.map((c) => c.compose?.service).filter(Boolean) as string[]);
+          const planServices = plan.get('services');
+          let removed = 0;
+          if (yaml.isMap(planServices) && yaml.isMap(now.get('services'))) {
+            for (const item of [...planServices.items]) {
+              const key = String((item.key as yaml.Scalar)?.value ?? item.key);
+              if (!now.hasIn(['services', key]) && !incoming.has(key)) {
+                plan.deleteIn(['services', key]);
+                removed++;
+              }
+            }
+          }
+          if (added || removed) {
+            req.yamlContent = plan.toString();
+            log(`${req.targetStackName} changed since this move was planned; its ${added} newer app${added === 1 ? '' : 's'} stay${added === 1 ? 's' : ''} in it.`, 1);
+          }
+        } catch {
+          // an unreadable file is caught when it's written
+        }
+      }
       for (const g of sourceGroups.values()) {
         g.originalCompose = (await readHostFile(g.composePath)) || undefined;
         if (!g.originalCompose) throw new Error(`Could not read ${g.composePath}, so ${g.project} can't be updated safely.`);

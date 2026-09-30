@@ -406,8 +406,9 @@ export default function App() {
     }
   };
   // Drag an app onto a stack: it shows there at once, and the move runs in the background with a backup of
-  // the app's own data. Moves wait their turn (one at a time), so two never change the same stack at once.
-  const moveQueue = useRef<Promise<void>>(Promise.resolve());
+  // the app's own data. A move waits only for earlier moves that touch one of its stacks (where the app comes
+  // from, or where it goes); moves between other stacks run at the same time.
+  const stackQueues = useRef(new Map<string, Promise<void>>());
   const moveInBackground = (appId: string, to: string) => {
     const c = containers.find((x) => x.id === appId);
     if (!c) return;
@@ -492,7 +493,14 @@ export default function App() {
         await finish(`${name} couldn’t move: ${(e as Error).message}.`, 'error');
       }
     };
-    moveQueue.current = moveQueue.current.then(job, job);
+    const queues = stackQueues.current;
+    const stacks = Array.from(new Set([from, to]));
+    const before = stacks.map((k) => queues.get(k)).filter(Boolean) as Promise<void>[];
+    const run: Promise<void> = Promise.all(before).then(job, job);
+    for (const k of stacks) queues.set(k, run);
+    void run.then(() => {
+      for (const k of stacks) if (queues.get(k) === run) queues.delete(k);
+    });
   };
 
   // One-click New Stack: Enter on the name creates it (the folder gets a safe version of the name)

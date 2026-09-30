@@ -159,8 +159,23 @@ async function startServer() {
   }
 
   // Moves run one at a time (see execute-merge-stream)
-  let moveLock: Promise<void> = Promise.resolve();
-  let moveBusy = false;
+  // Moves that touch the same stack take turns; moves between other stacks run at the same time.
+  // Each stack (by folder) remembers the last move waiting on it.
+  const stackTails = new Map<string, Promise<void>>();
+  const lockStacks = async (keys: string[], onWait: () => void): Promise<() => void> => {
+    const uniq = Array.from(new Set(keys.filter(Boolean)));
+    const waits = uniq.map((k) => stackTails.get(k)).filter(Boolean) as Promise<void>[];
+    let release: () => void = () => undefined;
+    const done = new Promise<void>((r) => (release = r));
+    const mine = Promise.all(waits).then(() => done);
+    for (const k of uniq) stackTails.set(k, mine);
+    if (waits.length) onWait();
+    await Promise.all(waits);
+    return () => {
+      release();
+      for (const k of uniq) if (stackTails.get(k) === mine) stackTails.delete(k);
+    };
+  };
 
   // Server Changes: while it's off, nothing that changes the server runs (moves, restores, fixes,
   // new or deleted stacks, cleanup). Looking, and starting, stopping or restarting apps, always work.
@@ -851,12 +866,15 @@ async function startServer() {
       }
 
       // One move at a time: two moves changing the same compose file at once would undo each other
-      const turn = moveLock.then(() => undefined);
-      let release: () => void = () => undefined;
-      moveLock = new Promise<void>((r) => (release = r));
-      if (moveBusy) sendEvent({ type: 'log', log: 'Waiting for the move before it to finish…', timestamp: new Date().toISOString() });
-      await turn;
-      moveBusy = true;
+      // The stacks this move changes: where the apps come from, and where they go
+      const all = (await getContainersList()).containers;
+      const involved = [
+        String(targetDirectory || targetStackName || ''),
+        ...all.filter((c) => sourceContainerIds.includes(c.id) || sourceContainerIds.includes(c.cleanName)).map((c) => c.compose?.workingDir || ''),
+      ].map((d) => d.replace(/\/+$/, ''));
+      const release = await lockStacks(involved, () =>
+        sendEvent({ type: 'log', log: 'Waiting for another move into the same stack to finish…', timestamp: new Date().toISOString() })
+      );
       try {
       // Execute the 7 sequential steps with real-time SSE streaming
       await executeStreamingPipeline(
@@ -873,7 +891,6 @@ async function startServer() {
         sendEvent
       );
       } finally {
-        moveBusy = false;
         release();
       }
     } catch (err) {
