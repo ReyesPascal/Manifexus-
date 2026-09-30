@@ -382,11 +382,11 @@ export const Shelf: React.FC<{
  * Stacks fit together like tiles on a grid, and every app card is the same size everywhere:
  *
  * - The number of columns comes from the real width, so a card is never narrower than MIN_COL.
- * - A stack is as wide as its apps. One with more apps than fit across takes the shape with no empty
- *   slots (4 apps on 3 columns becomes 2 × 2), and the space beside it goes to other stacks. When that
- *   still leaves gaps, a small stack may turn (its apps stacked instead of side by side) to fill them.
- * - Stacks go in name order, each in the first spot it fits, so they stay put as apps come and go
- *   and smaller stacks still fill the gaps next to bigger ones. When stacks grow or shrink, or the window changes, everything re-fits.
+ * - A layout solver tries arrangements and keeps the tightest: no gaps between stacks (any leftover space
+ *   only at the very end), then as few rows as possible. To get there a stack may take another shape
+ *   (its apps stacked in 2 or 3 lines, or a little wider, up to 1.5 × card width), and stacks may swap places.
+ * - Stacks stay where they were unless moving them closes a gap, and otherwise go in name order.
+ * - When stacks grow or shrink, or the window changes, it solves again and everything glides into place.
  * - Stacks sharing a row line up to the same height.
  */
 const MIN_COL = 320; // narrowest app card column, px (a one-app stack's name, + and ⋯ still fit)
@@ -395,82 +395,136 @@ const GAP = 16;
 /** Columns (app cards across) for the panel a TileGrid is in; set by ShelfGrid */
 const CellCols = React.createContext<number | null>(null);
 
-type Place = { i: number; col: number; row: number; w: number; h: number };
+/** A stack's spot: grid cell, its size in columns × rows, and how many app cards go across inside it */
+type Place = { i: number; col: number; row: number; w: number; h: number; cols: number };
+type Shape = { w: number; h: number; cols: number; pen: number };
 
-/** The usual shape: as wide as its apps; for more apps than columns, the one with fewest empty slots */
-function naturalShape(n: number, C: number): { w: number; h: number } {
-  if (n <= C) return { w: Math.max(1, n), h: 1 };
-  let best = { w: C, h: Math.ceil(n / C) };
-  let bestHoles = best.w * best.h - n;
-  for (let w = C - 1; w >= 1; w--) {
-    const h = Math.ceil(n / w);
-    const holes = w * h - n;
-    // Only narrower when it really removes empty slots, and never taller than twice the widest shape
-    if (holes < bestHoles && h <= 2 * Math.ceil(n / C)) {
-      best = { w, h };
-      bestHoles = holes;
+/** The shapes a stack may take, each with a small cost so the usual shape wins when it fits as well */
+function shapesFor(n: number, C: number): Shape[] {
+  const m = Math.max(1, n);
+  const out: Shape[] = [];
+  const add = (w: number, h: number, cols: number, pen: number) => {
+    if (w >= 1 && w <= C && !out.some((x) => x.w === w && x.h === h)) out.push({ w, h, cols, pen });
+  };
+  if (m <= C) add(m, 1, m, 0);
+  else {
+    // More apps than columns: as wide as possible first; a narrower shape may leave a few empty spots inside it
+    const minW = Math.max(1, Math.ceil(m / Math.max(3, Math.ceil(m / C))));
+    for (let w = C; w >= minW; w--) {
+      const h = Math.ceil(m / w);
+      add(w, h, w, (w * h - m) * 2 + (C - w));
     }
   }
-  return best;
-}
-
-/** Shapes a stack may take: its usual one, or any with no empty slots up to 3 lines tall (2 apps side by side, or stacked) */
-function shapesFor(n: number, C: number, flexible: boolean): { w: number; h: number }[] {
-  const nat = naturalShape(n, C);
-  if (!flexible) return [nat];
-  const out = [nat];
-  const m = Math.max(1, n);
+  // Its apps in 2 or 3 lines, with no empty spots
   for (let w = Math.min(C, m); w >= 1; w--) {
     const h = Math.ceil(m / w);
-    if (w * h === m && h <= 3 && !(w === nat.w && h === nat.h)) out.push({ w, h });
+    if (w * h === m && h > 1 && h <= 3) add(w, h, w, 3 * (h - 1));
   }
+  // A little wider than its apps (cards up to 1.5 × as wide), to close a gap
+  if (m <= C) for (let w = m + 1; w <= Math.min(C, Math.floor(m * 1.5)); w++) add(w, 1, m, 4 * (w - m));
   return out;
 }
 
-function placeWith(apps: number[], C: number, flexible: boolean): { places: Place[]; rows: number; gaps: number } {
-  const order = apps
-    .map((n, i) => ({ i, n }))
-    // In the order given (by name): each stack keeps its place as apps come and go, instead of stacks
-    // swapping places whenever one grows or shrinks
-    .sort((a, b) => a.i - b.i);
-  const taken: boolean[][] = [];
-  const free = (r: number, c: number, w: number, h: number) => {
+/**
+ * Tries arrangements (filling the first empty cell each time, with every stack and shape that fits there, or
+ * leaving it empty) and keeps the best: gaps before the last row cost the most, then rows, then unusual shapes,
+ * then stacks that left their previous spot, then name order. Stops after a few dozen milliseconds with the
+ * best found so far.
+ */
+function solveLayout(apps: number[], C: number, prev: ({ row: number; col: number } | undefined)[], budgetMs = 60): Place[] {
+  const n = apps.length;
+  if (!n) return [];
+  const shapes = apps.map((a) => shapesFor(a, C));
+  const grid: (boolean | 'skip')[][] = [];
+  const at = (r: number, c: number) => grid[r]?.[c];
+  const set = (r: number, c: number, w: number, h: number, v: boolean) => {
+    for (let y = r; y < r + h; y++) {
+      grid[y] = grid[y] || Array(C).fill(false);
+      for (let x = c; x < c + w; x++) grid[y][x] = v;
+    }
+  };
+  const fits = (r: number, c: number, w: number, h: number) => {
     if (c + w > C) return false;
-    for (let y = r; y < r + h; y++) for (let x = c; x < c + w; x++) if (taken[y]?.[x]) return false;
+    for (let y = r; y < r + h; y++) for (let x = c; x < c + w; x++) if (at(y, x)) return false;
     return true;
   };
-  const places: Place[] = [];
-  for (const { i, n } of order) {
-    // Each shape's first spot (top to bottom, left to right); the earliest spot wins, the usual shape on a tie
-    let best: Place | null = null;
-    for (const { w, h } of shapesFor(n, C, flexible)) {
-      for (let r = 0; ; r++) {
-        let c = 0;
-        for (; c <= C - w; c++) if (free(r, c, w, h)) break;
-        if (c <= C - w) {
-          if (!best || r < best.row || (r === best.row && c < best.col)) best = { i, col: c, row: r, w, h };
-          break;
-        }
+  const tryOrder = apps.map((_, i) => i).sort((a, b) => Math.max(1, apps[b]) - Math.max(1, apps[a]) || a - b);
+  const used = Array(n).fill(false);
+  const cur: Place[] = [];
+  let best: Place[] | null = null;
+  let bestCost = Infinity;
+  const t0 = Date.now();
+  let nodes = 0;
+  let out = false;
+  const leaf = (pen: number) => {
+    let rows = 0;
+    for (let y = 0; y < grid.length; y++) if (grid[y]?.some((x) => x === true)) rows = y + 1;
+    let gaps = 0;
+    for (let y = 0; y < rows - 1; y++) for (let x = 0; x < C; x++) if (grid[y][x] !== true) gaps++;
+    const order = cur.slice().sort((a, b) => a.row - b.row || a.col - b.col);
+    let disorder = 0;
+    order.forEach((p, k) => (disorder += Math.abs(p.i - k)));
+    let moved = 0;
+    for (const p of cur) {
+      const q = prev[p.i];
+      if (q && (q.row !== p.row || q.col !== p.col)) moved++;
+    }
+    const cost = gaps * 1000 + rows * 40 + pen * 5 + moved * 8 + disorder;
+    if (cost < bestCost) {
+      bestCost = cost;
+      best = cur.map((p) => ({ ...p }));
+    }
+  };
+  const skipsIn = (r: number) => (grid[r] || []).filter((x) => x === 'skip').length;
+  const dfs = (r: number, c: number, placed: number, pen: number, certainGaps: number) => {
+    if (++nodes % 256 === 0 && Date.now() - t0 > budgetMs) out = true;
+    if (out && best) return;
+    if (placed === n) return leaf(pen);
+    while (at(r, c)) {
+      c++;
+      if (c >= C) {
+        c = 0;
+        r++;
       }
     }
-    for (let y = best!.row; y < best!.row + best!.h; y++) {
-      taken[y] = taken[y] || [];
-      for (let x = best!.col; x < best!.col + best!.w; x++) taken[y][x] = true;
+    if (certainGaps * 1000 + pen * 5 + (r + 1) * 40 >= bestCost) return;
+    for (const i of tryOrder) {
+      if (used[i]) continue;
+      for (const s of shapes[i]) {
+        if (!fits(r, c, s.w, s.h)) continue;
+        used[i] = true;
+        set(r, c, s.w, s.h, true);
+        cur.push({ i, row: r, col: c, w: s.w, h: s.h, cols: s.cols });
+        dfs(r, c, placed + 1, pen + s.pen, certainGaps);
+        cur.pop();
+        set(r, c, s.w, s.h, false);
+        used[i] = false;
+        if (out && best) return;
+      }
     }
-    places.push(best!);
-  }
-  // Empty spots before the last row (the last row may end early)
-  let gaps = 0;
-  for (let y = 0; y < taken.length - 1; y++) for (let x = 0; x < C; x++) if (!taken[y]?.[x]) gaps++;
-  return { places, rows: taken.length, gaps };
+    // Or leave this cell empty: a gap, unless it ends up in the last row
+    grid[r] = grid[r] || Array(C).fill(false);
+    grid[r][c] = 'skip';
+    const nr = c + 1 >= C ? r + 1 : r;
+    dfs(nr, c + 1 >= C ? 0 : c + 1, placed, pen, certainGaps + (nr > r ? skipsIn(r) : 0));
+    grid[r][c] = false;
+  };
+  dfs(0, 0, 0, 0, 0);
+  return best || [];
 }
 
-/** The usual shapes, unless letting stacks turn (two apps stacked instead of side by side) leaves fewer gaps */
-function placeStacks(apps: number[], C: number): Place[] {
-  const plain = placeWith(apps, C, false);
-  if (!plain.gaps) return plain.places;
-  const flex = placeWith(apps, C, true);
-  return flex.gaps < plain.gaps || (flex.gaps === plain.gaps && flex.rows < plain.rows) ? flex.places : plain.places;
+// The last arrangement for the same stacks and columns: re-renders (status updates) don't solve again
+let solved: { key: string; places: Place[] } | null = null;
+// Where each stack was last (by its id), so stacks stay put unless moving closes a gap
+const lastSpot = new Map<string, { row: number; col: number }>();
+
+function placeStacks(apps: number[], C: number, ids: string[]): Place[] {
+  const key = C + '|' + ids.map((id, k) => `${id}:${apps[k]}`).join(',');
+  if (solved?.key === key) return solved.places;
+  const places = solveLayout(apps, C, ids.map((id) => lastSpot.get(id + '@' + C)));
+  for (const p of places) lastSpot.set(ids[p.i] + '@' + C, { row: p.row, col: p.col });
+  solved = { key, places };
+  return places;
 }
 
 /**
@@ -556,7 +610,8 @@ export const ShelfGrid: React.FC<{ children: React.ReactNode; zoom?: number }> =
   const loose = items.filter((c) => c.props.id === 'stack:none');
   const places = placeStacks(
     stacks.map((c) => Math.max(0, c.props.span ?? 1)),
-    C
+    C,
+    stacks.map((c) => String(c.props.id ?? c.key))
   );
   // What the arrangement is: columns, and each stack's place, size and apps (not their status)
   const signature = C + '|' + places.map((p) => `${stacks[p.i].key}@${p.col},${p.row},${p.w}x${p.h}:${stacks[p.i].props.span}`).join(';') + '|' + loose.map((c) => c.props.span).join(',');
@@ -566,14 +621,14 @@ export const ShelfGrid: React.FC<{ children: React.ReactNode; zoom?: number }> =
     <div ref={outer}>
     <div ref={ref} className="flex flex-col gap-3 sm:gap-4" style={zoom !== 1 ? ({ zoom } as React.CSSProperties) : undefined}>
       <div className="grid gap-3 sm:gap-4" style={{ gridTemplateColumns: `repeat(${C}, minmax(0, 1fr))` }}>
-        {places.map(({ i, col, row, w, h }) => (
+        {places.map(({ i, col, row, w, h, cols }) => (
           <div
             key={stacks[i].key ?? i}
             data-flip={`stack:${stacks[i].props.id ?? stacks[i].key}`}
             className="flex flex-col min-w-0"
             style={{ gridColumn: `${col + 1} / span ${w}`, gridRow: `${row + 1} / span ${h}` }}
           >
-            <CellCols.Provider value={w}>{stacks[i]}</CellCols.Provider>
+            <CellCols.Provider value={cols}>{stacks[i]}</CellCols.Provider>
           </div>
         ))}
       </div>

@@ -2,6 +2,16 @@
   "_about": "What's new in each version of Manifexus, newest first. Shown in Updates. Write for people, not developers: short, plain sentences about what they can now do. The newest entry's version is what gets built and tagged; older entries can give the \"commit\" they were released from.",
   "releases": [
     {
+      "version": "1.12",
+      "date": "2026-09-29",
+      "headline": "Stacks that always fit together.",
+      "new": [],
+      "improved": [
+        "Stacks always fit together with no gaps between them: a layout solver tries arrangements and picks the tightest, letting a stack stack its apps in 2 or 3 lines, widen a little, or swap places when that closes a gap. Any leftover space goes at the very end. Stacks stay where they were unless moving them closes a gap."
+      ],
+      "fixed": []
+    },
+    {
       "version": "1.11",
       "date": "2026-09-29",
       "headline": "Every stack at a glance, and faster, safer drag-and-drop moves.",
