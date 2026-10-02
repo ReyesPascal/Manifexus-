@@ -397,10 +397,14 @@ export const SoftwareUpdateSheet: React.FC<SoftwareUpdateSheetProps> = ({ open, 
       key: 'download',
       title: 'Download update',
       detail:
-        phase === 'download' && progress?.bytesTotal
-          ? `${formatBytes(progress.bytesDone)} of ${formatBytes(progress.bytesTotal)}`
-          : s?.latest?.sizeBytes
-            ? formatBytes(s.latest.sizeBytes)
+        // While downloading: only what really needs downloading (parts already on the server are skipped),
+        // with a total that never changes; before that, the most it can be
+        phase === 'download'
+          ? progress?.bytesTotal
+            ? `${formatBytes(progress.bytesDone)} of ${formatBytes(progress.bytesTotal)}`
+            : 'Checking what’s needed…'
+          : s?.latest?.sizeBytes && phase === 'idle'
+            ? `Up to ${formatBytes(s.latest.sizeBytes)}`
             : undefined,
     },
     { key: 'prepare', title: 'Prepare installation' },
@@ -538,7 +542,7 @@ export const SoftwareUpdateSheet: React.FC<SoftwareUpdateSheetProps> = ({ open, 
           ))}
           <SectionFooter>
             {[
-              s.latest!.sizeBytes ? `${formatBytes(s.latest!.sizeBytes)} download.` : '',
+              s.latest!.sizeBytes ? `Up to ${formatBytes(s.latest!.sizeBytes)} to download (less if parts are already on your server).` : '',
               'Manifexus restarts for a few seconds; your apps keep running. If the new version doesn’t start, the current one is restored automatically.',
             ]
               .filter(Boolean)
@@ -563,7 +567,7 @@ export const SoftwareUpdateSheet: React.FC<SoftwareUpdateSheetProps> = ({ open, 
           <SectionFooter>
             {[
               s.latest!.totalCommits && s.latest!.totalCommits > s.latest!.notes.length ? `${s.latest!.totalCommits} changes in total.` : '',
-              s.latest!.sizeBytes ? `${formatBytes(s.latest!.sizeBytes)} download.` : '',
+              s.latest!.sizeBytes ? `Up to ${formatBytes(s.latest!.sizeBytes)} to download (less if parts are already on your server).` : '',
               'Manifexus restarts for a few seconds; your apps keep running. If the new version doesn’t start, the current one is restored automatically.',
             ]
               .filter(Boolean)

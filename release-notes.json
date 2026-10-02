@@ -28,7 +28,8 @@
         "Updates no longer get stuck on \"Updating\" with no way to close the screen, and the nightly automatic update works again after a failed one.",
         "App Details shows a new name or icon right away, and never shows another app's check results.",
         "The file editor keeps working after Reconnect, and only Manifexus's own page can open it.",
-        "Cancelling a backup download now stops it on the server too."
+        "Cancelling a backup download now stops it on the server too.",
+        "Updating Manifexus shows one download size that stays the same, counting only what really needs downloading, instead of a size that kept changing."
       ]
     },
     {

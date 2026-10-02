@@ -489,7 +489,7 @@ function emit(p: UpdateProgress) {
 function pullImage(ref: string, onProgress: (done: number, total: number) => void): Promise<void> {
   const r = parseRef(ref)!;
   const repoPath = r.registry === 'registry-1.docker.io' ? r.repo.replace(/^library\//, '') : `${r.registry}/${r.repo}`;
-  const layers = new Map<string, { total: number; downloaded: number; extracted: number; done: boolean }>();
+  const layers = new Map<string, { total: number; downloaded: number; extracted: number; extracting: boolean; done: boolean; present: boolean }>();
   const known = layerSizesCache;
   return new Promise((resolve, reject) => {
     const req = http.request(
@@ -509,19 +509,24 @@ function pullImage(ref: string, onProgress: (done: number, total: number) => voi
         let buf = '';
         let failed: string | undefined;
         let lastEmit = 0;
+        // One fixed total: the size of the parts that really need downloading (parts already on the server
+        // don't count), settled once Docker has listed every part and the download has begun, and never
+        // changed after that. Until then no total is shown rather than one that keeps growing.
+        let fixedTotal = 0;
+        let started = false;
         const report = (force = false) => {
           const now = Date.now();
           if (!force && now - lastEmit < 250) return;
           lastEmit = now;
-          let total = 0;
+          const needed = [...layers.values()].filter((l) => !l.present);
+          if (!fixedTotal && started && needed.every((l) => l.total > 0)) fixedTotal = needed.reduce((t, l) => t + l.total, 0);
+          if (!fixedTotal) return onProgress(0, 0);
           let done = 0;
-          for (const [, l] of layers) {
-            const size = l.total || 0;
-            total += size;
-            // 80% weight on download, 20% on extract
-            done += l.done ? size : size * (0.8 * (l.total ? Math.min(1, l.downloaded / l.total) : 0) + 0.2 * (l.total ? Math.min(1, l.extracted / l.total) : 0));
+          for (const l of needed) {
+            // 80% weight on download, 20% on unpacking
+            done += l.done ? l.total : l.total * (0.8 * Math.min(1, l.downloaded / l.total) + 0.2 * (l.extracting ? Math.min(1, l.extracted) : 0));
           }
-          onProgress(done, total);
+          onProgress(Math.min(done, fixedTotal), fixedTotal);
         };
         res.on('data', (chunk) => {
           buf += chunk.toString();
@@ -535,19 +540,27 @@ function pullImage(ref: string, onProgress: (done: number, total: number) => voi
               if (ev.error) failed = ev.error;
               const id: string | undefined = ev.id;
               if (!id || !/^[0-9a-f]{12}$/.test(id)) continue;
-              if (!layers.has(id)) layers.set(id, { total: known[id] || 0, downloaded: 0, extracted: 0, done: false });
+              if (!layers.has(id)) layers.set(id, { total: known[id] || 0, downloaded: 0, extracted: 0, extracting: false, done: false, present: false });
               const l = layers.get(id)!;
               const status = String(ev.status || '');
-              if (status === 'Downloading') {
+              if (status === 'Already exists') {
+                l.present = true;
+                l.done = true;
+              } else if (status === 'Downloading') {
+                started = true;
                 l.downloaded = ev.progressDetail?.current || l.downloaded;
+                // The download size (compressed), never the unpacked size
                 if (!l.total && ev.progressDetail?.total) l.total = ev.progressDetail.total;
               } else if (status === 'Download complete' || status === 'Verifying Checksum') {
+                started = true;
                 l.downloaded = l.total;
               } else if (status === 'Extracting') {
+                started = true;
                 l.downloaded = l.total;
-                l.extracted = ev.progressDetail?.current || l.extracted;
-                if (!l.total && ev.progressDetail?.total) l.total = ev.progressDetail.total;
-              } else if (status === 'Pull complete' || status === 'Already exists') {
+                l.extracting = true;
+                // Unpacking is reported in its own (unpacked) bytes: keep it as a fraction
+                if (ev.progressDetail?.total) l.extracted = (ev.progressDetail.current || 0) / ev.progressDetail.total;
+              } else if (status === 'Pull complete') {
                 l.done = true;
               }
               report();
