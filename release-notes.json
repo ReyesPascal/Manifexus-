@@ -2,6 +2,23 @@
   "_about": "What's new in each version of Manifexus, newest first. Shown in Updates. Write for people, not developers: short, plain sentences about what they can now do. The newest entry's version is what gets built and tagged; older entries can give the \"commit\" they were released from.",
   "releases": [
     {
+      "version": "3.1",
+      "date": "2026-10-02",
+      "headline": "Your stacks now fit together like puzzle pieces.",
+      "new": [
+        "Stacks fit together like puzzle pieces: a big stack no longer leaves empty space beside or inside it, because smaller stacks slot into the room around it. Manifexus tries many arrangements and picks the neatest one, with an even edge at the bottom.",
+        "On wide screens the dashboard uses the extra room: up to five columns of stacks instead of three, with the same easy-to-read app cards."
+      ],
+      "improved": [
+        "A stack can change shape to fit (its apps in more or fewer lines, or a little wider), and it can grow slightly to close a small gap. App cards always stay full size and easy to read.",
+        "When you add, move or remove apps, fold a stack or resize the window, everything glides to its new place.",
+        "A stack name that's too long for its space shows in full when you point at it, and the rename pencil only takes room when you point at the stack, so names have more space."
+      ],
+      "fixed": [
+        "A stack with 4 apps showed 3 on top and 1 alone below it, with an empty space beside it. It now fits neatly."
+      ]
+    },
+    {
       "version": "3.0",
       "date": "2026-10-02",
       "headline": "A fresh new look, easier to read everywhere.",

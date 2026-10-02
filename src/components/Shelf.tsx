@@ -77,6 +77,23 @@ const PencilGlyph = () => (
  * The small ✎ beside a name. It appears when you point at the name (and stays faintly visible on
  * touch screens, which can't point), so names stay clean until you want to change one.
  */
+/** A callback ref: the element gets a tooltip with the full text only while its text is cut short */
+function useTruncationTip(text: string) {
+  const ro = useRef<ResizeObserver | null>(null);
+  useEffect(() => () => ro.current?.disconnect(), []);
+  return React.useCallback(
+    (el: HTMLElement | null) => {
+      ro.current?.disconnect();
+      if (!el || typeof ResizeObserver === 'undefined') return;
+      const check = () => (el.scrollWidth > el.clientWidth + 1 ? el.setAttribute('data-tip', text) : el.removeAttribute('data-tip'));
+      ro.current = new ResizeObserver(check);
+      ro.current.observe(el);
+      check();
+    },
+    [text]
+  );
+}
+
 export const RenameButton: React.FC<{ label: string; onClick: () => void; group?: 'head' | 'card' }> = ({ label, onClick, group = 'head' }) => (
   <button
     type="button"
@@ -86,8 +103,9 @@ export const RenameButton: React.FC<{ label: string; onClick: () => void; group?
     }}
     title="Rename"
     aria-label={`Rename ${label}`}
-    className={`flex-shrink-0 w-7 h-7 -my-1.5 rounded-full inline-flex items-center justify-center text-white opacity-0 transition-opacity hover:!opacity-100 hover:bg-white/[0.08] focus:outline-none focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-[#0A84FF] [@media(hover:none)]:opacity-40 ${
-      group === 'head' ? 'group-hover/head:opacity-50' : 'group-hover/card:opacity-50'
+    // Takes no room until you point at it (or tab to it), so a name in a narrow stack keeps all the space it can
+    className={`flex-shrink-0 w-0 h-7 -my-1.5 overflow-hidden rounded-full inline-flex items-center justify-center text-white opacity-0 transition-opacity hover:!opacity-100 hover:bg-white/[0.08] focus:outline-none focus-visible:w-7 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-[#0A84FF] [@media(hover:none)]:w-7 [@media(hover:none)]:opacity-40 ${
+      group === 'head' ? 'group-hover/head:w-7 group-hover/head:opacity-50' : 'group-hover/card:w-7 group-hover/card:opacity-50'
     }`}
   >
     <PencilGlyph />
@@ -274,6 +292,8 @@ export const Shelf: React.FC<{
     setFolded(open);
   };
   const bodyId = `shelf-${id.replace(/[^a-z0-9_-]/gi, '_')}`;
+  // A name cut short (a narrow stack) shows in full when you point at it
+  const fullNameTip = useTruncationTip(title);
   return (
     <section
       ref={self}
@@ -349,6 +369,7 @@ export const Shelf: React.FC<{
                     className="flex items-center gap-1.5 min-w-0 text-left rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0A84FF]"
                   >
                     <h2
+                      ref={fullNameTip}
                       className="text-[20px] leading-[24px] font-semibold text-white truncate"
                       style={{ fontFamily: displayFont, letterSpacing: '-0.02em' }}
                     >
@@ -404,7 +425,8 @@ export const Shelf: React.FC<{
         )}
       </header>
       {open && (
-        <div id={bodyId} className="flex-1 flex flex-col px-3 pb-3 sm:px-4 sm:pb-4">
+        // A message (an empty stack) sits in the middle when its stack grows to close a gap
+        <div id={bodyId} className="flex-1 flex flex-col justify-center px-3 pb-3 sm:px-4 sm:pb-4">
           {children}
         </div>
       )}
@@ -413,15 +435,19 @@ export const Shelf: React.FC<{
 };
 
 /**
- * Stacks fit together like tiles on a grid, and every app card is the same size everywhere:
+ * Stacks fit together like puzzle pieces, and every app card stays a comfortable, readable size:
  *
  * - The number of columns comes from the real width, so a card is never narrower than MIN_COL.
- * - A layout solver tries arrangements and keeps the tightest: no gaps between stacks (any leftover space
- *   only at the very end), then as few rows as possible. To get there a stack may take another shape
- *   (its apps stacked in 2 or 3 lines, or a little wider, up to 1.5 × card width), and stacks may swap places.
- * - Stacks stay where they were unless moving them closes a gap, and otherwise go in name order.
- * - When stacks grow or shrink, or the window changes, it solves again and everything glides into place.
- * - Stacks sharing a row line up to the same height.
+ * - Each stack's real height is measured, so pieces sit exactly on top of each other: a tall stack beside
+ *   short ones never leaves empty space inside it or around it.
+ * - A solver tries many arrangements (a beam search over the skyline: always filling the lowest spot next)
+ *   and keeps the most even one. To get there a stack may change shape (its apps in more or fewer lines,
+ *   or a little wider, up to twice a card's width) and stacks may swap places.
+ * - A small gap left under a stack is closed by letting that stack grow a little (its cards spread out
+ *   evenly, never stretched), so the dashboard ends in a clean, even edge.
+ * - Stacks stay roughly in name order and where they were, unless moving them makes things fit better.
+ * - When stacks grow or shrink, fold, or the window changes, it measures and solves again and everything
+ *   glides into place.
  */
 const MIN_COL = 320; // narrowest app card column, px (a one-app stack's name, + and ⓘ still fit)
 const GAP = 16;
@@ -429,134 +455,277 @@ const GAP = 16;
 /** Columns (app cards across) for the panel a TileGrid is in; set by ShelfGrid */
 const CellCols = React.createContext<number | null>(null);
 
-/** A stack's spot: grid cell, its size in columns × rows, and how many app cards go across inside it */
-type Place = { i: number; col: number; row: number; w: number; h: number; cols: number };
-type Shape = { w: number; h: number; cols: number; pen: number };
+/** A stack's shape: columns wide, lines of app cards, cards across, a cost for being unusual, empty card spots */
+type Shape = { w: number; h: number; cols: number; pen: number; empty: number };
+/** A stack's spot: column, top (px), size, and how much it grows to close a gap below it */
+type Place = { i: number; col: number; top: number; w: number; h: number; cols: number; H: number; grow: number };
 
-/** The shapes a stack may take, each with a small cost so the usual shape wins when it fits as well */
+/** The shapes a stack may take; its usual shape costs nothing, others cost a little so they're used only when they help */
 function shapesFor(n: number, C: number): Shape[] {
-  const m = Math.max(1, n);
+  if (n <= 0) {
+    // An empty stack (just a message): one column, or two to close a gap
+    const out: Shape[] = [{ w: 1, h: 0, cols: 1, pen: 0, empty: 0 }];
+    if (C >= 2) out.push({ w: 2, h: 0, cols: 1, pen: 5, empty: 0 });
+    return out;
+  }
+  const natW = Math.min(n, C);
+  const natH = Math.ceil(n / natW);
   const out: Shape[] = [];
-  const add = (w: number, h: number, cols: number, pen: number) => {
-    if (w >= 1 && w <= C && !out.some((x) => x.w === w && x.h === h)) out.push({ w, h, cols, pen });
-  };
-  if (m <= C) add(m, 1, m, 0);
-  else {
-    // More apps than columns: as wide as possible first; a narrower shape may leave a few empty spots inside it
-    const minW = Math.max(1, Math.ceil(m / Math.max(3, Math.ceil(m / C))));
-    for (let w = C; w >= minW; w--) {
-      const h = Math.ceil(m / w);
-      add(w, h, w, (w * h - m) * 2 + (C - w));
+  for (let w = 1; w <= Math.min(C, 2 * n); w++) {
+    if (w <= n) {
+      const h = Math.ceil(n / w);
+      // Never a long thin strip
+      if (h > Math.max(3, natH + 1)) continue;
+      out.push({ w, h, cols: w, pen: 2 * (natW - w), empty: w * h - n });
+    } else {
+      // Wider than its apps: the same cards, a little wider (up to twice as wide)
+      out.push({ w, h: 1, cols: n, pen: Math.max(1, Math.round((6 * (w - n)) / n)), empty: 0 });
     }
   }
-  // Its apps in 2 or 3 lines, with no empty spots
-  for (let w = Math.min(C, m); w >= 1; w--) {
-    const h = Math.ceil(m / w);
-    if (w * h === m && h > 1 && h <= 3) add(w, h, w, 3 * (h - 1));
-  }
-  // A little wider than its apps (cards up to 1.5 × as wide), to close a gap
-  if (m <= C) for (let w = m + 1; w <= Math.min(C, Math.floor(m * 1.5)); w++) add(w, 1, m, 4 * (w - m));
   return out;
 }
 
-/**
- * Tries arrangements (filling the first empty cell each time, with every stack and shape that fits there, or
- * leaving it empty) and keeps the best: gaps before the last row cost the most, then rows, then unusual shapes,
- * then stacks that left their previous spot, then name order. Stops after a few dozen milliseconds with the
- * best found so far.
- */
-function solveLayout(apps: number[], C: number, prev: ({ row: number; col: number } | undefined)[], budgetMs = 60): Place[] {
-  const n = apps.length;
-  if (!n) return [];
-  const shapes = apps.map((a) => shapesFor(a, C));
-  const grid: (boolean | 'skip')[][] = [];
-  const at = (r: number, c: number) => grid[r]?.[c];
-  const set = (r: number, c: number, w: number, h: number, v: boolean) => {
-    for (let y = r; y < r + h; y++) {
-      grid[y] = grid[y] || Array(C).fill(false);
-      for (let x = c; x < c + w; x++) grid[y][x] = v;
-    }
-  };
-  const fits = (r: number, c: number, w: number, h: number) => {
-    if (c + w > C) return false;
-    for (let y = r; y < r + h; y++) for (let x = c; x < c + w; x++) if (at(y, x)) return false;
-    return true;
-  };
-  const tryOrder = apps.map((_, i) => i).sort((a, b) => Math.max(1, apps[b]) - Math.max(1, apps[a]) || a - b);
-  const used = Array(n).fill(false);
-  const cur: Place[] = [];
-  let best: Place[] | null = null;
-  let bestCost = Infinity;
-  const t0 = Date.now();
-  let nodes = 0;
-  let out = false;
-  const leaf = (pen: number) => {
-    let rows = 0;
-    for (let y = 0; y < grid.length; y++) if (grid[y]?.some((x) => x === true)) rows = y + 1;
-    let gaps = 0;
-    for (let y = 0; y < rows - 1; y++) for (let x = 0; x < C; x++) if (grid[y][x] !== true) gaps++;
-    const order = cur.slice().sort((a, b) => a.row - b.row || a.col - b.col);
-    let disorder = 0;
-    order.forEach((p, k) => (disorder += Math.abs(p.i - k)));
-    let moved = 0;
-    for (const p of cur) {
-      const q = prev[p.i];
-      if (q && (q.row !== p.row || q.col !== p.col)) moved++;
-    }
-    const cost = gaps * 1000 + rows * 40 + pen * 5 + moved * 8 + disorder;
-    if (cost < bestCost) {
-      bestCost = cost;
-      best = cur.map((p) => ({ ...p }));
-    }
-  };
-  const skipsIn = (r: number) => (grid[r] || []).filter((x) => x === 'skip').length;
-  const dfs = (r: number, c: number, placed: number, pen: number, certainGaps: number) => {
-    if (++nodes % 256 === 0 && Date.now() - t0 > budgetMs) out = true;
-    if (out && best) return;
-    if (placed === n) return leaf(pen);
-    while (at(r, c)) {
-      c++;
-      if (c >= C) {
-        c = 0;
-        r++;
-      }
-    }
-    if (certainGaps * 1000 + pen * 5 + (r + 1) * 40 >= bestCost) return;
-    for (const i of tryOrder) {
-      if (used[i]) continue;
-      for (const s of shapes[i]) {
-        if (!fits(r, c, s.w, s.h)) continue;
-        used[i] = true;
-        set(r, c, s.w, s.h, true);
-        cur.push({ i, row: r, col: c, w: s.w, h: s.h, cols: s.cols });
-        dfs(r, c, placed + 1, pen + s.pen, certainGaps);
-        cur.pop();
-        set(r, c, s.w, s.h, false);
-        used[i] = false;
-        if (out && best) return;
-      }
-    }
-    // Or leave this cell empty: a gap, unless it ends up in the last row
-    grid[r] = grid[r] || Array(C).fill(false);
-    grid[r][c] = 'skip';
-    const nr = c + 1 >= C ? r + 1 : r;
-    dfs(nr, c + 1 >= C ? 0 : c + 1, placed, pen, certainGaps + (nr > r ? skipsIn(r) : 0));
-    grid[r][c] = false;
-  };
-  dfs(0, 0, 0, 0, 0);
-  return best || [];
+/** What a stack measures: its height for a shape is base + lines × step (exact heights win once seen) */
+type Model = { base: number; step: number; folded: boolean; exact: Map<string, number> };
+const models = new Map<string, Model>();
+let modelGen = 0;
+const shapeKey = (s: { w: number; h: number }, colW: number, folded: boolean) => `${s.w}x${s.h}@${Math.round(colW / 8)}${folded ? 'f' : ''}`;
+
+function heightOf(id: string, n: number, s: Shape, colW: number): number {
+  const md = models.get(id);
+  if (md) {
+    const ex = md.exact.get(shapeKey(s, colW, md.folded));
+    if (ex) return ex;
+    return Math.round(md.base + (md.folded ? 0 : s.h * md.step));
+  }
+  // A first guess before anything is measured (corrected before it's drawn)
+  return n > 0 ? 92 + s.h * 128 : 172;
 }
 
-// The last arrangement for the same stacks and columns: re-renders (status updates) don't solve again
-let solved: { key: string; places: Place[] } | null = null;
-// Where each stack was last (by its id), so stacks stay put unless moving closes a gap
-const lastSpot = new Map<string, { row: number; col: number }>();
+// How much each kind of untidiness costs; empty space costs the most
+const W_HOLE = 10; // per px of empty space, per column
+const W_GROW = 2; // per px a stack grows to close a gap
+const W_HEIGHT = 3; // per px of total height
+const W_SHAPE = 120; // per point of an unusual shape
+const W_ORDER = 40; // per place away from name order
+const W_MOVED = 40; // per stack that changes column
 
-function placeStacks(apps: number[], C: number, ids: string[]): Place[] {
-  const key = C + '|' + ids.map((id, k) => `${id}:${apps[k]}`).join(',');
+type Piece = { i: number; id: string; n: number; shapes: (Shape & { H: number; maxGrow: number })[]; rank: number };
+/** A partial arrangement; the stacks placed so far are a chain back through `from` (nothing is copied) */
+type State = {
+  sky: number[]; // next free y in each column
+  room: number[]; // how much the lowest stack in each column may still grow
+  next: number[]; // per kind of stack, how many are placed
+  from: State | null;
+  last: Place | null;
+  cost: number;
+  filled: number; // area covered so far (px²), for the height estimate
+  area: number; // area still to place (each stack's smallest shape)
+  top: number; // highest column so far
+};
+type Move = { st: State; k: number; s: Piece['shapes'][number]; p: Piece; start: number; y: number; cost: number; score: number };
+
+/** A heap with the highest score on top, so the worst of the kept moves is dropped first */
+function heapPush(h: Move[], m: Move) {
+  h.push(m);
+  for (let i = h.length - 1; i > 0; ) {
+    const up = (i - 1) >> 1;
+    if (h[up].score >= h[i].score) break;
+    [h[up], h[i]] = [h[i], h[up]];
+    i = up;
+  }
+}
+function heapReplace(h: Move[], m: Move) {
+  h[0] = m;
+  for (let i = 0; ; ) {
+    const l = 2 * i + 1;
+    const r = l + 1;
+    let big = i;
+    if (l < h.length && h[l].score > h[big].score) big = l;
+    if (r < h.length && h[r].score > h[big].score) big = r;
+    if (big === i) break;
+    [h[big], h[i]] = [h[i], h[big]];
+    i = big;
+  }
+}
+
+/**
+ * Fills the dashboard from the top, always at the lowest spot, trying every stack (in each of its shapes and
+ * positions) there and keeping the best arrangements at each step (a beam search); then picks the finished
+ * arrangement that leaves the least empty space. The same input always gives the same layout.
+ */
+function solveLayout(pieces: Piece[], C: number, colW: number, prev: ({ col: number } | undefined)[]): Place[] {
+  const n = pieces.length;
+  if (!n) return [];
+  // Stacks that are alike (same shapes and heights) are interchangeable: place them in name order
+  const kinds: Piece[][] = [];
+  const kindKey = new Map<string, number>();
+  for (const p of pieces) {
+    const k = p.shapes.map((s) => `${s.w}.${s.h}.${s.H}`).join(',');
+    if (!kindKey.has(k)) {
+      kindKey.set(k, kinds.length);
+      kinds.push([]);
+    }
+    kinds[kindKey.get(k)!].push(p);
+  }
+  const unit = colW + GAP;
+  const smallest = pieces.map((p) => Math.min(...p.shapes.map((s) => s.w * unit * (s.H + GAP))));
+  const minArea = (p: Piece) => smallest[p.i];
+  const width = C * unit;
+  const BEAM = 200;
+  const LIMIT = BEAM * 3;
+  let beam: State[] = [
+    { sky: Array(C).fill(0), room: Array(C).fill(0), next: kinds.map(() => 0), from: null, last: null, cost: 0, filled: 0, area: pieces.reduce((t, p) => t + minArea(p), 0), top: 0 },
+  ];
+  for (let step = 0; step < n; step++) {
+    const moves: Move[] = [];
+    for (const st of beam) {
+      // The lowest spot (leftmost if several)
+      let c = 0;
+      for (let j = 1; j < C; j++) if (st.sky[j] < st.sky[c]) c = j;
+      for (let k = 0; k < kinds.length; k++) {
+        const p = kinds[k][st.next[k]];
+        if (!p) continue;
+        const orderCost = Math.abs(p.rank - step) * W_ORDER;
+        for (const s of p.shapes) {
+          for (let start = Math.max(0, c - s.w + 1); start <= Math.min(c, C - s.w); start++) {
+            let y = 0;
+            for (let j = start; j < start + s.w; j++) y = Math.max(y, st.sky[j]);
+            // The space this leaves above it: closed if the stack above can grow that much, else empty
+            let cost = st.cost + s.pen * W_SHAPE + orderCost;
+            if (s.empty) cost += s.empty * W_HOLE * (s.H / Math.max(1, s.h));
+            const was = prev[p.i];
+            if (was && was.col !== start) cost += W_MOVED;
+            let added = 0;
+            for (let j = start; j < start + s.w; j++) {
+              const d = y - st.sky[j];
+              if (d > 0) cost += d <= st.room[j] ? d * W_GROW : d * W_HOLE;
+              added += y + s.H + GAP - st.sky[j];
+            }
+            const filled = st.filled + added * unit;
+            const area = st.area - minArea(p);
+            const est = Math.max(st.top, y + s.H + GAP, (filled + area) / width);
+            const score = cost + est * W_HEIGHT * C;
+            // Only the best few hundred are kept (a heap with the worst on top)
+            if (moves.length < LIMIT) heapPush(moves, { st, k, s, p, start, y, cost, score });
+            else if (score < moves[0].score) heapReplace(moves, { st, k, s, p, start, y, cost, score });
+          }
+        }
+      }
+    }
+    moves.sort((a, b) => a.score - b.score);
+    // Keep the best, skipping ones that end up exactly like a better one
+    const seen = new Set<string>();
+    const nextBeam: State[] = [];
+    for (const m of moves) {
+      if (nextBeam.length >= BEAM) break;
+      const sky = m.st.sky.slice();
+      const room = m.st.room.slice();
+      for (let j = m.start; j < m.start + m.s.w; j++) {
+        sky[j] = m.y + m.s.H + GAP;
+        room[j] = m.s.maxGrow;
+      }
+      const next = m.st.next.slice();
+      next[m.k]++;
+      const key = sky.join(',') + '|' + next.join(',');
+      if (seen.has(key)) continue;
+      seen.add(key);
+      let added = 0;
+      for (let j = m.start; j < m.start + m.s.w; j++) added += sky[j] - m.st.sky[j];
+      nextBeam.push({
+        sky,
+        room,
+        next,
+        from: m.st,
+        last: { i: m.p.i, col: m.start, top: m.y, w: m.s.w, h: m.s.h, cols: m.s.cols, H: m.s.H, grow: 0 },
+        cost: m.cost,
+        filled: m.st.filled + added * unit,
+        area: m.st.area - minArea(m.p),
+        top: Math.max(m.st.top, m.y + m.s.H + GAP),
+      });
+    }
+    beam = nextBeam;
+  }
+  // Finish each: close the gaps stacks can grow into, then count what's still empty
+  let best: Place[] = [];
+  let bestCost = Infinity;
+  for (const st of beam) {
+    const placed: Place[] = [];
+    for (let x: State | null = st; x?.last; x = x.from) placed.push({ ...x.last });
+    placed.reverse();
+    const bottom = Math.max(...placed.map((p) => p.top + p.H));
+    const cols: Place[][] = Array.from({ length: C }, () => []);
+    for (const p of placed) for (let j = p.col; j < p.col + p.w; j++) cols[j].push(p);
+    for (const list of cols) list.sort((a, b) => a.top - b.top);
+    const shapeOf = (p: Place) => pieces[p.i].shapes.find((x) => x.w === p.w && x.h === p.h)!;
+    let grown = 0;
+    for (const p of placed) {
+      let gap = Infinity;
+      for (let j = p.col; j < p.col + p.w; j++) {
+        const list = cols[j];
+        const below = list[list.indexOf(p) + 1];
+        gap = Math.min(gap, (below ? below.top - GAP : bottom) - (p.top + p.H));
+      }
+      if (gap > 0 && gap <= shapeOf(p).maxGrow) {
+        p.grow = gap;
+        grown += gap;
+      }
+    }
+    // What's still empty, column by column
+    let empty = 0;
+    for (const list of cols) {
+      let y = 0;
+      for (const p of list) {
+        empty += Math.max(0, p.top - y);
+        y = p.top + p.H + p.grow + GAP;
+      }
+      empty += Math.max(0, bottom + GAP - y);
+    }
+    let shape = 0;
+    let order = 0;
+    let moved = 0;
+    placed
+      .slice()
+      .sort((a, b) => a.top - b.top || a.col - b.col)
+      .forEach((p, k) => (order += Math.abs(pieces[p.i].rank - k)));
+    for (const p of placed) {
+      const s = shapeOf(p);
+      shape += s.pen;
+      empty += s.empty * (s.H / Math.max(1, s.h));
+      if (prev[p.i] && prev[p.i]!.col !== p.col) moved++;
+    }
+    const cost = empty * W_HOLE + grown * W_GROW + bottom * W_HEIGHT * C + shape * W_SHAPE + order * W_ORDER + moved * W_MOVED;
+    if (cost < bestCost) {
+      bestCost = cost;
+      best = placed;
+    }
+  }
+  return best;
+}
+
+// The last arrangement for the same stacks, sizes and columns: re-renders (status updates) don't solve again
+let solved: { key: string; places: Place[] } | null = null;
+// Which column each stack was in last (by its id), so stacks stay put unless moving makes things fit better
+const lastSpot = new Map<string, { col: number }>();
+
+function placeStacks(apps: number[], C: number, colW: number, ids: string[]): Place[] {
+  const key = `${C}|${Math.round(colW / 8)}|${modelGen}|` + ids.map((id, k) => `${id}:${apps[k]}`).join(',');
   if (solved?.key === key) return solved.places;
-  const places = solveLayout(apps, C, ids.map((id) => lastSpot.get(id + '@' + C)));
-  for (const p of places) lastSpot.set(ids[p.i] + '@' + C, { row: p.row, col: p.col });
+  const pieces: Piece[] = ids.map((id, i) => ({
+    i,
+    id,
+    n: apps[i],
+    rank: i,
+    shapes: shapesFor(apps[i], C).map((s) => {
+      const H = heightOf(id, apps[i], s, colW);
+      // How much it may grow to close a gap and still look the same (its cards just spread out a little)
+      // (a message in an empty stack stays centred, so that one may grow more)
+      const maxGrow = Math.round(s.h === 0 ? Math.min(H * 0.5, 96) : Math.min(H * 0.3, 24 + 30 * s.h));
+      return { ...s, H, maxGrow };
+    }),
+  }));
+  const places = solveLayout(pieces, C, colW, ids.map((id) => lastSpot.get(id + '@' + C)));
+  for (const p of places) lastSpot.set(ids[p.i] + '@' + C, { col: p.col });
   solved = { key, places };
   return places;
 }
@@ -620,23 +789,34 @@ function useGlide(container: React.RefObject<HTMLElement | null>, signature: str
   });
 }
 
-export const ShelfGrid: React.FC<{ children: React.ReactNode; zoom?: number }> = ({ children, zoom = 1 }) => {
+
+export const ShelfGrid: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const ref = useRef<HTMLDivElement>(null);
-  // The room on screen, measured outside the zoom; zoomed out, the dashboard gets 1/zoom times as much
   const outer = useRef<HTMLDivElement>(null);
-  const [width, setWidth] = useState(() => (typeof window !== 'undefined' ? Math.min(window.innerWidth - 32, 1232) : 1232));
+  const [width, setWidth] = useState(() => (typeof window !== 'undefined' ? Math.min(window.innerWidth - 48, 1712) : 1712));
+  const [, remeasure] = useState(0);
   useEffect(() => {
     const el = outer.current;
     if (!el) return;
+    // While the window is being resized the stacks simply stretch with it; they re-fit once it settles
+    let first = true;
+    let t: ReturnType<typeof setTimeout> | undefined;
     const ro = new ResizeObserver(([e]) => {
       const w = Math.round(e.contentRect.width);
-      setWidth((cur) => (cur === w ? cur : w));
+      clearTimeout(t);
+      if (first) setWidth(w);
+      else t = setTimeout(() => setWidth((cur) => (cur === w ? cur : w)), 120);
+      first = false;
     });
     ro.observe(el);
-    return () => ro.disconnect();
+    return () => {
+      clearTimeout(t);
+      ro.disconnect();
+    };
   }, []);
   const items = React.Children.toArray(children).filter(React.isValidElement) as React.ReactElement<{ span?: number; id?: string }>[];
-  const C = Math.max(1, Math.floor((width / zoom + GAP) / (MIN_COL + GAP)));
+  const C = Math.max(1, Math.floor((width + GAP) / (MIN_COL + GAP)));
+  const colW = Math.max(1, (width - (C - 1) * GAP) / C);
   // "Not in a Stack" isn't a stack: it sits on its own at the bottom, full width, and never changes how the stacks fit
   // Stacks by name (numbers in order), so they stay put; a stack still being named comes first
   const stacks = items
@@ -647,48 +827,108 @@ export const ShelfGrid: React.FC<{ children: React.ReactNode; zoom?: number }> =
       return ta.localeCompare(tb, undefined, { numeric: true, sensitivity: 'base' });
     });
   const loose = items.filter((c) => c.props.id === 'stack:none');
+  const ids = stacks.map((c) => String(c.props.id ?? c.key));
   const places = placeStacks(
     stacks.map((c) => Math.max(0, c.props.span ?? 1)),
     C,
-    stacks.map((c) => String(c.props.id ?? c.key))
+    colW,
+    ids
   );
-  // What the arrangement is: columns, and each stack's place, size and apps (not their status)
-  const signature = C + '|' + places.map((p) => `${stacks[p.i].key}@${p.col},${p.row},${p.w}x${p.h}:${stacks[p.i].props.span}`).join(';') + '|' + loose.map((c) => c.props.span).join(',');
-  useGlide(ref, signature, zoom);
+  const bottom = places.length ? Math.max(...places.map((p) => p.top + p.H + p.grow)) : 0;
+  // What the arrangement is: columns, and each stack's column and shape (not its status, nor pixel sizes,
+  // so a window drag or a card growing a little doesn't set everything gliding)
+  const signature = C + '|' + places.map((p) => `${stacks[p.i].key}@${p.col}:${p.w}x${p.h}:${stacks[p.i].props.span}`).join(';') + '|' + loose.map((c) => c.props.span).join(',');
+  useGlide(ref, signature);
+
+  // Measure each stack's own height (as if it didn't grow); if any differs from what the layout assumed, solve
+  // again with the real heights. This happens before the page is drawn, so the first layout is already right.
+  const tries = useRef(0);
+  useLayoutEffect(() => {
+    const root = ref.current;
+    if (!root) return;
+    const wraps = Array.from(root.querySelectorAll<HTMLElement>('[data-pack]'));
+    const saved = wraps.map((w) => w.style.height);
+    wraps.forEach((w) => (w.style.height = 'auto'));
+    const seen = wraps.map((w) => {
+      const grid = w.querySelector<HTMLElement>('[data-tilegrid]');
+      return {
+        N: w.offsetHeight,
+        gridH: grid ? grid.offsetHeight : 0,
+        gap: grid ? parseFloat(getComputedStyle(grid).rowGap) || 0 : 0,
+        folded: Boolean(w.querySelector('header [aria-expanded="false"]')),
+      };
+    });
+    wraps.forEach((w, k) => (w.style.height = saved[k]));
+    let changed = false;
+    wraps.forEach((w, k) => {
+      const p = places[Number(w.dataset.pack)];
+      if (!p) return;
+      const id = ids[p.i];
+      const { N, gridH, gap, folded } = seen[k];
+      if (!N) return;
+      const md = models.get(id) || { base: N, step: 0, folded, exact: new Map<string, number>() };
+      if (gridH && p.h > 0 && !folded) md.step = (gridH + gap) / p.h;
+      md.base = N - (folded ? 0 : p.h * md.step);
+      if (Math.abs(N - p.H) > 1 || md.folded !== folded) changed = true;
+      md.folded = folded;
+      if (md.exact.size > 48) md.exact.clear();
+      md.exact.set(shapeKey(p, colW, folded), N);
+      models.set(id, md);
+    });
+    if (changed && tries.current < 4) {
+      tries.current++;
+      modelGen++;
+      remeasure((x) => x + 1);
+    } else if (!changed) tries.current = 0;
+  });
+  // A stack that changes size by itself (folded, an app's message got longer, the fonts arrived): measure again
+  useEffect(() => {
+    const root = ref.current;
+    if (!root || typeof ResizeObserver === 'undefined') return;
+    let first = true;
+    const ro = new ResizeObserver(() => {
+      if (first) return void (first = false);
+      remeasure((x) => x + 1);
+    });
+    root.querySelectorAll('[data-pack] > section').forEach((s) => ro.observe(s));
+    return () => ro.disconnect();
+  }, [signature]);
+
   return (
-    // Zoomed out, the dashboard is drawn smaller, so more columns fit and the stacks re-fit (and glide) to them
     <div ref={outer}>
-    <div
-      ref={ref}
-      data-zoom={zoom}
-      className="flex flex-col gap-3 sm:gap-4"
-      // How much an app card grows when you point at it: to about full size when zoomed out, a gentle lift otherwise
-      style={{ ...(zoom !== 1 ? { zoom } : null), ['--mfx-lift' as string]: zoom < 1 ? String(Math.min(1.5, 0.95 / zoom)) : '1.05' } as React.CSSProperties}
-    >
-      <div className="grid gap-3 sm:gap-4" style={{ gridTemplateColumns: `repeat(${C}, minmax(0, 1fr))` }}>
-        {places.map(({ i, col, row, w, h, cols }) => (
-          <div
-            key={stacks[i].key ?? i}
-            data-flip={`stack:${stacks[i].props.id ?? stacks[i].key}`}
-            className="mfx-lift-host flex flex-col min-w-0"
-            style={{ gridColumn: `${col + 1} / span ${w}`, gridRow: `${row + 1} / span ${h}` }}
-          >
-            <CellCols.Provider value={cols}>{stacks[i]}</CellCols.Provider>
+      <div ref={ref} className="flex flex-col gap-3 sm:gap-4" style={{ ['--mfx-lift' as string]: '1.05' } as React.CSSProperties}>
+        <div className="relative" style={{ height: bottom }}>
+          {places.map((p, k) => (
+            <div
+              key={stacks[p.i].key ?? p.i}
+              data-flip={`stack:${stacks[p.i].props.id ?? stacks[p.i].key}`}
+              data-pack={k}
+              className="mfx-lift-host flex flex-col min-w-0"
+              // Across in shares of the width (so it always fits, even mid-resize), down in exact pixels
+              style={{
+                position: 'absolute',
+                left: `calc((100% + ${GAP}px) * ${p.col / C})`,
+                width: `calc((100% + ${GAP}px) * ${p.w / C} - ${GAP}px)`,
+                top: p.top,
+                height: p.H + p.grow,
+              }}
+            >
+              <CellCols.Provider value={p.cols}>{stacks[p.i]}</CellCols.Provider>
+            </div>
+          ))}
+        </div>
+        {loose.map((c, i) => (
+          <div key={c.key ?? `loose${i}`} className="mfx-lift-host flex flex-col min-w-0 mt-2 sm:mt-3">
+            <CellCols.Provider value={C}>{c}</CellCols.Provider>
           </div>
         ))}
       </div>
-      {loose.map((c, i) => (
-        <div key={c.key ?? `loose${i}`} className="mfx-lift-host flex flex-col min-w-0 mt-2 sm:mt-3">
-          <CellCols.Provider value={C}>{c}</CellCols.Provider>
-        </div>
-      ))}
-    </div>
     </div>
   );
 };
 
 /** How many app columns a panel with this many apps asks for (the grid decides how many fit) */
-export const shelfSpan = (apps: number) => Math.max(0, Math.min(8, apps));
+export const shelfSpan = (apps: number) => Math.max(0, apps);
 
 const COLS_CLASS: Record<number, string> = { 1: '', 2: 'md:grid-cols-2', 3: 'md:grid-cols-2 lg:grid-cols-3' };
 
@@ -698,7 +938,7 @@ export const TileGrid: React.FC<{ span?: number; children: React.ReactNode }> = 
   if (cols)
     return (
       // Fills the panel: when it's taller than its apps (beside stacked neighbours), the space is shared evenly
-      <div className="flex-1 grid gap-2.5 sm:gap-3" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, alignContent: 'space-evenly' }}>
+      <div data-tilegrid className="flex-1 grid gap-2.5 sm:gap-3" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, alignContent: 'space-evenly' }}>
         {children}
       </div>
     );

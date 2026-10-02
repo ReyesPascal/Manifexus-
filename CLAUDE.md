@@ -98,6 +98,9 @@ Bring that standard to every change:
 
 ## How it behaves
 
+- Stacks on the dashboard fit together like puzzle pieces (the solver in `ShelfGrid`, `src/components/Shelf.tsx`):
+  real measured heights, no empty space between or inside stacks, an even bottom edge. Stacks may change shape
+  or grow a little to fit, but app cards always stay full size and readable. Don't go back to fixed rows.
 - Progress screens follow along: they scroll to the step that's working as it completes (pausing if the
   person scrolls up to read).
 - Commands are shown with their plain-word meaning right beside them, with no extra taps to understand

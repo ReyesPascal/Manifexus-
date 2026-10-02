@@ -991,7 +991,7 @@ export default function App() {
       </div>
 
       {/* Main Dashboard Canvas */}
-      <main data-dashboard inert={practicing} className="flex-1 max-w-7xl w-full mx-auto px-4 lg:px-6 py-6">
+      <main data-dashboard inert={practicing} className="flex-1 max-w-[1760px] w-full mx-auto px-4 lg:px-6 py-6">
         {/* Directive 1: Hero Layout & Structural Protection for Manifexus */}
         <ManifexusHeroHeader
           container={manifexusHeroContainer}
