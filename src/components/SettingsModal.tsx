@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { enter } from '../motion';
 import { BackButton, FieldRow, Group, Row, SectionFooter, SectionHeader, Segmented, Sheet, Switch, ios } from './ui/ios';
 import { ManifexusConfig, AutomationPrivileges } from '../types';
 
@@ -26,7 +27,7 @@ type Field = 'host' | 'dir' | 'refresh' | 'mode' | 'commands';
 
 /** Small green check shown in a row for a moment after it saves */
 const SavedCheck: React.FC = () => (
-  <svg width="15" height="12" viewBox="0 0 14 11" aria-label="Saved" className="flex-shrink-0 motion-safe:animate-[ios-fade-in_150ms_ease-out]">
+  <svg width="15" height="12" viewBox="0 0 14 11" aria-label="Saved" ref={enter('fade')} className="flex-shrink-0">
     <path d="M1.5 5.8 5.2 9.5 12.5 1.5" fill="none" stroke={ios.green} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
   </svg>
 );
@@ -120,7 +121,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           {status && (
             <span
               key={`${status.kind}-${status.field}`}
-              className="inline-flex items-center gap-1.5 font-medium motion-safe:animate-[ios-fade-in_150ms_ease-out]"
+              ref={enter('fade')} className="inline-flex items-center gap-1.5 font-medium"
               style={{ color: status.kind === 'failed' ? ios.red : status.kind === 'saved' ? ios.green : ios.secondary }}
             >
               {status.kind === 'saved' && <SavedCheck />}
@@ -189,7 +190,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         {onRunGettingStarted && (
           <section>
             <Group>
-              <Row onClick={onRunGettingStarted} title="Getting Started" trailing={<span style={{ color: ios.blue }}>Run Again</span>} chevron />
+              <Row onClick={onRunGettingStarted} title="Getting Started" trailing={<span style={{ color: ios.link }}>Run Again</span>} chevron />
             </Group>
             <SectionFooter>The setup and the tour of your dashboard from when you first started Manifexus.</SectionFooter>
           </section>
@@ -263,7 +264,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           </section>
         )}
 
-        <p className="text-[12px] text-center" style={{ color: ios.tertiary }}>
+        <p className="text-[12px] text-center" style={{ color: ios.secondary }}>
           Settings are saved in /data/config.json on your server.
         </p>
       </div>

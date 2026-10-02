@@ -1,5 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { DeepContainerMetadata } from '../types';
+import { CountTo } from './ui/LiquidGlass';
+import { glideFrom, popIn } from '../motion';
 import { AppIcon } from './AppCard';
 import { MenuButton, MenuItem, ios } from './ui/ios';
 
@@ -11,7 +13,7 @@ import { MenuButton, MenuItem, ios } from './ui/ios';
 /** What an app card carries while it's dragged to another stack */
 export const DRAG_TYPE = 'application/x-manifexus-app';
 
-export const displayFont = '"Inter Tight", "SF Pro Display", -apple-system, system-ui, sans-serif';
+export const displayFont = 'var(--mfx-sans)';
 
 /**
  * Liquid glass: a light, translucent pane that blurs and tints what's behind it (the soft glow behind
@@ -84,7 +86,7 @@ export const RenameButton: React.FC<{ label: string; onClick: () => void; group?
     }}
     title="Rename"
     aria-label={`Rename ${label}`}
-    className={`flex-shrink-0 w-6 h-6 -my-1 rounded-full inline-flex items-center justify-center text-white opacity-0 transition-opacity hover:!opacity-100 hover:bg-white/[0.08] focus:outline-none focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-[#0A84FF] [@media(hover:none)]:opacity-40 ${
+    className={`flex-shrink-0 w-7 h-7 -my-1.5 rounded-full inline-flex items-center justify-center text-white opacity-0 transition-opacity hover:!opacity-100 hover:bg-white/[0.08] focus:outline-none focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-[#0A84FF] [@media(hover:none)]:opacity-40 ${
       group === 'head' ? 'group-hover/head:opacity-50' : 'group-hover/card:opacity-50'
     }`}
   >
@@ -135,7 +137,7 @@ export const InlineName: React.FC<{
       placeholder={original}
       aria-label={`New name for ${original}`}
       spellCheck={false}
-      className={`w-full min-w-0 -mx-1.5 px-1.5 rounded-[8px] bg-white/[0.08] text-white outline-none ring-2 ring-[#0A84FF]/70 placeholder:text-white/30 ${className}`}
+      className={`w-full min-w-0 -mx-1.5 px-1.5 rounded-[8px] bg-white/[0.08] text-white outline-none ring-2 ring-[#0A84FF]/70 placeholder:text-white/45 ${className}`}
       style={style}
     />
   );
@@ -183,7 +185,7 @@ export const FolderIcon: React.FC<{ apps: DeepContainerMetadata[]; tint?: string
 
 /** "3 apps · ● All running" */
 export const Health: React.FC<{ apps: DeepContainerMetadata[]; empty?: string; alsoCheck?: DeepContainerMetadata[] }> = ({ apps, empty = 'Empty', alsoCheck = [] }) => {
-  if (!apps.length) return <span style={{ color: ios.tertiary }}>{empty}</span>;
+  if (!apps.length) return <span style={{ color: ios.secondary }}>{empty}</span>;
   // The apps' own databases and caches count too: a stopped database means the app isn't working
   const all = [...apps, ...alsoCheck];
   const running = all.filter((a) => a.state === 'running').length;
@@ -258,6 +260,9 @@ export const Shelf: React.FC<{
   children: React.ReactNode;
 }> = ({ id, title, icon, status, action, menu, onDetails, forceOpen, rename, onDropApp, startRenaming, onCancelRename, children }) => {
   const [renaming, setRenaming] = useState(Boolean(startRenaming));
+  // A stack settles in when it first appears
+  const self = useRef<HTMLElement>(null);
+  useEffect(() => popIn(self.current), []);
   const [over, setOver] = useState(false);
   const [folded, setFolded] = useState(() => readFolded().has(id));
   const open = forceOpen || !folded;
@@ -271,8 +276,16 @@ export const Shelf: React.FC<{
   const bodyId = `shelf-${id.replace(/[^a-z0-9_-]/gi, '_')}`;
   return (
     <section
-      // Pops in when it first appears; glows blue while an app is dragged over it
-      className={`mfx-pop rounded-[22px] min-w-0 transition-shadow duration-200 ${open ? 'flex-1 flex flex-col' : ''}`}
+      ref={self}
+      // Settles in when it first appears; glows blue while an app is dragged over it
+      className={`mfx-specular rounded-[22px] min-w-0 transition-shadow duration-200 ${open ? 'flex-1 flex flex-col' : ''}`}
+      // Light on glass: a soft highlight follows the pointer across the stack (set straight on the element, no re-render)
+      onPointerMove={(e) => {
+        if (e.pointerType !== 'mouse') return;
+        const r = e.currentTarget.getBoundingClientRect();
+        e.currentTarget.style.setProperty('--mx', `${((e.clientX - r.left) / r.width) * 100}%`);
+        e.currentTarget.style.setProperty('--my', `${((e.clientY - r.top) / r.height) * 100}%`);
+      }}
       style={{
         ...panelStyle,
         fontFamily: ios.font,
@@ -319,7 +332,7 @@ export const Shelf: React.FC<{
                     setRenaming(false);
                     onCancelRename?.();
                   }}
-                  className="text-[19px] leading-[24px] h-[28px] font-semibold"
+                  className="text-[20px] leading-[24px] h-[28px] font-semibold"
                   style={{ fontFamily: displayFont, letterSpacing: '-0.02em' }}
                 />
               ) : (
@@ -336,7 +349,7 @@ export const Shelf: React.FC<{
                     className="flex items-center gap-1.5 min-w-0 text-left rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0A84FF]"
                   >
                     <h2
-                      className="text-[19px] leading-[24px] font-semibold text-white truncate"
+                      className="text-[20px] leading-[24px] font-semibold text-white truncate"
                       style={{ fontFamily: displayFont, letterSpacing: '-0.02em' }}
                     >
                       {title}
@@ -602,13 +615,7 @@ function useGlide(container: React.RefObject<HTMLElement | null>, signature: str
       const isApp = n.dataset.flip!.startsWith('app:');
       // Apps that change stacks travel further: a touch longer, lifted above the rest while they fly
       const far = Math.hypot(dx, dy) * zoom > 400;
-      n.animate(
-        [
-          { transform: `translate(${dx}px, ${dy}px)${isApp && far ? ' scale(1.03)' : ''}`, zIndex: isApp ? 30 : 1 },
-          { transform: 'translate(0, 0)', zIndex: isApp ? 30 : 1 },
-        ],
-        { duration: far ? 650 : 480, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' }
-      );
+      glideFrom(n, dx, dy, { lift: isApp && far, far });
     }
   });
 }
@@ -700,7 +707,7 @@ export const TileGrid: React.FC<{ span?: number; children: React.ReactNode }> = 
 
 /** A calm one-line message inside a panel (an empty stack or group) */
 export const ShelfNote: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <div className="rounded-[16px] px-4 py-5 text-center text-[14px] leading-[20px]" style={{ background: 'rgba(255,255,255,0.05)', color: ios.secondary }}>
+  <div className="rounded-[16px] px-4 py-5 text-center text-[15px] leading-[20px]" style={{ background: 'rgba(255,255,255,0.05)', color: ios.secondary }}>
     {children}
   </div>
 );
@@ -733,9 +740,7 @@ const Stat: React.FC<{
     }
   >
     {dot && <span className="w-[7px] h-[7px] rounded-full flex-shrink-0" style={{ background: dot }} aria-hidden />}
-    <span className="font-semibold tabular-nums" style={{ color: active ? '#fff' : 'rgba(255,255,255,0.92)' }}>
-      {value ?? '…'}
-    </span>
+    <CountTo value={value} className="font-semibold tabular-nums" style={{ color: active ? '#fff' : 'rgba(255,255,255,0.92)' }} />
     <span>{word}</span>
     {active && (
       <span className="ml-0.5 text-[11px] opacity-80" aria-hidden>
@@ -779,7 +784,7 @@ export const LibraryBar: React.FC<{
       aria-selected={view === v}
       onClick={() => onView(v)}
       className={`${label} rounded-md transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0A84FF]`}
-      style={{ color: view === v ? 'rgba(255,255,255,0.9)' : 'rgba(235,235,245,0.35)' }}
+      style={{ color: view === v ? 'rgba(255,255,255,0.9)' : 'rgba(235,235,245,0.6)' }}
     >
       {text}
     </button>
@@ -795,7 +800,7 @@ export const LibraryBar: React.FC<{
         <h2 className={`${label} flex-shrink-0 flex items-center gap-2`} style={{ color: 'rgba(235,235,245,0.6)' }}>
           Your Stacks
           {count !== undefined && (
-            <span className="tabular-nums font-medium normal-case tracking-normal px-1.5 rounded-full text-[11.5px] leading-[18px]" style={{ background: 'rgba(118,118,128,0.2)', color: 'rgba(235,235,245,0.7)' }}>
+            <span className="tabular-nums font-medium normal-case tracking-normal px-1.5 rounded-full text-[12px] leading-[18px]" style={{ background: 'rgba(118,118,128,0.2)', color: 'rgba(235,235,245,0.7)' }}>
               {count}
             </span>
           )}

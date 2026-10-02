@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { enter } from '../motion';
 import {
   Alert,
   BackButton,
@@ -183,7 +184,7 @@ const StatusPill: React.FC<{ p: RestorePoint }> = ({ p }) => {
           ? ['Didn’t Finish · Nothing Changed', '#FFB340', 'rgba(255,159,10,0.14)']
           : ['Backup Removed', ios.secondary, 'rgba(118,118,128,0.2)'];
   return (
-    <span className="inline-flex items-center h-[24px] px-2.5 rounded-full text-[12.5px] font-medium" style={{ color, background: bg }}>
+    <span className="inline-flex items-center h-[24px] px-2.5 rounded-full text-[13px] font-medium" style={{ color, background: bg }}>
       {text}
     </span>
   );
@@ -217,7 +218,7 @@ const PointRow: React.FC<{ p: RestorePoint; onOpen: () => void; onRestore: () =>
             <span className="block text-[15px] leading-[20px] truncate" style={{ color: dim ? ios.secondary : ios.label }}>
               {p.title}
             </span>
-            <span className="block text-[13px] leading-[18px] mt-0.5 truncate" style={{ color: ios.tertiary }}>
+            <span className="block text-[13px] leading-[18px] mt-0.5 truncate" style={{ color: ios.secondary }}>
               {[p.detail, fmtTime(p.at), p.backup.bytes ? fmtBytes(p.backup.bytes) : ''].filter(Boolean).join(' · ')}
             </span>
           </span>
@@ -250,9 +251,9 @@ const PointRow: React.FC<{ p: RestorePoint; onOpen: () => void; onRestore: () =>
               </span>
             )}
           </span>
-          <span className="block text-[13px] leading-[18px] mt-0.5 truncate" style={{ color: dim ? ios.tertiary : ios.secondary }}>
+          <span className="block text-[13px] leading-[18px] mt-0.5 truncate" style={{ color: ios.secondary }}>
             {sub}
-            {p.state === 'available' && p.newer > 0 && <span style={{ color: ios.tertiary }}> · includes {plural(p.newer, 'newer change')}</span>}
+            {p.state === 'available' && p.newer > 0 && <span style={{ color: ios.secondary }}> · includes {plural(p.newer, 'newer change')}</span>}
           </span>
         </span>
       </button>
@@ -261,14 +262,14 @@ const PointRow: React.FC<{ p: RestorePoint; onOpen: () => void; onRestore: () =>
           type="button"
           onClick={onRestore}
           aria-label={`Restore to before: ${p.title}`}
-          className="absolute right-9 top-1/2 -translate-y-1/2 h-[30px] px-3.5 rounded-full text-[14px] font-semibold transition-colors hover:brightness-125 focus-visible:outline-2 focus-visible:outline-[#0A84FF]"
+          className="absolute right-9 top-1/2 -translate-y-1/2 h-[30px] px-3.5 rounded-full text-[15px] font-semibold transition-colors hover:brightness-125 focus-visible:outline-2 focus-visible:outline-[#0A84FF]"
           style={{ color: '#6CB6FF', background: 'rgba(10,132,255,0.16)' }}
         >
           Restore
         </button>
       )}
       <svg width="8" height="13" viewBox="0 0 8 13" aria-hidden="true" className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none">
-        <path d="M1.5 1.5 6.5 6.5 1.5 11.5" fill="none" stroke={ios.tertiary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M1.5 1.5 6.5 6.5 1.5 11.5" fill="none" stroke={ios.control} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
       </svg>
     </div>
   );
@@ -326,7 +327,7 @@ const Detail: React.FC<{
     <div className="space-y-7">
       <div className="flex flex-col items-center text-center pt-1">
         <KindTile p={p} size={60} />
-        <h3 className="mt-4 text-[21px] leading-[26px] font-semibold text-white px-4">{p.title}</h3>
+        <h3 className="mt-4 text-[22px] leading-[26px] font-semibold text-white px-4">{p.title}</h3>
         <p className="mt-1 text-[13px]" style={{ color: ios.secondary }}>
           {when(p.at)}
         </p>
@@ -339,7 +340,7 @@ const Detail: React.FC<{
               {p.kind === 'restore' ? 'Undo This Restore…' : p.kind === 'fix' ? 'Undo This Fix…' : 'Restore…'}
             </Button>
             {p.newer > 0 && (
-              <p className="text-[12px] max-w-[380px]" style={{ color: ios.tertiary }}>
+              <p className="text-[12px] max-w-[380px]" style={{ color: ios.secondary }}>
                 Also covers {plural(p.newer, 'newer change')} to the same stack{p.stacks.length > 1 ? 's' : ''}. Each stack is put back once, as it was before this change.
               </p>
             )}
@@ -471,7 +472,7 @@ const Detail: React.FC<{
       {(
         <section>
           <Group>
-            <Row onClick={() => setConfirmDelete(true)} disabled={busy} title={<span style={{ color: ios.red }}>{busy ? 'Deleting…' : 'Delete This Change'}</span>} />
+            <Row onClick={() => setConfirmDelete(true)} disabled={busy} title={<span style={{ color: ios.redText }}>{busy ? 'Deleting…' : 'Delete This Change'}</span>} />
           </Group>
           <SectionFooter>
             {p.onlyCopy
@@ -529,10 +530,10 @@ const Review: React.FC<{ plan: Plan | null; error?: string; filesOnly?: boolean 
         <IconTile color={ios.blue} size={60}>
           <Glyph d={G.restore} size={32} stroke={2} />
         </IconTile>
-        <h3 className="mt-4 text-[21px] leading-[26px] font-semibold text-white px-4">
+        <h3 className="mt-4 text-[22px] leading-[26px] font-semibold text-white px-4">
           {filesOnly ? `Restore ${plan.point.stacks[0]}’s Files` : plan.point.kind === 'restore' ? 'Undo This Restore' : plan.point.kind === 'fix' ? 'Undo This Fix' : 'Restore to Before'}
         </h3>
-        <p className="mt-1 text-[14px] max-w-[460px] px-4" style={{ color: ios.secondary }}>
+        <p className="mt-1 text-[15px] max-w-[460px] px-4" style={{ color: ios.secondary }}>
           {plan.point.title} · {when(plan.point.at)}
         </p>
       </div>
@@ -576,7 +577,7 @@ const Review: React.FC<{ plan: Plan | null; error?: string; filesOnly?: boolean 
               <Row
                 key={c.id}
                 leading={<KindTile p={c} size={26} />}
-                title={<span className="text-[14px]">{c.title}</span>}
+                title={<span className="text-[15px]">{c.title}</span>}
                 trailing={<span className="text-[13px]">{when(c.at)}</span>}
               />
             ))}
@@ -862,7 +863,7 @@ export const RestoreSheet: React.FC<{
       type="button"
       onClick={onClick}
       className={`text-[17px] rounded hover:opacity-80 focus-visible:outline-2 focus-visible:outline-[#0A84FF] ${bold ? 'font-semibold' : ''}`}
-      style={{ color: ios.blue }}
+      style={{ color: ios.link }}
     >
       {label}
     </button>
@@ -957,7 +958,7 @@ export const RestoreSheet: React.FC<{
     ) : (
       <div className="space-y-7">
         {selecting && (
-          <p className="text-[14px] leading-[20px] px-1 -mb-3" style={{ color: ios.secondary }}>
+          <p className="text-[15px] leading-[20px] px-1 -mb-3" style={{ color: ios.secondary }}>
             Choose the changes to delete. Your stacks and their data aren’t touched.
           </p>
         )}
@@ -965,7 +966,7 @@ export const RestoreSheet: React.FC<{
         {visible.length === 0 ? (
           <div className="text-center py-10 px-6">
             <p className="text-[17px] font-semibold text-white">{filter === 'pinned' ? 'No Pinned Backups' : 'Nothing to Restore Yet'}</p>
-            <p className="mt-1.5 text-[14px] leading-[20px] max-w-[400px] mx-auto" style={{ color: ios.secondary }}>
+            <p className="mt-1.5 text-[15px] leading-[20px] max-w-[400px] mx-auto" style={{ color: ios.secondary }}>
               {filter === 'pinned'
                 ? 'Pin a backup from its details to keep it forever. It stays in the list and shows up here.'
                 : 'When you move apps or delete a stack, Manifexus saves a backup first. It shows up here, so you can restore to before it.'}
@@ -1022,7 +1023,7 @@ export const RestoreSheet: React.FC<{
         <p className="text-[15px] text-center py-16" style={{ color: ios.secondary }}>The archive is empty.</p>
       ) : (
         <div className="space-y-7">
-          <p className="text-[14px] leading-[20px] px-1" style={{ color: ios.secondary }}>
+          <p className="text-[15px] leading-[20px] px-1" style={{ color: ios.secondary }}>
             A record of older changes. Their backups were removed, so they can’t be restored.
           </p>
           {byDay(archived).map(([day, list]) => (
@@ -1073,7 +1074,7 @@ export const RestoreSheet: React.FC<{
                       setSelecting(true);
                       requestAnimationFrame(() => bodyRef.current?.scrollTo({ top: 0 }));
                     }}
-                    title={<span style={{ color: ios.red }}>Delete Changes…</span>}
+                    title={<span style={{ color: ios.redText }}>Delete Changes…</span>}
                     subtitle="Choose which ones to delete"
                     chevron
                   />
@@ -1082,7 +1083,7 @@ export const RestoreSheet: React.FC<{
                   <Row
                     key={r.key}
                     onClick={() => askDelete(r.list.map((p) => p.id), `Delete ${plural(r.list.length, r.key === 'empty' ? 'deleted empty stack' : 'change')}?`)}
-                    title={<span style={{ color: ios.red }}>{r.label}</span>}
+                    title={<span style={{ color: ios.redText }}>{r.label}</span>}
                     subtitle={r.sub}
                     trailing={<span className="tabular-nums">{r.list.length} · {fmtBytes(r.list.reduce((n, p) => n + p.backup.bytes, 0))}</span>}
                   />
@@ -1176,7 +1177,7 @@ export const RestoreSheet: React.FC<{
             <Glyph d={G.check} size={32} stroke={3} />
           </IconTile>
           <h3 className="mt-4 text-[22px] font-semibold text-white">Restored</h3>
-          <p className="mt-1.5 text-[14px]" style={{ color: ios.secondary }}>
+          <p className="mt-1.5 text-[15px]" style={{ color: ios.secondary }}>
             The backup was copied to:
           </p>
         </div>
@@ -1220,7 +1221,7 @@ export const RestoreSheet: React.FC<{
       footer={footer}
       bodyRef={bodyRef}
     >
-      <div key={stack.length} className={stack.length > 1 ? 'motion-safe:animate-[ios-push-in_200ms_ease-out]' : ''}>
+      <div key={stack.length} ref={stack.length > 1 ? enter('push') : undefined}>
         {body}
       </div>
 

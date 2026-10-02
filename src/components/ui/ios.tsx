@@ -6,22 +6,32 @@
  */
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { enter, sheetIn } from '../../motion';
 
 export const ios = {
-  sheet: '#1c1c1e',
-  group: '#2c2c2e',
-  groupPressed: '#3a3a3c',
+  // Midnight glass, the dashboard's colours: every screen uses the same material as the stacks
+  sheet: '#141c31',
+  group: '#222c47',
+  groupPressed: '#283352',
   label: '#ffffff',
   secondary: 'rgba(235,235,245,0.6)',
   tertiary: 'rgba(235,235,245,0.3)',
-  separator: 'rgba(84,84,88,0.65)',
-  fill: 'rgba(118,118,128,0.24)',
+  separator: 'rgba(140,155,200,0.22)',
+  fill: 'rgba(120,135,180,0.2)',
   blue: '#0A84FF',
+  /** Blue for text and links: lighter than the fill blue, so it reads at 4.5:1 on dark surfaces (HIG) */
+  link: '#409CFF',
+  /** Red for text: 4.5:1 on dark surfaces (the fill red is for buttons and dots) */
+  redText: '#FF6961',
+  /** Outlines of controls and chevrons: 3:1 on dark surfaces (HIG) */
+  control: 'rgba(235,235,245,0.45)',
   green: '#30D158',
   red: '#FF453A',
   orange: '#FF9F0A',
   purple: '#BF5AF2',
-  font: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Plus Jakarta Sans", system-ui, sans-serif',
+  /** Inter everywhere (bundled; see index.css). Mono: `mono`, only for real paths, commands and code */
+  font: 'var(--mfx-sans)',
+  mono: 'var(--mfx-mono)',
 };
 
 /** Rounded group of rows with inset hairline separators. */
@@ -57,7 +67,7 @@ export const LinkButton: React.FC<{
     type="button"
     onClick={onClick}
     className={`text-[13px] font-medium rounded focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0A84FF] hover:opacity-80 ${className}`}
-    style={{ color: tone === 'red' ? ios.red : ios.blue }}
+    style={{ color: tone === 'red' ? ios.redText : ios.link }}
   >
     {children}
   </button>
@@ -93,7 +103,7 @@ export const Row: React.FC<{
       {trailing && <span className="flex-shrink-0 flex items-center gap-2 text-[15px]" style={{ color: ios.secondary }}>{trailing}</span>}
       {chevron && (
         <svg width="8" height="13" viewBox="0 0 8 13" aria-hidden="true" className="flex-shrink-0">
-          <path d="M1.5 1.5 6.5 6.5 1.5 11.5" fill="none" stroke={ios.tertiary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M1.5 1.5 6.5 6.5 1.5 11.5" fill="none" stroke={ios.control} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       )}
     </>
@@ -142,7 +152,7 @@ export const SelectCircle: React.FC<{ on: boolean }> = ({ on }) => (
   <span
     aria-hidden="true"
     className="w-[22px] h-[22px] rounded-full flex items-center justify-center transition-colors"
-    style={on ? { background: ios.blue } : { boxShadow: `inset 0 0 0 1.5px ${ios.tertiary}` }}
+    style={on ? { background: ios.blue } : { boxShadow: `inset 0 0 0 1.5px ${ios.control}` }}
   >
     {on && (
       <svg width="12" height="10" viewBox="0 0 12 10">
@@ -271,8 +281,8 @@ export const Alert: React.FC<{
         aria-modal="true"
         aria-labelledby="ios-alert-title"
         aria-describedby="ios-alert-msg"
-        className="w-[300px] rounded-[14px] overflow-hidden backdrop-blur-xl motion-safe:animate-[ios-pop_180ms_ease-out]"
-        style={{ background: 'rgba(44,44,46,0.96)', boxShadow: '0 20px 60px rgba(0,0,0,0.5)' }}
+        ref={enter('pop')} className="w-[300px] rounded-[14px] overflow-hidden backdrop-blur-xl"
+        style={{ background: 'rgba(30,40,70,0.9)', backdropFilter: 'blur(30px) saturate(160%)', WebkitBackdropFilter: 'blur(30px) saturate(160%)', boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.16), 0 0 0 0.5px rgba(255,255,255,0.12), 0 20px 60px rgba(0,0,0,0.5)' }}
       >
         <div className="px-4 pt-5 pb-4 text-center">
           <h3 id="ios-alert-title" className="text-[17px] font-semibold text-white">
@@ -288,7 +298,7 @@ export const Alert: React.FC<{
             type="button"
             onClick={onCancel}
             className="h-[44px] text-[17px] font-semibold hover:bg-white/[0.05] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[#0A84FF]"
-            style={{ color: ios.blue, borderRight: `0.5px solid ${ios.separator}` }}
+            style={{ color: ios.link, borderRight: `0.5px solid ${ios.separator}` }}
           >
             {cancelLabel}
           </button>
@@ -341,7 +351,7 @@ export const FieldRow: React.FC<{
           onCommit();
         }
       }}
-      className={`flex-1 min-w-0 bg-transparent py-[11px] text-right focus:outline-none placeholder:text-[rgba(235,235,245,0.3)] ${
+      className={`flex-1 min-w-0 bg-transparent py-[11px] text-right focus:outline-none placeholder:text-[rgba(235,235,245,0.45)] ${
         mono ? 'text-[13px] font-mono' : 'text-[15px]'
       }`}
       style={{ color: invalid ? ios.orange : ios.label }}
@@ -363,17 +373,44 @@ export const sheetBackdropClass = 'fixed inset-0 flex items-stretch sm:items-cen
 // Height uses the visible window (dvh), so the bottom of the sheet and its buttons are always on screen,
 // even with browser toolbars; the body scrolls, the footer stays put.
 export const sheetPanelClass =
-  'w-full sm:max-w-[760px] h-[100dvh] sm:h-[min(760px,calc(100dvh-112px))] flex flex-col sm:rounded-[16px] overflow-hidden motion-safe:animate-[ios-sheet-in_220ms_ease-out]';
+  'w-full sm:max-w-[760px] h-[100dvh] sm:h-[min(760px,calc(100dvh-112px))] flex flex-col sm:rounded-[16px] overflow-hidden';
 /** Panel look: a hairline edge all the way round so the sheet has a clear bottom, and a soft shadow */
 export const sheetPanelStyle: React.CSSProperties = {
-  background: ios.sheet,
-  boxShadow: '0 0 0 0.5px rgba(255,255,255,0.14), 0 30px 80px rgba(0,0,0,0.6)',
+  // The dashboard's glass: midnight, lit from the top edge, frosted over whatever is behind
+  background: 'linear-gradient(165deg, rgba(30,40,70,0.94) 0%, rgba(20,28,49,0.96) 45%, rgba(16,22,40,0.97) 100%)',
+  backdropFilter: 'blur(30px) saturate(160%)',
+  WebkitBackdropFilter: 'blur(30px) saturate(160%)',
+  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.16), 0 0 0 0.5px rgba(255,255,255,0.14), 0 30px 80px rgba(0,0,0,0.6)',
   WebkitFontSmoothing: 'antialiased',
 };
-/** Scrolling area: content fades out just above the bottom edge instead of being cut off */
-export const sheetBodyStyle: React.CSSProperties = {
-  maskImage: 'linear-gradient(to bottom, #000 calc(100% - 28px), transparent)',
-  WebkitMaskImage: 'linear-gradient(to bottom, #000 calc(100% - 28px), transparent)',
+/** Scrolling area (the soft blurred edges are drawn by ScrollEdges) */
+export const sheetBodyStyle: React.CSSProperties = {};
+
+/**
+ * Scroll edges (React Bits' GradualBlur, Apple's scroll edge effect): content softly blurs and fades as it
+ * slides under the title bar and the footer, instead of being cut off by a hard line. Place inside a
+ * `relative` box that also holds the scrolling body.
+ */
+export const ScrollEdges: React.FC<{ top?: boolean; bottom?: boolean }> = ({ top = true, bottom = true }) => {
+  const edge = (side: 'top' | 'bottom') => (
+    <div
+      aria-hidden
+      className={`pointer-events-none absolute inset-x-0 ${side === 'top' ? 'top-0' : 'bottom-0'} h-7 z-10 mfx-scroll-edge`}
+      style={{
+        backdropFilter: 'blur(6px)',
+        WebkitBackdropFilter: 'blur(6px)',
+        background: `linear-gradient(to ${side === 'top' ? 'bottom' : 'top'}, rgba(18,25,44,0.85), rgba(18,25,44,0))`,
+        maskImage: `linear-gradient(to ${side === 'top' ? 'bottom' : 'top'}, #000 20%, transparent)`,
+        WebkitMaskImage: `linear-gradient(to ${side === 'top' ? 'bottom' : 'top'}, #000 20%, transparent)`,
+      }}
+    />
+  );
+  return (
+    <>
+      {top && edge('top')}
+      {bottom && edge('bottom')}
+    </>
+  );
 };
 /** Footer bar for custom sheets: pinned under the scrolling body, clear of a phone's home indicator */
 export const sheetFooterClass = 'flex-shrink-0 px-4 sm:px-5 pt-3 pb-[max(12px,env(safe-area-inset-bottom))]';
@@ -435,6 +472,11 @@ export const Sheet: React.FC<{
       if (!openSheets.length) document.documentElement.classList.remove('sheet-open');
     };
   }, [open]);
+  // Opens with GSAP: rises into place, then its rows arrive (see motion.ts)
+  useLayoutEffect(() => {
+    if (open && !hidden) sheetIn(panelRef.current, panelRef.current?.parentElement);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
   if (!open) return null;
   return (
     <div
@@ -464,7 +506,7 @@ export const Sheet: React.FC<{
                   type="button"
                   onClick={onClose}
                   className="text-[17px] font-semibold rounded focus-visible:outline-2 focus-visible:outline-[#0A84FF] hover:opacity-80"
-                  style={{ color: ios.blue }}
+                  style={{ color: ios.link }}
                 >
                   {closeLabel}
                 </button>
@@ -485,8 +527,11 @@ export const Sheet: React.FC<{
             {toolbar}
           </div>
         )}
-        <div ref={bodyRef} className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-5 pt-5 pb-10" style={sheetBodyStyle}>
-          {children}
+        <div className="relative flex-1 min-h-0 flex flex-col">
+          <ScrollEdges />
+          <div ref={bodyRef} className="mfx-sheet-body flex-1 min-h-0 overflow-y-auto px-4 sm:px-5 pt-5 pb-10" style={sheetBodyStyle}>
+            {children}
+          </div>
         </div>
         {footer && (
           <div className={sheetFooterClass} style={{ borderTop: `0.5px solid ${ios.separator}` }}>
@@ -506,7 +551,7 @@ export const GearButton: React.FC<{ onClick: () => void; label: string }> = ({ o
     aria-label={label}
     title={label}
     className="p-1 -m-1 rounded hover:opacity-80 focus-visible:outline-2 focus-visible:outline-[#0A84FF]"
-    style={{ color: ios.blue }}
+    style={{ color: ios.link }}
   >
     <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1.08-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z" />
@@ -520,7 +565,7 @@ export const BackButton: React.FC<{ label: string; onClick: () => void }> = ({ l
     type="button"
     onClick={onClick}
     className="-ml-1 inline-flex items-center gap-1 text-[17px] rounded focus-visible:outline-2 focus-visible:outline-[#0A84FF] hover:opacity-80"
-    style={{ color: ios.blue }}
+    style={{ color: ios.link }}
   >
     <svg width="11" height="18" viewBox="0 0 11 18" aria-hidden="true">
       <path d="M9 2 2 9l7 7" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
@@ -543,8 +588,21 @@ export function Segmented<T extends string>({
   label: string;
   size?: 'sm' | 'md';
 }) {
+  // The highlight glides to the chosen option (React Bits' GlideSelect), like iOS segmented controls
+  const at = Math.max(0, options.findIndex((o) => o.value === value));
+  const n = Math.max(1, options.length);
   return (
-    <div role="radiogroup" aria-label={label} className="inline-flex p-[2px] rounded-[9px] w-full" style={{ background: ios.fill }}>
+    <div role="radiogroup" aria-label={label} className="relative inline-flex p-[2px] rounded-[9px] w-full" style={{ background: ios.fill }}>
+      <span
+        aria-hidden
+        className="absolute top-[2px] bottom-[2px] left-[2px] rounded-[7px] transition-transform duration-[280ms] ease-[cubic-bezier(0.2,0.8,0.2,1)] motion-reduce:transition-none"
+        style={{
+          width: `calc((100% - 4px) / ${n})`,
+          transform: `translateX(${at * 100}%)`,
+          background: 'rgba(150,165,210,0.32)',
+          boxShadow: 'inset 0 0.5px 0 rgba(255,255,255,0.25), 0 3px 8px rgba(0,0,0,0.18)',
+        }}
+      />
       {options.map((o) => {
         const on = o.value === value;
         return (
@@ -554,8 +612,8 @@ export function Segmented<T extends string>({
             role="radio"
             aria-checked={on}
             onClick={() => onChange(o.value)}
-            className={`flex-1 rounded-[7px] ${size === 'sm' ? 'h-[26px] text-[12px]' : 'h-[30px] text-[13px]'} font-medium transition-colors focus-visible:outline-2 focus-visible:outline-[#0A84FF] whitespace-nowrap px-2`}
-            style={on ? { background: '#636366', color: '#fff', boxShadow: '0 3px 8px rgba(0,0,0,0.12)' } : { color: ios.label }}
+            className={`relative flex-1 rounded-[7px] ${size === 'sm' ? 'h-[26px] text-[12px]' : 'h-[30px] text-[13px]'} font-medium transition-colors focus-visible:outline-2 focus-visible:outline-[#0A84FF] whitespace-nowrap px-2`}
+            style={{ color: on ? '#fff' : ios.secondary }}
           >
             {o.label}
           </button>
@@ -601,7 +659,7 @@ export const SearchField: React.FC<{ value: string; onChange: (v: string) => voi
         className="absolute right-2 top-1/2 -translate-y-1/2 w-[18px] h-[18px] rounded-full flex items-center justify-center"
         style={{ background: 'rgba(235,235,245,0.3)' }}
       >
-        <svg width="8" height="8" viewBox="0 0 10 10"><path d="M2 2l6 6M8 2 2 8" stroke="#1c1c1e" strokeWidth="2" strokeLinecap="round" /></svg>
+        <svg width="8" height="8" viewBox="0 0 10 10"><path d="M2 2l6 6M8 2 2 8" stroke="#141c31" strokeWidth="2" strokeLinecap="round" /></svg>
       </button>
     )}
   </div>
@@ -755,7 +813,7 @@ export const MenuButton: React.FC<{
           style={{
             ...pos,
             visibility: pos ? 'visible' : 'hidden',
-            background: 'rgba(40,40,42,0.94)',
+            background: 'rgba(28,37,64,0.92)',
             backdropFilter: 'blur(30px) saturate(1.6)',
             WebkitBackdropFilter: 'blur(30px) saturate(1.6)',
             boxShadow: '0 0 0 0.5px rgba(255,255,255,0.12), 0 18px 48px rgba(0,0,0,0.55)',
@@ -766,7 +824,7 @@ export const MenuButton: React.FC<{
             <React.Fragment key={it.key}>
               {it.divider && <div className="my-1.5 h-[6px]" style={{ background: 'rgba(0,0,0,0.28)' }} role="separator" />}
               {it.header ? (
-                <div className="px-4 pt-1.5 pb-1 text-[12.5px]" style={{ color: ios.secondary }}>
+                <div className="px-4 pt-1.5 pb-1 text-[13px]" style={{ color: ios.secondary }}>
                   {it.label}
                 </div>
               ) : (
@@ -791,7 +849,7 @@ export const MenuButton: React.FC<{
                   </span>
                 )}
                 {it.dot && <span className="w-[7px] h-[7px] rounded-full flex-shrink-0" style={{ background: it.dot }} />}
-                <span className="truncate flex-1" style={it.destructive ? { color: ios.red } : undefined}>
+                <span className="truncate flex-1" style={it.destructive ? { color: ios.redText } : undefined}>
                   {it.label}
                 </span>
                 {it.detail && (

@@ -316,7 +316,7 @@ export const AppCard: React.FC<AppCardProps> = ({ container, inStack, stackName,
       className={`group/card relative flex flex-col gap-4 rounded-[18px] p-4 cursor-pointer text-left ${busyLabel || container.state === 'restarting' ? 'mfx-busy' : ''} focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0A84FF] ${
         running ? 'bg-white/[0.07] hover:bg-white/[0.10]' : 'bg-white/[0.045] hover:bg-white/[0.075]'
       }`}
-      style={{ fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", Roboto, sans-serif' }}
+      style={{ fontFamily: 'var(--mfx-sans)' }}
     >
       <div className="relative flex items-center gap-3 min-w-0">
         <div className={running ? '' : 'opacity-60 grayscale-[35%]'}>
@@ -345,7 +345,7 @@ export const AppCard: React.FC<AppCardProps> = ({ container, inStack, stackName,
           )}
           <div className="mt-0.5 flex items-center gap-1.5 text-[13px] leading-[18px] min-w-0" style={{ color: 'rgba(235,235,245,0.6)' }}>
             <span className="w-[7px] h-[7px] rounded-full flex-shrink-0" style={{ background: busyLabel ? '#0A84FF' : running && downHelpers.length ? '#FF9F0A' : st.color }} aria-hidden />
-            <span className={busyLabel ? 'truncate' : 'flex-shrink-0'} title={busyLabel}>{busyLabel || st.label}</span>
+            <span className={busyLabel ? 'truncate mfx-shimmer' : 'flex-shrink-0'} title={busyLabel}>{busyLabel || st.label}</span>
             {running && !busyLabel && downHelpers.length > 0 && (
               <>
                 <span aria-hidden>·</span>
@@ -449,7 +449,7 @@ export const AppCard: React.FC<AppCardProps> = ({ container, inStack, stackName,
               {acting === 'start' ? 'Starting…' : 'Start'}
             </button>
           ) : (
-            <div className="h-[38px] rounded-[11px] flex items-center justify-center text-[13.5px]" style={{ boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.06)', color: 'rgba(235,235,245,0.4)' }}>
+            <div className="h-[38px] rounded-[11px] flex items-center justify-center text-[13px]" style={{ boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.06)', color: 'rgba(235,235,245,0.6)' }}>
               {container.state === 'restarting' ? 'Restarting…' : 'No web page'}
             </div>
           )}

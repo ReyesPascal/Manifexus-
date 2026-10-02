@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { enter } from './motion';
 import {
   FolderKanban,
   Layers,
@@ -48,6 +49,7 @@ import { ManifexusHeroHeader } from './components/ManifexusHeroHeader';
 import { LibraryBar, Shelf, ShelfGrid, shelfSpan, FolderIcon, Health, TileGrid, ShelfNote, panelStyle, displayFont } from './components/Shelf';
 import type { MenuItem } from './components/ui/ios';
 import { ios } from './components/ui/ios';
+import { LiquidGlass } from './components/ui/LiquidGlass';
 import { RestoreSheet } from './components/RestoreSheet';
 import { StackDetailsSheet } from './components/StackDetailsSheet';
 import { CleanupSheet } from './components/CleanupSheet';
@@ -117,11 +119,11 @@ export default function App() {
   }, [notice]);
   // New Stack: a new stack appears right away with its name ready to type; Enter creates it
   const [draftStack, setDraftStack] = useState(false);
-  // The dashboard is always shown zoomed out (every stack at once, apps dragged between them), except on a
-  // phone, where cards stay full size to stay readable and easy to tap
-  const [zoomedOut, setZoomedOut] = useState(() => typeof window === 'undefined' || window.innerWidth >= 768);
+  // A computer (mouse and room): apps can be dragged between stacks. Everything is drawn at full size,
+  // so text and buttons meet Apple's minimums (HIG); the stacks fit together to use the room.
+  const [desktop, setDesktop] = useState(() => typeof window === 'undefined' || window.innerWidth >= 768);
   useEffect(() => {
-    const on = () => setZoomedOut(window.innerWidth >= 768);
+    const on = () => setDesktop(window.innerWidth >= 768);
     window.addEventListener('resize', on);
     return () => window.removeEventListener('resize', on);
   }, []);
@@ -908,7 +910,7 @@ export default function App() {
         return m ? { busy: `Moving to ${stackLabel(m.to)}…`, moveProgress: m.progress } : {};
       })()}
       inStack={inStack}
-      canDrag={zoomedOut}
+      canDrag={desktop}
       stackName={c.compose?.project ? stackLabel(c.compose.project) : undefined}
       onRename={handleRenameApp}
       container={c}
@@ -1031,7 +1033,7 @@ export default function App() {
                 <ShieldAlert className="w-5 h-5" />
               </div>
               <div>
-                <span className="font-bold text-amber-300 text-sm block">
+                <span className="font-bold text-amber-300 text-[15px] block">
                   Standby / Demonstration Fleet Active
                 </span>
                 <span className="text-slate-300">
@@ -1072,7 +1074,7 @@ export default function App() {
 
         {/* Error Notification */}
         {error && (
-          <div className="mb-5 px-4 py-3 rounded-[16px] flex items-center gap-3 text-[14px]" style={{ ...panelStyle, color: '#FF8A80' }}>
+          <div className="mb-5 px-4 py-3 rounded-[16px] flex items-center gap-3 text-[15px]" style={{ ...panelStyle, color: '#FF8A80' }}>
             <AlertCircle className="w-5 h-5 flex-shrink-0" />
             <span>Can’t reach Docker right now: {error}</span>
           </div>
@@ -1082,31 +1084,31 @@ export default function App() {
         {isLoading && (
           <div className="py-24 flex flex-col items-center justify-center gap-3" style={{ color: 'rgba(235,235,245,0.6)' }}>
             <div className="w-7 h-7 border-2 border-white/15 border-t-white/70 rounded-full animate-spin" />
-            <p className="text-[14px]">Loading your apps…</p>
+            <p className="text-[15px]">Loading your apps…</p>
           </div>
         )}
 
         {/* Nothing matches */}
         {!isLoading && filteredContainers.length === 0 && (searchQuery || statusFilter !== 'all') && (
           <div className="py-16 text-center rounded-[22px] px-6" style={panelStyle}>
-            <h3 className="text-[19px] font-semibold text-white" style={{ fontFamily: displayFont }}>
+            <h3 className="text-[20px] font-semibold text-white" style={{ fontFamily: displayFont }}>
               No Results
             </h3>
-            <p className="mt-1 text-[14px]" style={{ color: 'rgba(235,235,245,0.6)' }}>
+            <p className="mt-1 text-[15px]" style={{ color: 'rgba(235,235,245,0.6)' }}>
               {searchQuery ? `No apps match “${searchQuery}”.` : `No ${statusFilter} apps.`}
             </p>
           </div>
         )}
         {!isLoading && visibleApps.length === 0 && !searchQuery && statusFilter === 'all' && (
           <div className="py-16 text-center rounded-[22px] px-6 mb-4" style={panelStyle}>
-            <h3 className="text-[19px] font-semibold text-white" style={{ fontFamily: displayFont }}>
+            <h3 className="text-[20px] font-semibold text-white" style={{ fontFamily: displayFont }}>
               No Apps Yet
             </h3>
-            <p className="mt-1 text-[14px]" style={{ color: 'rgba(235,235,245,0.6)' }}>
+            <p className="mt-1 text-[15px]" style={{ color: 'rgba(235,235,245,0.6)' }}>
               Docker isn’t running any apps on this server yet.
             </p>
             {systemStatus?.isDemoMode && (
-              <button onClick={() => setIsSimulateOpen(true)} className="mt-4 h-9 px-4 rounded-full text-[14px] font-semibold text-white" style={{ background: '#0A84FF' }}>
+              <button onClick={() => setIsSimulateOpen(true)} className="mt-4 h-9 px-4 rounded-full text-[15px] font-semibold text-white" style={{ background: '#0A84FF' }}>
                 Add a Sample App
               </button>
             )}
@@ -1156,7 +1158,7 @@ export default function App() {
 
         {/* BY STACK */}
         {!isLoading && viewMode === 'compose' && (
-          <ShelfGrid zoom={zoomedOut ? 0.62 : 1}>
+          <ShelfGrid>
             {draftStack && (
               <Shelf
                 key="__new"
@@ -1182,7 +1184,7 @@ export default function App() {
                   <Shelf
                     key={projectName}
                     span={span}
-                    onDropApp={own || !zoomedOut ? undefined : (appId) => moveInBackground(appId, projectName)}
+                    onDropApp={own || !desktop ? undefined : (appId) => moveInBackground(appId, projectName)}
                     id={`stack:${projectName}`}
                     title={stackLabel(projectName)}
                     rename={{ original: projectName, onSave: (n) => void handleRenameStack(projectName, n) }}
@@ -1252,15 +1254,18 @@ export default function App() {
 
       {/* A short message: a move finished, or couldn't */}
       {notice && (
-        <div role="status" className="mfx-pop fixed z-[45] left-1/2 bottom-6 -translate-x-1/2 max-w-[min(92vw,560px)] flex items-center gap-3 pl-4 pr-2 py-2.5 rounded-full text-[14px]"
-          style={{ fontFamily: ios.font, background: 'rgba(22,30,54,0.72)', backdropFilter: 'blur(24px) saturate(170%)', boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.18), inset 0 0 0 1px rgba(255,255,255,0.1), 0 20px 40px -20px rgba(0,0,0,0.8)', color: notice.tone === 'error' ? '#FFB4A8' : '#fff' }}>
+        <div role="status" className="fixed z-[45] left-1/2 bottom-6 -translate-x-1/2 max-w-[min(92vw,560px)]" style={{ fontFamily: ios.font }}>
+          <div ref={enter('pop')}>
+          <LiquidGlass tint="rgba(22,30,54,0.62)" shadow="0 20px 40px -20px rgba(0,0,0,0.8)" className="flex items-center gap-3 pl-4 pr-2 py-2.5 text-[15px]" style={{ color: notice.tone === 'error' ? '#FFB4A8' : '#fff' }}>
           <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: notice.tone === 'error' ? ios.red : ios.green }} aria-hidden />
           <span className="min-w-0">{notice.text}</span>
           <button type="button" onClick={() => setNotice(null)} aria-label="Dismiss" className="w-7 h-7 rounded-full flex-shrink-0 flex items-center justify-center text-white/60 hover:text-white hover:bg-white/10">✕</button>
+          </LiquidGlass>
+          </div>
         </div>
       )}
 
-      <footer className="px-4 lg:px-6 pt-6 pb-8 text-center text-[12px]" style={{ color: 'rgba(235,235,245,0.35)', fontFamily: ios.font }}>
+      <footer className="px-4 lg:px-6 pt-6 pb-8 text-center text-[12px]" style={{ color: ios.secondary, fontFamily: ios.font }}>
         Manifexus{softwareUpdate?.current.version ? ` ${softwareUpdate.current.version}` : ''} · {hostAddress}
       </footer>
 

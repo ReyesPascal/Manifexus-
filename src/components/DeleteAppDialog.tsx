@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Alert, AppTile, Button, Group, IconTile, LinkButton, Row, SectionFooter, SectionHeader, Switch, ios } from './ui/ios';
+import { enter } from '../motion';
+import { Alert, AppTile, Button, Group, IconTile, LinkButton, Row, SectionFooter, SectionHeader, Switch, ios, sheetPanelStyle } from './ui/ios';
 
 export interface DeleteAppTarget {
   /** The app and its own database or cache */
@@ -140,8 +141,9 @@ export const DeleteAppDialog: React.FC<{
         aria-modal="true"
         aria-labelledby="delete-app-title"
         aria-describedby="delete-app-desc"
-        className="w-full sm:max-w-[420px] max-h-[92vh] flex flex-col rounded-t-[14px] sm:rounded-[14px] overflow-hidden motion-safe:animate-[ios-sheet-in_220ms_ease-out]"
-        style={{ background: ios.sheet, boxShadow: '0 30px 80px rgba(0,0,0,0.55)', WebkitFontSmoothing: 'antialiased' }}
+        className="w-full sm:max-w-[420px] max-h-[92vh] flex flex-col rounded-t-[14px] sm:rounded-[14px] overflow-hidden"
+        ref={enter('sheet')}
+        style={{ ...sheetPanelStyle, WebkitFontSmoothing: 'antialiased' }}
       >
         <div className="overflow-y-auto px-4 sm:px-5 pt-7 pb-5">
           <div className="flex flex-col items-center text-center px-2">
@@ -221,7 +223,7 @@ export const DeleteAppDialog: React.FC<{
           </section>
 
           {error && (
-            <p role="alert" className="mt-4 px-4 text-[13px]" style={{ color: ios.red }}>
+            <p role="alert" className="mt-4 px-4 text-[13px]" style={{ color: ios.redText }}>
               {error}
             </p>
           )}

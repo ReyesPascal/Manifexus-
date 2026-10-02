@@ -52,7 +52,7 @@ export const WebTerminalModal: React.FC<WebTerminalModalProps> = ({
     const term = new Terminal({
       cursorBlink: true,
       cursorStyle: 'block',
-      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace',
+      fontFamily: "'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
       fontSize: 13,
       lineHeight: 1.25,
       theme: {
@@ -268,13 +268,13 @@ export const WebTerminalModal: React.FC<WebTerminalModalProps> = ({
                   Host Terminal: <code className="text-cyan-300">nano</code>
                 </span>
                 {stackName && (
-                  <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-purple-950/80 border border-purple-500/40 text-purple-300 hidden sm:inline">
+                  <span className="px-2 py-0.5 rounded text-[11px] font-mono bg-purple-950/80 border border-purple-500/40 text-purple-300 hidden sm:inline">
                     {stackName}
                   </span>
                 )}
                 {/* Connection Status Indicator */}
                 <div
-                  className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-mono border ${
+                  className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-mono border ${
                     connectionStatus === 'connected'
                       ? 'bg-emerald-950/80 border-emerald-500/40 text-emerald-300'
                       : connectionStatus === 'connecting'
@@ -305,7 +305,7 @@ export const WebTerminalModal: React.FC<WebTerminalModalProps> = ({
           {/* Shortcuts & Action Controls */}
           <div className="flex items-center gap-2 flex-shrink-0">
             {/* Nano Shortcuts Legend */}
-            <div className="hidden lg:flex items-center gap-2 text-[10px] font-mono text-slate-400 bg-slate-900/90 px-2.5 py-1 rounded-lg border border-slate-800">
+            <div className="hidden lg:flex items-center gap-2 text-[11px] font-mono text-slate-400 bg-slate-900/90 px-2.5 py-1 rounded-lg border border-slate-800">
               <span className="text-cyan-300 font-bold">Ctrl+O</span>: Save
               <span className="text-slate-600">|</span>
               <span className="text-cyan-300 font-bold">Ctrl+X</span>: Exit

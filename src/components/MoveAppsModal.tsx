@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { enter } from '../motion';
 import { AutomationPrivileges, DeepContainerMetadata, EmptyComposeStack, StackMergePlan } from '../types';
 import { ProgressView, useRun } from './ProgressTracker';
 import { AppIcon } from './AppCard';
@@ -22,6 +23,7 @@ import {
   sheetPanelClass,
   sheetPanelStyle,
   sheetBodyStyle,
+  ScrollEdges,
   sheetFooterClass,
 } from './ui/ios';
 
@@ -486,7 +488,7 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
         type="button"
         onClick={() => setPage('apps')}
         className="hover:underline underline-offset-2 rounded focus-visible:outline-2 focus-visible:outline-[#0A84FF]"
-        style={{ color: selectedApps.length ? ios.label : ios.tertiary }}
+        style={{ color: selectedApps.length ? ios.label : ios.secondary }}
       >
         {selectedApps.length === 0
           ? 'No apps yet'
@@ -500,7 +502,7 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
         type="button"
         onClick={() => setPage('destination')}
         className="hover:underline underline-offset-2 rounded focus-visible:outline-2 focus-visible:outline-[#0A84FF]"
-        style={{ color: destName ? ios.purple : ios.tertiary }}
+        style={{ color: destName ? ios.purple : ios.secondary }}
       >
         {destName || 'No stack yet'}
       </button>
@@ -645,7 +647,7 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
                       </span>
                     }
                     title={appName(a)}
-                    trailing={a.state !== 'running' ? <span style={{ color: ios.tertiary }}>Stopped</span> : undefined}
+                    trailing={a.state !== 'running' ? <span style={{ color: ios.secondary }}>Stopped</span> : undefined}
                   />
                 );
               })}
@@ -810,7 +812,7 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
       )}
 
       {planError && (
-        <p role="alert" className="px-4 text-[13px]" style={{ color: ios.red }}>
+        <p role="alert" className="px-4 text-[13px]" style={{ color: ios.redText }}>
           {planError}
         </p>
       )}
@@ -832,7 +834,7 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
               }
               subtitle={
                 <span className="font-mono text-[12px]">
-                  {v.source} <span style={{ color: ios.tertiary }}>→</span> {v.destination}
+                  {v.source} <span style={{ color: ios.secondary }}>→</span> {v.destination}
                 </span>
               }
               trailing={v.verdict === 'requires_migration' ? <span style={{ color: ios.orange }}>Check</span> : undefined}
@@ -915,6 +917,7 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
         role="dialog"
         aria-modal="true"
         aria-labelledby="move-apps-title"
+        ref={enter('sheet')}
         className={sheetPanelClass}
         style={sheetPanelStyle}
       >
@@ -926,7 +929,7 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
                 type="button"
                 onClick={back.go}
                 className="-ml-1 inline-flex items-center gap-1 text-[17px] rounded focus-visible:outline-2 focus-visible:outline-[#0A84FF] hover:opacity-80"
-                style={{ color: ios.blue }}
+                style={{ color: ios.link }}
               >
                 <svg width="11" height="18" viewBox="0 0 11 18" aria-hidden="true">
                   <path d="M9 2 2 9l7 7" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
@@ -941,7 +944,7 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
                   onClose();
                 }}
                 className="text-[17px] rounded focus-visible:outline-2 focus-visible:outline-[#0A84FF] hover:opacity-80"
-                style={{ color: ios.blue }}
+                style={{ color: ios.link }}
               >
                 {page === 'progress' ? 'Close' : 'Cancel'}
               </button>
@@ -955,9 +958,12 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
         </div>
 
         {/* Body */}
-        <div ref={bodyRef} className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-5 pt-5 pb-10" style={sheetBodyStyle}>
-          <div key={page} className={page === 'data' || page === 'compose' ? 'motion-safe:animate-[ios-push-in_200ms_ease-out]' : ''}>
-            {content}
+        <div className="relative flex-1 min-h-0 flex flex-col">
+          <ScrollEdges />
+          <div ref={bodyRef} className="mfx-sheet-body flex-1 min-h-0 overflow-y-auto px-4 sm:px-5 pt-5 pb-10" style={sheetBodyStyle}>
+            <div key={page} ref={page === 'data' || page === 'compose' ? enter('push') : undefined}>
+              {content}
+            </div>
           </div>
         </div>
 

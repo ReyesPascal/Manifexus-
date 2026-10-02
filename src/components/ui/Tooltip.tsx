@@ -150,7 +150,7 @@ export const TooltipLayer: React.FC = () => {
         visibility: pos ? 'visible' : 'hidden',
         maxWidth: tip.wide ? 280 : 240,
         width: 'max-content',
-        background: 'rgba(44,44,46,0.97)',
+        background: 'rgba(30,40,70,0.96)',
         color: 'rgba(235,235,245,0.86)',
         boxShadow: '0 0 0 0.5px rgba(255,255,255,0.12), 0 10px 30px rgba(0,0,0,0.55)',
         backdropFilter: 'blur(20px)',

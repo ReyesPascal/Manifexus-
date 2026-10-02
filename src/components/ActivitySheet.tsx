@@ -272,7 +272,7 @@ const Pre: React.FC<{ children: string; tone?: 'default' | 'error'; max?: number
 const EventData: React.FC<{ ev: LogEvent }> = ({ ev }) => {
   const [copied, setCopied] = useState(false);
   const d = ev.data as Record<string, unknown> | undefined;
-  if (d === undefined) return <p className="text-[13px] px-1" style={{ color: ios.tertiary }}>No additional data.</p>;
+  if (d === undefined) return <p className="text-[13px] px-1" style={{ color: ios.secondary }}>No additional data.</p>;
   const blocks: { label: string; text: string; tone?: 'error' }[] = [];
   if (typeof d?.output === 'string' && d.output.trim()) blocks.push({ label: 'Output', text: d.output, tone: ev.level === 'warn' || ev.level === 'error' ? 'error' : undefined });
   if (typeof d?.content === 'string') blocks.push({ label: `Content${typeof d.path === 'string' ? ` of ${d.path}` : ''}`, text: d.content });
@@ -339,22 +339,22 @@ const EventRow: React.FC<{
         aria-expanded={open}
         className="w-full text-left flex items-start gap-3 px-4 py-[8px] hover:bg-white/[0.03] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[#0A84FF]"
       >
-        <span className="font-mono text-[11.5px] leading-[19px] tabular-nums flex-shrink-0" style={{ color: ios.tertiary, width: timeWidth }}>
+        <span className="font-mono text-[12px] leading-[19px] tabular-nums flex-shrink-0" style={{ color: ios.secondary, width: timeWidth }}>
           {time}
         </span>
         <span className="h-[19px] flex items-center flex-shrink-0"><LevelDot level={ev.level} /></span>
         <span className="min-w-0 flex-1">
-          <span className="block text-[13.5px] leading-[19px] break-words" style={{ color: faded ? ios.secondary : ev.level === 'error' ? '#FF8A80' : ios.label }}>
+          <span className="block text-[13px] leading-[19px] break-words" style={{ color: faded ? ios.secondary : ev.level === 'error' ? '#FF8A80' : ios.label }}>
             {ev.msg}
           </span>
           {meta && (
-            <span className="sm:hidden block mt-0.5 text-[11.5px] tabular-nums" style={{ color: ios.tertiary }}>
+            <span className="sm:hidden block mt-0.5 text-[12px] tabular-nums" style={{ color: ios.secondary }}>
               {meta}
             </span>
           )}
         </span>
         {meta && (
-          <span className="max-sm:hidden flex-shrink-0 text-[12px] leading-[19px] tabular-nums whitespace-nowrap" style={{ color: ios.tertiary }}>
+          <span className="max-sm:hidden flex-shrink-0 text-[12px] leading-[19px] tabular-nums whitespace-nowrap" style={{ color: ios.secondary }}>
             {meta}
           </span>
         )}
@@ -373,7 +373,7 @@ const EventRow: React.FC<{
               }
             }}
             className="text-[12px] leading-[19px] flex-shrink-0 hover:underline"
-            style={{ color: ios.blue }}
+            style={{ color: ios.link }}
           >
             Activity
           </span>
@@ -588,21 +588,21 @@ const ActivityDetail: React.FC<{ id: string; subscribe: Subscribe }> = ({ id, su
           {a.durationMs !== undefined ? ` after ${fmtDuration(a.durationMs)}` : ''} · {dayLabel(a.startedAt)} at {fmtTime(a.startedAt)}
         </p>
         <div className="mt-4 flex flex-wrap justify-center gap-2">
-          <Button onClick={copyReport} variant="tinted" className="!h-[36px] !text-[14px] !px-4">
+          <Button onClick={copyReport} variant="tinted" className="!h-[36px] !text-[15px] !px-4">
             {copyState === 'copying' ? 'Preparing…' : copyState === 'copied' ? 'Copied' : copyState === 'failed' ? 'Couldn’t Copy' : 'Copy Report'}
           </Button>
           <MenuButton
             ariaLabel="Download"
             label="Download"
             align="left"
-            className="!h-[36px] !rounded-[12px] !text-[14px] font-semibold !px-4"
+            className="!h-[36px] !rounded-[12px] !text-[15px] font-semibold !px-4"
             items={[
               { key: 'md', label: 'Report (.md)', onSelect: () => download(`/api/logs/activities/${encodeURIComponent(id)}/export?format=markdown&download=1`) },
               { key: 'json', label: 'Everything (.json)', onSelect: () => download(`/api/logs/activities/${encodeURIComponent(id)}/export?format=json`) },
             ]}
           />
         </div>
-        <p className="mt-2 text-[12px] max-w-[440px]" style={{ color: ios.tertiary }}>
+        <p className="mt-2 text-[12px] max-w-[440px]" style={{ color: ios.secondary }}>
           Paste it into any AI assistant or a support request. It includes every step, command, output, file written and the environment. Passwords and tokens are hidden.
         </p>
       </div>
@@ -729,19 +729,19 @@ const ActivityDetail: React.FC<{ id: string; subscribe: Subscribe }> = ({ id, su
       <section>
         <SectionHeader>About</SectionHeader>
         <Group>
-          <Row title="Started by" trailing={<span className="text-[14px]">{a.actor?.kind === 'system' ? 'Manifexus (automatic)' : [a.actor?.ip, browserOf(a.actor?.userAgent)].filter(Boolean).join(' · ') || 'You'}</span>} />
-          <Row title="Started" trailing={<span className="text-[14px] tabular-nums">{new Date(a.startedAt).toLocaleString()}</span>} />
-          {a.endedAt && <Row title="Finished" trailing={<span className="text-[14px] tabular-nums">{new Date(a.endedAt).toLocaleString()}</span>} />}
+          <Row title="Started by" trailing={<span className="text-[15px]">{a.actor?.kind === 'system' ? 'Manifexus (automatic)' : [a.actor?.ip, browserOf(a.actor?.userAgent)].filter(Boolean).join(' · ') || 'You'}</span>} />
+          <Row title="Started" trailing={<span className="text-[15px] tabular-nums">{new Date(a.startedAt).toLocaleString()}</span>} />
+          {a.endedAt && <Row title="Finished" trailing={<span className="text-[15px] tabular-nums">{new Date(a.endedAt).toLocaleString()}</span>} />}
           <Row
             title="Events"
             trailing={
-              <span className="text-[14px]">
+              <span className="text-[15px]">
                 {a.counts.events} · {a.counts.warnings} warning{a.counts.warnings === 1 ? '' : 's'} · {a.counts.errors} error{a.counts.errors === 1 ? '' : 's'}
               </span>
             }
           />
-          <Row title="Manifexus" trailing={<span className="text-[14px]">{a.build || env.manifexus?.build} · {env.manifexus?.installMode}</span>} />
-          <Row title="Docker" trailing={<span className="text-[14px]">{env.docker?.version} · {env.docker?.os}</span>} />
+          <Row title="Manifexus" trailing={<span className="text-[15px]">{a.build || env.manifexus?.build} · {env.manifexus?.installMode}</span>} />
+          <Row title="Docker" trailing={<span className="text-[15px]">{env.docker?.version} · {env.docker?.os}</span>} />
           <Row title="Activity ID" trailing={<span className="text-[13px] font-mono">{a.id}</span>} />
         </Group>
         {/* The raw request that started it is in Copy Report and the downloads, not on screen */}
@@ -976,7 +976,7 @@ const CommandsView: React.FC<{ onOpenActivity: (id: string) => void }> = ({ onOp
     );
   return (
     <div className="space-y-6">
-      <p className="text-[14px] leading-[20px] px-1" style={{ color: ios.secondary }}>
+      <p className="text-[15px] leading-[20px] px-1" style={{ color: ios.secondary }}>
         Every change Manifexus made, as the commands you’d type to do it yourself. Tap a change to see the whole story.
       </p>
       {byDay.map(([day, items]) => (
@@ -992,13 +992,13 @@ const CommandsView: React.FC<{ onOpenActivity: (id: string) => void }> = ({ onOp
                     className="w-full flex items-baseline gap-2 text-left rounded hover:opacity-80 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0A84FF]"
                     aria-label={`${ch.activityTitle}: open in Activity`}
                   >
-                    <span className="flex-1 min-w-0 truncate text-[14.5px] font-semibold" style={{ color: ch.status === 'failed' ? ios.red : 'white' }}>
+                    <span className="flex-1 min-w-0 truncate text-[15px] font-semibold" style={{ color: ch.status === 'failed' ? ios.red : 'white' }}>
                       {ch.activityTitle}
                     </span>
-                    <span className="tabular-nums flex-shrink-0 text-[12.5px]" style={{ color: ios.tertiary }}>
+                    <span className="tabular-nums flex-shrink-0 text-[13px]" style={{ color: ios.secondary }}>
                       {fmtTime(ch.ts)}
                     </span>
-                    <span className="flex-shrink-0 text-[15px] leading-none" style={{ color: ios.tertiary }} aria-hidden>
+                    <span className="flex-shrink-0 text-[15px] leading-none" style={{ color: ios.secondary }} aria-hidden>
                       ›
                     </span>
                   </button>
@@ -1130,7 +1130,7 @@ const LogSettingsView: React.FC = () => {
 
       <section>
         <Group>
-          <Row onClick={() => setConfirmClear(true)} title={<span style={{ color: ios.red }}>Clear All Activity</span>} />
+          <Row onClick={() => setConfirmClear(true)} title={<span style={{ color: ios.redText }}>Clear All Activity</span>} />
         </Group>
       </section>
 

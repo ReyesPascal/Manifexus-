@@ -243,7 +243,7 @@ export const StackIconPicker: React.FC<{
       zIndex={95}
       footer={
         <div className="flex items-center justify-between gap-3">
-          <button type="button" onClick={() => onChoose(undefined)} className="text-[15px] hover:opacity-80" style={{ color: ios.blue }}>
+          <button type="button" onClick={() => onChoose(undefined)} className="text-[15px] hover:opacity-80" style={{ color: ios.link }}>
             Automatic
           </button>
           <Button onClick={() => onChoose(choice)} className="flex-1 sm:flex-none sm:min-w-[170px]">
@@ -291,7 +291,7 @@ export const StackIconPicker: React.FC<{
                 aria-label={`Colour ${c}`}
                 onClick={() => setChoice((x) => ({ ...x, logo: undefined, color: c, svg: x.svg || guessIcon(name).svg, symbol: x.symbol || guessIcon(name).symbol }))}
                 className="w-8 h-8 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-white"
-                style={{ background: c, boxShadow: color === c && !choice.logo ? `0 0 0 2.5px #1c1c1e, 0 0 0 4.5px ${c}` : undefined }}
+                style={{ background: c, boxShadow: color === c && !choice.logo ? `0 0 0 2.5px #141c31, 0 0 0 4.5px ${c}` : undefined }}
               />
             ))}
           </div>
@@ -306,7 +306,7 @@ export const StackIconPicker: React.FC<{
           }}
           placeholder={tab === 'symbols' ? 'Search 1,600+ symbols' : 'Search app logos (Plex, Jellyfin…)'}
           aria-label="Search icons"
-          className="w-full h-10 px-4 rounded-[10px] text-[15px] text-white outline-none placeholder:text-[rgba(235,235,245,0.4)] focus:ring-2 focus:ring-[#0A84FF]"
+          className="w-full h-10 px-4 rounded-[10px] text-[15px] text-white outline-none placeholder:text-[rgba(235,235,245,0.45)] focus:ring-2 focus:ring-[#0A84FF]"
           style={{ background: 'rgba(118,118,128,0.2)' }}
         />
 
@@ -328,9 +328,9 @@ export const StackIconPicker: React.FC<{
               </div>
             )}
             {!symbols ? (
-              <p className="text-center text-[14px] py-10" style={{ color: ios.secondary }}>Loading symbols…</p>
+              <p className="text-center text-[15px] py-10" style={{ color: ios.secondary }}>Loading symbols…</p>
             ) : symbolList.length === 0 ? (
-              <p className="text-center text-[14px] py-10" style={{ color: ios.secondary }}>No symbols match “{q}”.</p>
+              <p className="text-center text-[15px] py-10" style={{ color: ios.secondary }}>No symbols match “{q}”.</p>
             ) : (
               <div className="grid grid-cols-6 sm:grid-cols-9 gap-1.5" role="radiogroup" aria-label="Symbol">
                 {symbolList.slice(0, shown).map(([n, , svg]) => {
@@ -355,7 +355,7 @@ export const StackIconPicker: React.FC<{
             )}
             {symbolList.length > shown && (
               <div className="flex justify-center">
-                <Button tone="gray" onClick={() => setShown((n) => n + 480)} className="!h-9 !text-[14px]">
+                <Button tone="gray" onClick={() => setShown((n) => n + 480)} className="!h-9 !text-[15px]">
                   Show More ({symbolList.length - shown})
                 </Button>
               </div>
@@ -367,17 +367,17 @@ export const StackIconPicker: React.FC<{
         {tab === 'logos' && (
           <>
             {logoError ? (
-              <p className="text-center text-[14px] py-10 px-4" style={{ color: ios.secondary }}>
+              <p className="text-center text-[15px] py-10 px-4" style={{ color: ios.secondary }}>
                 App logos come from the internet, and they couldn’t be reached from this browser right now. Symbols work offline.
               </p>
             ) : !logos ? (
-              <p className="text-center text-[14px] py-10" style={{ color: ios.secondary }}>Loading app logos…</p>
+              <p className="text-center text-[15px] py-10" style={{ color: ios.secondary }}>Loading app logos…</p>
             ) : !query ? (
-              <p className="text-center text-[14px] py-10 px-4" style={{ color: ios.secondary }}>
+              <p className="text-center text-[15px] py-10 px-4" style={{ color: ios.secondary }}>
                 Type an app’s name to find its logo. There are {logos.length.toLocaleString()} to choose from.
               </p>
             ) : logoList.length === 0 ? (
-              <p className="text-center text-[14px] py-10" style={{ color: ios.secondary }}>No logos match “{q}”.</p>
+              <p className="text-center text-[15px] py-10" style={{ color: ios.secondary }}>No logos match “{q}”.</p>
             ) : (
               <div className="grid grid-cols-4 sm:grid-cols-6 gap-2" role="radiogroup" aria-label="App logo">
                 {logoList.slice(0, 60).map((n) => {
@@ -395,7 +395,7 @@ export const StackIconPicker: React.FC<{
                       style={on ? { background: 'rgba(10,132,255,0.25)', boxShadow: `inset 0 0 0 2px ${ios.blue}` } : { background: 'rgba(255,255,255,0.05)' }}
                     >
                       <img src={url} alt="" loading="lazy" className="w-9 h-9 object-contain" />
-                      <span className="text-[10.5px] leading-tight truncate w-full text-center" style={{ color: ios.secondary }}>
+                      <span className="text-[11px] leading-tight truncate w-full text-center" style={{ color: ios.secondary }}>
                         {n}
                       </span>
                     </button>

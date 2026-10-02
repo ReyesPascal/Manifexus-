@@ -37,9 +37,10 @@ Bring that standard to every change:
 
 - Apple-style: minimal, calm and elegant, never boxy or sprawling, but still informative.
 - The whole app follows the hero's style (`src/components/ManifexusHeroHeader.tsx`): graphite glass
-  surfaces with thin light edges and soft shadows, Apple's system font, rounded capsules, quiet labels with
-  bright values, blue text links. No neon, no monospaced "terminal" look for ordinary text (monospace only
-  for real paths, commands and code).
+  surfaces with thin light edges and soft shadows, the Inter font (bundled; `ios.font`), rounded capsules, quiet labels with
+  bright values, blue text links. No neon, no monospaced "terminal" look for ordinary text (Geist Mono only
+  for real paths, commands and code). Text sizes come from Apple's type scale (11, 12, 13, 15, 16, 17, 20, 22,
+  28, 34); use /hig.
 - No boxes inside boxes. Content inside a panel sits on quiet shaded tiles, not outlined boxes.
 - One design language everywhere: the same components, spacing, colours and wording patterns on every
   screen. When something new is built, it looks like it was always part of the app.
@@ -57,6 +58,26 @@ Bring that standard to every change:
 - When something finishes (a move, a fix, a restore), there's always an obvious way to close it (Done).
 - A screen opened on top of another shows a clear **‹ Back** to where you came from, not a jump to some
   other screen. Don't send people to Activity (or anywhere else) when a focused view on top does the job.
+- Every screen has the dashboard's look, which the shared pieces already give you, so never hard-code
+  other colours: midnight glass (`ios.sheet`, `sheetPanelStyle`), rows on `ios.group` tiles, hairlines in
+  `ios.separator`, text in `ios.label` / `ios.secondary` / `ios.link` / `ios.redText`.
+- Controls that float above content (toolbars, search, main actions, short messages) are Liquid Glass:
+  wrap them in `LiquidGlass` (`src/components/ui/LiquidGlass.tsx`). Content itself is never Liquid Glass.
+- Scrolling content fades softly under the title bar and footer (`ScrollEdges`, built into `Sheet`).
+- Segmented choices use the shared `Segmented` (its highlight glides). Work in progress uses the
+  `mfx-shimmer` text and a busy card the `mfx-busy` light; a finish shows a mark that draws itself.
+- Check every new screen with /hig: Apple's type scale only, nothing under 11 pt, click targets at least
+  28 pt (20 pt minimum), contrast at least 4.5:1 for text and 3:1 for controls, focus rings, Reduce Motion.
+
+## Motion
+
+- All motion goes through `src/motion.ts` (GSAP): `enter('sheet' | 'push' | 'rise' | 'fade' | 'pop' |
+  'badge' | 'draw' | 'blur')` as a ref for entrances, `glideFrom` for things moving to a new place,
+  `countTo` for numbers. Never add CSS keyframes or a different animation library for these.
+- Short and calm: 0.2–0.35 s, eased out, nothing that blocks or delays someone. No scroll hijacking,
+  pinned sections or smooth-scroll libraries: this is a dashboard people use every day, not a showcase.
+- Endless ambient loops (shimmer, the busy light, spinners) stay in CSS.
+- Everything respects Reduce Motion (`reduceMotion()`): things simply appear in place.
 
 ## Things that float (tooltips, menus, popovers)
 

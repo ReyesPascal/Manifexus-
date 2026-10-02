@@ -232,7 +232,7 @@ export const Practice: React.FC<{ open: boolean; onClose: (thenTour: boolean) =>
         ) : (
           <h4 className="flex-1 min-w-0 truncate text-[17px] font-semibold text-white" style={{ fontFamily: displayFont, letterSpacing: '-0.02em' }}>
             {title}
-            <span className="ml-2 text-[12.5px] font-normal" style={{ color: ios.secondary }}>
+            <span className="ml-2 text-[13px] font-normal" style={{ color: ios.secondary }}>
               {apps.length ? `${apps.length} app${apps.length === 1 ? '' : 's'}` : 'Empty'}
             </span>
           </h4>
@@ -268,7 +268,7 @@ export const Practice: React.FC<{ open: boolean; onClose: (thenTour: boolean) =>
             <AppTile id={a} />
             <span className="flex-1 min-w-0">
               <span className="block text-[15px] font-semibold text-white truncate">{APPS[a].name}</span>
-              <span className="flex items-center gap-1.5 text-[12.5px]" style={{ color: ios.secondary }}>
+              <span className="flex items-center gap-1.5 text-[13px]" style={{ color: ios.secondary }}>
                 <span className="w-[7px] h-[7px] rounded-full" style={{ background: ios.green }} />
                 Running{APPS[a].note ? ` · ${APPS[a].note}` : ''}
               </span>
@@ -314,7 +314,7 @@ export const Practice: React.FC<{ open: boolean; onClose: (thenTour: boolean) =>
             <div className="text-[12px] font-semibold uppercase tracking-[0.08em]" style={{ color: ios.secondary }}>
               Practice · Step {Math.min(coach.at + 1, STEPS.length)} of {STEPS.length}
             </div>
-            <div className="text-[13px]" style={{ color: ios.tertiary }}>
+            <div className="text-[13px]" style={{ color: ios.secondary }}>
               A pretend server. Nothing here touches yours.
             </div>
           </div>
@@ -333,12 +333,12 @@ export const Practice: React.FC<{ open: boolean; onClose: (thenTour: boolean) =>
             {coach.text}
           </p>
           {coach.task && (
-            <p className="mt-3 inline-flex items-center gap-2 text-[14px] font-medium px-3 py-1.5 rounded-full" style={{ background: done[step] ? 'rgba(48,209,88,0.16)' : 'rgba(10,132,255,0.16)', color: done[step] ? '#4ADE80' : '#64B5FF' }}>
+            <p className="mt-3 inline-flex items-center gap-2 text-[15px] font-medium px-3 py-1.5 rounded-full" style={{ background: done[step] ? 'rgba(48,209,88,0.16)' : 'rgba(10,132,255,0.16)', color: done[step] ? '#4ADE80' : '#64B5FF' }}>
               {done[step] ? '✓ Nice!' : coach.task}
             </p>
           )}
           {step === 'mess' && (
-            <ul className="mt-3 space-y-1.5 text-[14px]" style={{ color: 'rgba(235,235,245,0.8)' }}>
+            <ul className="mt-3 space-y-1.5 text-[15px]" style={{ color: 'rgba(235,235,245,0.8)' }}>
               <li className="flex items-center gap-2"><span className="w-2 h-2 rounded-full" style={{ background: ios.orange }} />4 apps aren’t in any stack</li>
               <li className="flex items-center gap-2"><span className="w-2 h-2 rounded-full" style={{ background: ios.orange }} />“stuff” doesn’t say what’s in it</li>
               <li className="flex items-center gap-2"><span className="w-2 h-2 rounded-full" style={{ background: ios.orange }} />“test” is empty and left over</li>
@@ -396,7 +396,7 @@ export const Practice: React.FC<{ open: boolean; onClose: (thenTour: boolean) =>
                   if (e.key === 'Escape') setNaming(null);
                 }}
                 onBlur={(e) => (e.currentTarget.value.trim() ? create(e.currentTarget.value) : setNaming(null))}
-                className="w-full h-9 px-2.5 rounded-lg bg-white/10 text-white text-[17px] font-semibold outline-none focus:ring-2 focus:ring-[#0A84FF] placeholder:text-white/35"
+                className="w-full h-9 px-2.5 rounded-lg bg-white/10 text-white text-[17px] font-semibold outline-none focus:ring-2 focus:ring-[#0A84FF] placeholder:text-white/45"
               />
               <p className="mt-2 px-1 text-[13px]" style={{ color: ios.secondary }}>
                 Type a name and press Return.
@@ -412,7 +412,7 @@ export const Practice: React.FC<{ open: boolean; onClose: (thenTour: boolean) =>
 
       {/* A short note about what just happened */}
       {toast && (
-        <div role="status" className="fixed z-[90] left-1/2 bottom-6 -translate-x-1/2 w-max max-w-[min(92vw,560px)] px-4 py-2.5 rounded-[18px] text-[14px] leading-[19px] text-center text-white" style={{ background: 'rgba(22,30,54,0.85)', backdropFilter: 'blur(24px)', boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.1), 0 20px 40px -20px rgba(0,0,0,0.8)' }}>
+        <div role="status" className="fixed z-[90] left-1/2 bottom-6 -translate-x-1/2 w-max max-w-[min(92vw,560px)] px-4 py-2.5 rounded-[18px] text-[15px] leading-[19px] text-center text-white" style={{ background: 'rgba(22,30,54,0.85)', backdropFilter: 'blur(24px)', boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.1), 0 20px 40px -20px rgba(0,0,0,0.8)' }}>
           {toast}
         </div>
       )}
@@ -434,14 +434,14 @@ export const Practice: React.FC<{ open: boolean; onClose: (thenTour: boolean) =>
                 </div>
               </div>
               <div className="rounded-[12px] overflow-hidden" style={{ background: ios.group }}>
-                <button type="button" className={`w-full text-left px-4 h-11 text-[16px] ${step === 'rename' ? 'mfx-practice-pulse' : ''}`} style={{ color: ios.blue, borderBottom: `0.5px solid ${ios.separator}` }} onClick={() => { setRenaming(detailStack.id); setDetails(null); }}>
+                <button type="button" className={`w-full text-left px-4 h-11 text-[16px] ${step === 'rename' ? 'mfx-practice-pulse' : ''}`} style={{ color: ios.link, borderBottom: `0.5px solid ${ios.separator}` }} onClick={() => { setRenaming(detailStack.id); setDetails(null); }}>
                   Rename
                 </button>
-                <button type="button" className={`w-full text-left px-4 h-11 text-[16px] ${step === 'delete' ? 'mfx-practice-pulse' : ''}`} style={{ color: ios.red }} onClick={() => { setConfirmDelete(detailStack.id); setDetails(null); }}>
+                <button type="button" className={`w-full text-left px-4 h-11 text-[16px] ${step === 'delete' ? 'mfx-practice-pulse' : ''}`} style={{ color: ios.redText }} onClick={() => { setConfirmDelete(detailStack.id); setDetails(null); }}>
                   Delete Stack…
                 </button>
               </div>
-              <p className="px-1 text-[12.5px]" style={{ color: ios.secondary }}>
+              <p className="px-1 text-[13px]" style={{ color: ios.secondary }}>
                 On your server, this screen also has Start, Restart and Stop for all its apps, its compose file, and where it lives.
               </p>
             </div>
@@ -473,7 +473,7 @@ export const Practice: React.FC<{ open: boolean; onClose: (thenTour: boolean) =>
             </div>
             <div className="p-4">
               {!history.length ? (
-                <p className="py-6 text-center text-[14px]" style={{ color: ios.secondary }}>
+                <p className="py-6 text-center text-[15px]" style={{ color: ios.secondary }}>
                   No changes yet. Each one you make shows up here, with its backup.
                 </p>
               ) : (
@@ -482,7 +482,7 @@ export const Practice: React.FC<{ open: boolean; onClose: (thenTour: boolean) =>
                     <div key={h.id} className="flex items-center gap-3 px-4 py-2.5" style={i ? { borderTop: `0.5px solid ${ios.separator}` } : undefined}>
                       <span className="flex-1 min-w-0">
                         <span className="block text-[15px] text-white truncate">{h.title}</span>
-                        <span className="block text-[12.5px]" style={{ color: ios.secondary }}>
+                        <span className="block text-[13px]" style={{ color: ios.secondary }}>
                           {i === 0 ? 'Just now' : `${i} change${i === 1 ? '' : 's'} ago`} · backed up
                         </span>
                       </span>
@@ -493,7 +493,7 @@ export const Practice: React.FC<{ open: boolean; onClose: (thenTour: boolean) =>
                   ))}
                 </div>
               )}
-              <p className="mt-3 px-1 text-[12.5px] leading-[17px]" style={{ color: ios.secondary }}>
+              <p className="mt-3 px-1 text-[13px] leading-[17px]" style={{ color: ios.secondary }}>
                 Restoring a change also undoes the newer changes to the same stacks, so everything fits together.
               </p>
             </div>

@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { enter } from '../motion';
 import { Button, Group, IconTile, LinkButton, Row, SectionFooter, SectionHeader, Sheet, ios } from './ui/ios';
 import { ProgressView, useRun } from './ProgressTracker';
 import { CommandBlock, Explain } from './Commands';
@@ -215,7 +216,7 @@ export const FixSheet: React.FC<{
       <Row
         leading={
           <IconTile color={recheck === 'gone' ? ios.green : recheck === 'still' ? ios.orange : '#636366'}>
-            <span className="text-white font-bold text-[14px]">{recheck === 'gone' ? '✓' : recheck === 'still' ? '!' : '…'}</span>
+            <span className="text-white font-bold text-[15px]">{recheck === 'gone' ? '✓' : recheck === 'still' ? '!' : '…'}</span>
           </IconTile>
         }
         title={
@@ -257,12 +258,12 @@ export const FixSheet: React.FC<{
             )}
             {byHand && (st.howTo || []).length > 0 && (
               <div className="px-4 pb-3.5 space-y-2.5">
-                <div className="text-[12px] font-semibold uppercase tracking-wide" style={{ color: ios.tertiary }}>
+                <div className="text-[12px] font-semibold uppercase tracking-wide" style={{ color: ios.secondary }}>
                   To do it yourself
                 </div>
                 {st.howTo!.map((h, k) => (
                   <div key={k} className="space-y-1">
-                    {h.note && <p className="text-[12.5px] leading-[18px]" style={{ color: ios.secondary }}>{h.note}</p>}
+                    {h.note && <p className="text-[13px] leading-[18px]" style={{ color: ios.secondary }}>{h.note}</p>}
                     <CommandBlock command={h.command} explain={h.explain} />
                   </div>
                 ))}
@@ -385,10 +386,10 @@ export const FixSheet: React.FC<{
                         {k + 1}
                       </span>
                       <div className="min-w-0 flex-1 space-y-2">
-                        <p className="text-[14.5px] leading-[20px] text-white/90">{st.text}</p>
+                        <p className="text-[15px] leading-[20px] text-white/90">{st.text}</p>
                         {st.command && <CommandBlock command={st.command} explain={st.explain} />}
                         {btn && st.screen && (
-                          <Button tone="gray" onClick={() => onAction({ ...btn, label: SCREEN_LABEL[st.screen!] } as AiAction)} className="!h-[32px] !px-3.5 !text-[13.5px]">
+                          <Button tone="gray" onClick={() => onAction({ ...btn, label: SCREEN_LABEL[st.screen!] } as AiAction)} className="!h-[32px] !px-3.5 !text-[13px]">
                             {SCREEN_LABEL[st.screen]}
                           </Button>
                         )}
@@ -458,7 +459,7 @@ export const FixSheet: React.FC<{
           {problem}
         </section>
         {preparing && (
-          <p className="text-[14px]" style={{ color: ios.secondary }}>
+          <p className="text-[15px]" style={{ color: ios.secondary }}>
             Preparing the change…
           </p>
         )}
@@ -467,7 +468,7 @@ export const FixSheet: React.FC<{
             <Markdown text={autoPlan.explanation} lead />
           </div>
         )}
-        {autoError && <p className="text-[14px]" style={{ color: ios.orange }}>{autoError}</p>}
+        {autoError && <p className="text-[15px]" style={{ color: ios.orange }}>{autoError}</p>}
         {changes}
       </div>
     );
@@ -509,15 +510,15 @@ export const FixSheet: React.FC<{
           <section className="space-y-3">
             <SectionHeader>{plan ? 'The Fix' : 'What It Found'}</SectionHeader>
             {answer.text && (
-              <div className="rounded-[14px] px-4 py-3.5 motion-safe:animate-[ios-rise-in_280ms_ease-out]" style={{ background: ios.group, color: 'rgba(235,235,245,0.88)' }}>
+              <div ref={enter('rise')} className="rounded-[14px] px-4 py-3.5" style={{ background: ios.group, color: 'rgba(235,235,245,0.88)' }}>
                 <Markdown text={answer.text} lead />
               </div>
             )}
-            {answer.error && <p className="text-[14px]" style={{ color: ios.orange }}>{answer.error}</p>}
+            {answer.error && <p className="text-[15px]" style={{ color: ios.orange }}>{answer.error}</p>}
             {answer.actions && answer.actions.length > 0 && (
               <div className="flex flex-wrap gap-2">
                 {answer.actions.map((x, k) => (
-                  <Button key={k} tone="gray" onClick={() => onAction(x)} className="!h-[34px] !px-4 !text-[14px]">
+                  <Button key={k} tone="gray" onClick={() => onAction(x)} className="!h-[34px] !px-4 !text-[15px]">
                     {x.label}
                   </Button>
                 ))}

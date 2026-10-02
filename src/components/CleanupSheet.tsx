@@ -25,7 +25,7 @@ const fmtBytes = (b: number) => (b < 1024 ? `${b} B` : b < 1024 ** 2 ? `${Math.r
 const Check: React.FC<{ on: boolean }> = ({ on }) => (
   <span
     className="w-[22px] h-[22px] rounded-full flex items-center justify-center flex-shrink-0 transition-colors"
-    style={on ? { background: ios.blue } : { boxShadow: 'inset 0 0 0 1.5px rgba(235,235,245,0.3)' }}
+    style={on ? { background: ios.blue } : { boxShadow: 'inset 0 0 0 1.5px rgba(235,235,245,0.45)' }}
     aria-hidden
   >
     {on && (
@@ -114,7 +114,7 @@ export const CleanupSheet: React.FC<{ open: boolean; onClose: () => void; onChan
               role="checkbox"
               ariaChecked={chosen.includes(r.path)}
               leading={<Check on={chosen.includes(r.path)} />}
-              title={<span className="font-mono text-[14px]">{r.path}</span>}
+              title={<span className="font-mono text-[15px]">{r.path}</span>}
               subtitle={r.kind === 'empty' ? 'Empty' : `${r.note} · ${fmtBytes(r.bytes)}`}
             />
           ))}
@@ -130,7 +130,7 @@ export const CleanupSheet: React.FC<{ open: boolean; onClose: () => void; onChan
       <div className="space-y-6">
         <div className="text-center pt-2">
           <h3 className="text-[22px] font-semibold text-white">{results.every((r) => r.ok) ? 'Cleaned Up' : 'Mostly Cleaned Up'}</h3>
-          <p className="mt-1 text-[14px]" style={{ color: ios.secondary }}>
+          <p className="mt-1 text-[15px]" style={{ color: ios.secondary }}>
             {results.filter((r) => r.ok).length} of {results.length} folder{results.length === 1 ? '' : 's'} deleted.
           </p>
         </div>
@@ -138,7 +138,7 @@ export const CleanupSheet: React.FC<{ open: boolean; onClose: () => void; onChan
           {results.map((r) => (
             <Row
               key={r.path}
-              title={<span className="font-mono text-[14px]">{r.path}</span>}
+              title={<span className="font-mono text-[15px]">{r.path}</span>}
               subtitle={<span style={{ color: r.ok ? ios.secondary : ios.orange }}>{r.message}</span>}
               trailing={<span style={{ color: r.ok ? ios.green : ios.orange }}>{r.ok ? '✓' : '!'}</span>}
             />
@@ -166,14 +166,14 @@ export const CleanupSheet: React.FC<{ open: boolean; onClose: () => void; onChan
     body = (
       <div className="py-20 flex flex-col items-center gap-3" style={{ color: ios.secondary }}>
         <span className="w-6 h-6 rounded-full border-2 border-white/15 border-t-white/70 animate-spin" />
-        <p className="text-[14px]">Looking through your stacks folders…</p>
+        <p className="text-[15px]">Looking through your stacks folders…</p>
       </div>
     );
   } else if (items.length === 0) {
     body = (
       <div className="text-center py-16">
         <h3 className="text-[20px] font-semibold text-white">All Tidy</h3>
-        <p className="mt-1 text-[14px]" style={{ color: ios.secondary }}>
+        <p className="mt-1 text-[15px]" style={{ color: ios.secondary }}>
           No unused folders in {looked.join(', ') || 'your stacks folders'}.
         </p>
       </div>
@@ -181,7 +181,7 @@ export const CleanupSheet: React.FC<{ open: boolean; onClose: () => void; onChan
   } else {
     body = (
       <div className="space-y-7">
-        <p className="text-[14px] leading-[20px] px-1" style={{ color: ios.secondary }}>
+        <p className="text-[15px] leading-[20px] px-1" style={{ color: ios.secondary }}>
           Folders in {looked.join(', ')} that no app uses. Folders an app runs from or keeps data in are never listed.
         </p>
         {list('Empty Folders', empty, 'Nothing inside, so there’s nothing to back up.')}

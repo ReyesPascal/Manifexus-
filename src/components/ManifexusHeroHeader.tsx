@@ -1,9 +1,11 @@
 import { tipProps } from './ui/Tooltip';
-import React from 'react';
+import React, { useState } from 'react';
 import { Activity, History, Stethoscope, Settings, RefreshCw, Sparkles, Eraser } from 'lucide-react';
 import { DeepContainerMetadata, SystemStatus } from '../types';
 import { ManifexusAppIcon, UpdateGlyph } from './SoftwareUpdateSheet';
 import { ios } from './ui/ios';
+import { LiquidGlass } from './ui/LiquidGlass';
+import { BlurIn } from './GettingStarted';
 
 interface ManifexusHeroHeaderProps {
   container?: DeepContainerMetadata;
@@ -93,6 +95,16 @@ export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
   const isVersion = Boolean(versionLabel?.startsWith('Version '));
   const build = !versionLabel ? undefined : isVersion ? versionLabel!.slice(8) : versionLabel.startsWith('Build ') ? versionLabel.slice(6) : 'dev';
   const iconCls = 'w-[15px] h-[15px]';
+  // The very first time Manifexus opens, its name comes into focus; never again after that
+  const [welcome] = useState(() => {
+    try {
+      const seen = localStorage.getItem('manifexus.welcomed');
+      localStorage.setItem('manifexus.welcomed', '1');
+      return !seen;
+    } catch {
+      return false;
+    }
+  });
 
   return (
     <section
@@ -112,18 +124,18 @@ export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
               style={{ filter: 'drop-shadow(0 10px 22px rgba(47,140,255,0.35))' }}
               {...tipProps(
                 <span className="block w-[226px] py-1.5 px-1">
-                <span className="flex items-center gap-2 text-[13.5px] font-semibold" style={{ color: socketOn ? ios.green : '#FF6961' }}>
+                <span className="flex items-center gap-2 text-[13px] font-semibold" style={{ color: socketOn ? ios.green : '#FF6961' }}>
                   <span className="w-2 h-2 rounded-full" style={{ background: 'currentColor', boxShadow: '0 0 8px currentColor' }} />
                   {socketOn ? 'Connected to Docker' : 'Not connected to Docker'}
                 </span>
-                <span className="block mt-1 text-[12.5px] leading-[17px]" style={{ color: 'rgba(235,235,245,0.75)' }}>
+                <span className="block mt-1 text-[13px] leading-[17px]" style={{ color: 'rgba(235,235,245,0.75)' }}>
                   {socketOn ? 'Manifexus can see and manage your apps.' : 'Manifexus can’t see or manage your apps. Check that the Docker socket is mounted.'}
                 </span>
-                <span className="mt-2.5 pt-2.5 flex items-center justify-between text-[12.5px]" style={{ borderTop: '0.5px solid rgba(255,255,255,0.1)', color: 'rgba(235,235,245,0.6)' }}>
+                <span className="mt-2.5 pt-2.5 flex items-center justify-between text-[13px]" style={{ borderTop: '0.5px solid rgba(255,255,255,0.1)', color: 'rgba(235,235,245,0.6)' }}>
                   Dashboard port
                   <span className="font-semibold tabular-nums text-white">{port}</span>
                 </span>
-                <span className="block mt-2 text-[11.5px]" style={{ color: 'rgba(235,235,245,0.45)' }}>
+                <span className="block mt-2 text-[12px]" style={{ color: 'rgba(235,235,245,0.45)' }}>
                   Click for Diagnostics
                 </span>
                               </span>,
@@ -143,17 +155,17 @@ export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
             <div className="min-w-0">
               <div className="flex items-center gap-2.5 flex-wrap">
                 <h1
-                  className="text-[30px] sm:text-[38px] leading-none font-bold"
+                  className="text-[28px] sm:text-[34px] leading-none font-bold"
                   style={{
-                    fontFamily: '"Inter Tight", "SF Pro Display", -apple-system, system-ui, sans-serif',
+                    fontFamily: 'var(--mfx-sans)',
                     letterSpacing: '-0.035em',
-                    backgroundImage: 'linear-gradient(180deg, #ffffff 0%, #e4e4ea 45%, #9a9aa6 100%)',
-                    WebkitBackgroundClip: 'text',
-                    backgroundClip: 'text',
-                    color: 'transparent',
+                    // (While the name comes into focus the first time, plain white: the letters move on their own)
+                    ...(welcome
+                      ? { color: '#fff' }
+                      : { backgroundImage: 'linear-gradient(180deg, #ffffff 0%, #e4e4ea 45%, #9a9aa6 100%)', WebkitBackgroundClip: 'text', backgroundClip: 'text', color: 'transparent' }),
                   }}
                 >
-                  Manifexus
+                  {welcome ? <BlurIn text="Manifexus" /> : 'Manifexus'}
                 </h1>
                 {build && (
                   <button
@@ -177,7 +189,7 @@ export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
                   </button>
                 )}
               </div>
-              <p className="mt-2 text-[13px] sm:text-[14px] leading-[1.45] max-w-[34rem]" style={{ color: ios.secondary }}>
+              <p className="mt-2 text-[13px] sm:text-[15px] leading-[1.45] max-w-[34rem]" style={{ color: ios.secondary }}>
                 All your Docker apps in one place. See what&rsquo;s running, organize apps into stacks, and move them
                 safely, with a backup before every change.
               </p>
@@ -186,15 +198,9 @@ export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
 
           {/* Toolbar (records, then system), and under it search and New Stack */}
           <div className="w-full sm:w-auto sm:self-start lg:self-auto flex-shrink-0 flex flex-col gap-2.5">
-          <nav
-            aria-label="Manifexus"
-            className="flex items-center justify-between sm:justify-start gap-0.5 p-1 rounded-full"
-            style={{
-              background: 'rgba(255,255,255,0.075)',
-              boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.16), inset 0 0 0 1px rgba(255,255,255,0.07)',
-              backdropFilter: 'blur(24px) saturate(170%)',
-            }}
-          >
+          {/* Liquid Glass: the controls float above the page, like Apple's */}
+          <LiquidGlass shadow="0 12px 30px -16px rgba(0,0,0,0.7)">
+          <nav aria-label="Manifexus" className="flex items-center justify-between sm:justify-start gap-0.5 p-1 rounded-full">
             {onOpenAssistant && (
               <>
                 <ToolButton icon={<Sparkles className={iconCls} />} label="Ask" tip="Ask Manifexus: the built-in AI can look at your apps and fix things with your OK." onClick={onOpenAssistant} />
@@ -264,13 +270,12 @@ export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
               align="end"
             />
           </nav>
+          </LiquidGlass>
           {(onSearch || onNewStack) && (
             <div className="flex items-center gap-2">
               {onSearch && (
-                <label
-                  className="flex-1 min-w-0 flex items-center gap-2 h-9 pl-3.5 pr-2 rounded-full transition-shadow focus-within:ring-2 focus-within:ring-[#0A84FF]"
-                  style={{ background: 'rgba(255,255,255,0.075)', boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.16), inset 0 0 0 1px rgba(255,255,255,0.07)', backdropFilter: 'blur(24px) saturate(170%)', color: ios.secondary }}
-                >
+                <LiquidGlass className="flex-1 min-w-0 rounded-full focus-within:ring-2 focus-within:ring-[#0A84FF]">
+                <label className="flex items-center gap-2 h-9 pl-3.5 pr-2 rounded-full" style={{ color: ios.secondary }}>
                   <SearchGlyph />
                   <input
                     type="search"
@@ -279,7 +284,7 @@ export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
                     onKeyDown={(e) => e.key === 'Escape' && onSearch('')}
                     placeholder="Search apps"
                     aria-label="Search apps"
-                    className="flex-1 min-w-0 bg-transparent outline-none text-[14px] text-white placeholder:text-[rgba(235,235,245,0.4)] [&::-webkit-search-cancel-button]:hidden"
+                    className="flex-1 min-w-0 bg-transparent outline-none text-[15px] text-white placeholder:text-[rgba(235,235,245,0.45)] [&::-webkit-search-cancel-button]:hidden"
                   />
                   {search && (
                     <button type="button" onClick={() => onSearch('')} aria-label="Clear search" className="w-5 h-5 rounded-full flex items-center justify-center text-[11px] text-black" style={{ background: 'rgba(235,235,245,0.45)' }}>
@@ -287,25 +292,23 @@ export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
                     </button>
                   )}
                 </label>
+                </LiquidGlass>
               )}
               {onNewStack && (
+                <LiquidGlass tint="rgba(10,132,255,0.22)" className="flex-shrink-0">
                 <button
                   type="button"
                   onClick={onNewStack}
-                  className="flex-shrink-0 inline-flex items-center gap-1.5 h-9 pl-3 pr-4 rounded-full text-[14px] font-semibold transition-all hover:brightness-125 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0A84FF]"
+                  className="inline-flex items-center gap-1.5 h-9 pl-3 pr-4 rounded-full text-[15px] font-semibold transition-all hover:brightness-125 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0A84FF]"
                   // Blue-tinted glass: the main action, in the same material as everything around it
-                  style={{
-                    background: 'rgba(10,132,255,0.22)',
-                    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.18), inset 0 0 0 1px rgba(10,132,255,0.35)',
-                    backdropFilter: 'blur(24px) saturate(170%)',
-                    color: '#64B5FF',
-                  }}
+                  style={{ boxShadow: 'inset 0 0 0 1px rgba(10,132,255,0.35)', color: '#7DBEFF' }}
                 >
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.8" strokeLinecap="round" aria-hidden>
                     <path d="M12 5v14M5 12h14" />
                   </svg>
                   New Stack
                 </button>
+                </LiquidGlass>
               )}
             </div>
           )}

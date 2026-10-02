@@ -79,7 +79,7 @@ export const ReleaseCard: React.FC<{ r: Release; title?: string }> = ({ r, title
             </div>
             <ul className="mt-1.5 space-y-1.5">
               {r[k.key]!.map((t, i) => (
-                <li key={i} className="flex gap-2.5 text-[14px] leading-[20px]">
+                <li key={i} className="flex gap-2.5 text-[15px] leading-[20px]">
                   <span className="mt-[8px] w-[5px] h-[5px] rounded-full flex-shrink-0" style={{ background: k.color }} />
                   <NoteText text={t} />
                 </li>
@@ -179,7 +179,7 @@ const StepIcon: React.FC<{ state: 'pending' | 'active' | 'done' | 'failed' }> = 
         !
       </span>
     );
-  return <span className="w-5 h-5 rounded-full" style={{ boxShadow: `inset 0 0 0 1.5px ${ios.tertiary}` }} aria-hidden="true" />;
+  return <span className="w-5 h-5 rounded-full" style={{ boxShadow: `inset 0 0 0 1.5px ${ios.control}` }} aria-hidden="true" />;
 };
 
 /**
@@ -580,7 +580,7 @@ export const SoftwareUpdateSheet: React.FC<SoftwareUpdateSheetProps> = ({ open, 
       title="Software Update"
       leftAction={backLabel && onBack && !busy ? <BackButton label={backLabel} onClick={onBack} /> : undefined}
       rightAction={
-        busy ? <span className="text-[15px]" style={{ color: ios.tertiary }}>Updating</span> : undefined
+        busy ? <span className="text-[15px]" style={{ color: ios.secondary }}>Updating</span> : undefined
       }
       footer={
         !showInstalling && available && s?.supported ? (

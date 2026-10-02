@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { enter } from '../motion';
 import { BackButton, Button, Checkmark, GearButton, Group, IconTile, LinkButton, Row, SectionFooter, SectionHeader, Sheet, Switch, ios } from './ui/ios';
 import { ProgressView, useRun } from './ProgressTracker';
 import { CommandBlock, Explain } from './Commands';
@@ -40,7 +41,7 @@ export const DiffView: React.FC<{ lines: string[] }> = ({ lines }) => {
   let gap = false;
   lines.forEach((l, i) => {
     if (!keep.has(i)) {
-      if (!gap && out.length) out.push(<div key={`g${i}`} className="px-3 py-0.5" style={{ color: ios.tertiary }}>⋯</div>);
+      if (!gap && out.length) out.push(<div key={`g${i}`} className="px-3 py-0.5" style={{ color: ios.secondary }}>⋯</div>);
       gap = true;
       return;
     }
@@ -94,9 +95,9 @@ const WorkingLine: React.FC<{ phase: Phase; started?: number }> = ({ phase, star
     <div className="flex items-start gap-2.5 pt-1.5" role="status" aria-live="polite">
       <span className="mt-[3px] w-3.5 h-3.5 flex-shrink-0 rounded-full border-2 border-t-transparent animate-spin motion-reduce:animate-none" style={{ borderColor: ios.blue, borderTopColor: 'transparent' }} />
       <div className="min-w-0 flex-1 space-y-1">
-        <div className="flex items-baseline gap-2 text-[14px]">
+        <div className="flex items-baseline gap-2 text-[15px]">
           <span className="truncate text-white/90 font-medium">{phase.label}</span>
-          <span className="ml-auto flex-shrink-0 tabular-nums text-[12.5px]" style={{ color: ios.tertiary }}>
+          <span className="ml-auto flex-shrink-0 tabular-nums text-[13px]" style={{ color: ios.secondary }}>
             {time}
           </span>
         </div>
@@ -113,7 +114,7 @@ const WorkingLine: React.FC<{ phase: Phase; started?: number }> = ({ phase, star
           </div>
         )}
         {phase.detail && (
-          <div className="text-[12.5px] leading-[17px]" style={{ color: ios.secondary }}>
+          <div className="text-[13px] leading-[17px]" style={{ color: ios.secondary }}>
             {phase.detail}
           </div>
         )}
@@ -169,13 +170,13 @@ export const WorkLog: React.FC<{ item: Answer; onToggle: () => void }> = ({ item
                     {st.label}
                   </div>
                   {st.detail && (
-                    <div className="text-[12px] leading-[16px] break-words" style={{ color: ios.tertiary }}>
+                    <div className="text-[12px] leading-[16px] break-words" style={{ color: ios.secondary }}>
                       {st.detail}
                     </div>
                   )}
                 </div>
                 {st.ms !== undefined && (
-                  <span className="flex-shrink-0 tabular-nums text-[12px]" style={{ color: ios.tertiary }}>
+                  <span className="flex-shrink-0 tabular-nums text-[12px]" style={{ color: ios.secondary }}>
                     {fmtDur(st.ms)}
                   </span>
                 )}
@@ -192,13 +193,13 @@ export const WorkLog: React.FC<{ item: Answer; onToggle: () => void }> = ({ item
 /** What kind of request it decided this is, and which model took it */
 export const RouteChips: React.FC<{ route: NonNullable<Answer['route']> }> = ({ route }) => (
   <div className="flex flex-wrap items-center gap-1.5" title={route.why}>
-    <span className="text-[11.5px] font-semibold px-2 py-[2px] rounded-full" style={{ background: 'rgba(191,90,242,0.18)', color: '#D69CFA' }}>
+    <span className="text-[12px] font-semibold px-2 py-[2px] rounded-full" style={{ background: 'rgba(191,90,242,0.18)', color: '#D69CFA' }}>
       {route.task}
     </span>
-    <span className="text-[11.5px] font-medium px-2 py-[2px] rounded-full" style={{ background: 'rgba(10,132,255,0.16)', color: '#64B5FF' }}>
+    <span className="text-[12px] font-medium px-2 py-[2px] rounded-full" style={{ background: 'rgba(10,132,255,0.16)', color: '#64B5FF' }}>
       {route.effort} effort
     </span>
-    <span className="text-[11.5px] font-medium px-2 py-[2px] rounded-full" style={{ background: 'rgba(118,118,128,0.24)', color: ios.secondary }}>
+    <span className="text-[12px] font-medium px-2 py-[2px] rounded-full" style={{ background: 'rgba(118,118,128,0.24)', color: ios.secondary }}>
       {route.name}
     </span>
   </div>
@@ -208,7 +209,7 @@ export const RouteChips: React.FC<{ route: NonNullable<Answer['route']> }> = ({ 
 const InstallSteps: React.FC<{ steps: DownloadStep[] }> = ({ steps }) => (
   <ul className="mt-2 space-y-1.5 rounded-[10px] px-2.5 py-2" style={{ background: 'rgba(255,255,255,0.04)' }}>
     {steps.map((st) => (
-      <li key={st.id} className="flex items-start gap-2 text-[12.5px] leading-[17px]">
+      <li key={st.id} className="flex items-start gap-2 text-[13px] leading-[17px]">
         {st.status === 'running' ? (
           <span className="mt-[2px] w-3 h-3 flex-shrink-0 rounded-full border-2 border-t-transparent animate-spin motion-reduce:animate-none" style={{ borderColor: ios.blue, borderTopColor: 'transparent' }} />
         ) : st.status === 'done' ? (
@@ -216,23 +217,23 @@ const InstallSteps: React.FC<{ steps: DownloadStep[] }> = ({ steps }) => (
         ) : st.status === 'failed' ? (
           <span className="w-3 flex-shrink-0 text-center font-bold" style={{ color: ios.orange }}>!</span>
         ) : (
-          <span className="mt-[3px] w-[10px] h-[10px] mx-[1px] flex-shrink-0 rounded-full" style={{ border: `1.5px solid ${ios.tertiary}` }} />
+          <span className="mt-[3px] w-[10px] h-[10px] mx-[1px] flex-shrink-0 rounded-full" style={{ border: `1.5px solid ${ios.control}` }} />
         )}
         <div className="min-w-0 flex-1">
-          <div style={{ color: st.status === 'pending' ? ios.tertiary : st.status === 'failed' ? ios.orange : st.status === 'running' ? 'rgba(255,255,255,0.92)' : ios.secondary }}>{st.label}</div>
+          <div style={{ color: st.status === 'pending' ? ios.secondary : st.status === 'failed' ? ios.orange : st.status === 'running' ? 'rgba(255,255,255,0.92)' : ios.secondary }}>{st.label}</div>
           {st.detail && st.status !== 'pending' && (
-            <div className="break-words" style={{ color: st.status === 'failed' ? ios.orange : ios.tertiary }}>
+            <div className="break-words" style={{ color: st.status === 'failed' ? ios.orange : ios.secondary }}>
               {st.detail}
             </div>
           )}
-          {st.status === 'pending' && st.detail && <div style={{ color: ios.tertiary }}>{st.detail}</div>}
+          {st.status === 'pending' && st.detail && <div style={{ color: ios.secondary }}>{st.detail}</div>}
           {st.status === 'running' && st.progress !== undefined && (
             <div className="mt-1 pr-1">
               <Bar value={st.progress} />
             </div>
           )}
         </div>
-        <span className="flex-shrink-0 tabular-nums" style={{ color: ios.tertiary }}>
+        <span className="flex-shrink-0 tabular-nums" style={{ color: ios.secondary }}>
           {st.status === 'done' && st.ms !== undefined ? fmtDur(st.ms) : st.status === 'running' && st.eta ? `~${fmtLeft(st.eta)} left` : ''}
         </span>
       </li>
@@ -598,18 +599,18 @@ export const AssistantSheet: React.FC<{
           </SectionHeader>
           <Group>
             <div className="px-4 py-3">
-              <div className="flex items-baseline justify-between gap-3 text-[14px]">
+              <div className="flex items-baseline justify-between gap-3 text-[15px]">
                 <span className="text-white/90 font-medium truncate">
                   {broken.length && !active.length ? 'Setup stopped' : left > 0 ? `Downloading ${fmtGB(bytesDone)} of ${fmtGB(bytesTotal)}` : running ? running.label : 'Finishing up'}
                 </span>
-                <span className="flex-shrink-0 tabular-nums text-[12.5px]" style={{ color: ios.secondary }}>
+                <span className="flex-shrink-0 tabular-nums text-[13px]" style={{ color: ios.secondary }}>
                   {Math.round(value * 100)}%
                 </span>
               </div>
               <div className="mt-2">
                 <Bar value={value} />
               </div>
-              <div className="mt-1.5 text-[12.5px] tabular-nums" style={{ color: broken.length ? ios.orange : ios.secondary }}>
+              <div className="mt-1.5 text-[13px] tabular-nums" style={{ color: broken.length ? ios.orange : ios.secondary }}>
                 {broken.length
                   ? broken.map((b) => `${nm(b.model)}: ${b.message || 'didn’t finish'}`).join(' · ')
                   : [speed ? `${(speed / 1e6).toFixed(1)} MB/s` : '', speed && left ? `~${fmtLeft(left / speed)} left to download` : '', status.ready ? 'You can start asking now' : ''].filter(Boolean).join(' · ') || 'Getting started…'}
@@ -655,7 +656,7 @@ export const AssistantSheet: React.FC<{
     });
     title = w.title;
     subtitle = w.subtitle;
-    body = <div key={setupPage} className="motion-safe:animate-[ios-push-in_200ms_ease-out]">{w.body}</div>;
+    body = <div key={setupPage} ref={enter('push')}>{w.body}</div>;
     footer = w.footer;
   } else if (view === 'setup' || view === 'models') {
     const s = status.specs;
@@ -715,7 +716,7 @@ export const AssistantSheet: React.FC<{
             ) : (
               <span className="block">
                 {extra ? `${m.name} · ${extra.sub}` : m.blurb}
-                <span className="block mt-0.5 tabular-nums" style={{ color: m.fit === 'no' ? ios.red : m.fit === 'tight' ? ios.orange : ios.tertiary }}>
+                <span className="block mt-0.5 tabular-nums" style={{ color: m.fit === 'no' ? ios.red : m.fit === 'tight' ? ios.orange : ios.secondary }}>
                   {fmtGB(m.downloadBytes)} · answers in {fmtSecs(m.seconds)}
                   {m.measured ? ' (measured)' : ''}
                   {m.why ? ` · ${m.why}` : ''}
@@ -740,8 +741,8 @@ export const AssistantSheet: React.FC<{
                 disabled={m.fit === 'no' || !status.engine.included}
                 title={!status.engine.included ? 'Install the AI engine first' : undefined}
                 onClick={() => install(m.id, extra ? (extra.label === 'Fixer' ? 'fixer' : 'quick') : undefined)}
-                className="h-[28px] px-3.5 rounded-full text-[14px] font-semibold disabled:opacity-35"
-                style={{ background: 'rgba(10,132,255,0.18)', color: ios.blue }}
+                className="h-[28px] px-3.5 rounded-full text-[15px] font-semibold disabled:opacity-35"
+                style={{ background: 'rgba(10,132,255,0.18)', color: ios.link }}
               >
                 {failed ? 'Try Again' : 'Get'}
               </button>
@@ -757,7 +758,7 @@ export const AssistantSheet: React.FC<{
           <div className="flex flex-col items-center text-center pt-1">
             <AssistantIcon size={64} />
             <h3 className="mt-4 text-[22px] leading-[27px] font-semibold text-white">Built-in AI</h3>
-            <p className="mt-1.5 text-[14px] leading-[20px] max-w-[440px]" style={{ color: ios.secondary }}>
+            <p className="mt-1.5 text-[15px] leading-[20px] max-w-[440px]" style={{ color: ios.secondary }}>
               It looks into problems Diagnostics finds and fixes them with your OK. It runs on your server: free, private, nothing leaves your network.
             </p>
           </div>
@@ -771,7 +772,7 @@ export const AssistantSheet: React.FC<{
               <SectionHeader>AI Engine</SectionHeader>
               <Group>
                 <Row
-                  leading={<IconTile color={ei.status === 'failed' ? ios.orange : '#636366'}><span className="text-white font-bold text-[14px]">{ei.status === 'failed' ? '!' : '⚙'}</span></IconTile>}
+                  leading={<IconTile color={ei.status === 'failed' ? ios.orange : '#636366'}><span className="text-white font-bold text-[15px]">{ei.status === 'failed' ? '!' : '⚙'}</span></IconTile>}
                   title={busy ? (ei.status === 'unpacking' ? 'Unpacking the AI engine' : ei.status === 'verifying' ? 'Checking the download' : 'Downloading the AI engine') : status.engine.canInstall ? 'The AI engine isn’t installed yet' : 'Update Manifexus to use the built-in AI'}
                   subtitle={
                     busy ? (
@@ -797,8 +798,8 @@ export const AssistantSheet: React.FC<{
                           await fetch('/api/ai/engine/install', { method: 'POST' });
                           load();
                         }}
-                        className="h-[28px] px-3.5 rounded-full text-[14px] font-semibold"
-                        style={{ background: 'rgba(10,132,255,0.18)', color: ios.blue }}
+                        className="h-[28px] px-3.5 rounded-full text-[15px] font-semibold"
+                        style={{ background: 'rgba(10,132,255,0.18)', color: ios.link }}
                       >
                         {ei.status === 'failed' ? 'Try Again' : 'Install'}
                       </button>
@@ -820,10 +821,10 @@ export const AssistantSheet: React.FC<{
           <section>
             <SectionHeader>Your Server</SectionHeader>
             <Group>
-              <Row title="Processor" trailing={<span className="text-[14px] truncate max-w-[60vw] sm:max-w-[420px]">{s.cpu.model.replace(/\(R\)|\(TM\)|CPU|Processor/g, '').replace(/\s+/g, ' ').trim()} · {s.cpu.physicalCores && s.cpu.physicalCores < s.cpu.cores ? `${s.cpu.physicalCores} cores, ${s.cpu.cores} threads` : `${s.cpu.cores} cores`}</span>} />
-              <Row title="Memory" trailing={<span className="text-[14px] tabular-nums">{fmtGB(s.memory.availableBytes)} free of {fmtGB(s.memory.totalBytes)}</span>} />
-              <Row title="Graphics" trailing={<span className="text-[14px]">{graphics}</span>} />
-              <Row title="Disk" trailing={<span className="text-[14px] tabular-nums">{fmtGB(s.disk.freeBytes)} free</span>} />
+              <Row title="Processor" trailing={<span className="text-[15px] truncate max-w-[60vw] sm:max-w-[420px]">{s.cpu.model.replace(/\(R\)|\(TM\)|CPU|Processor/g, '').replace(/\s+/g, ' ').trim()} · {s.cpu.physicalCores && s.cpu.physicalCores < s.cpu.cores ? `${s.cpu.physicalCores} cores, ${s.cpu.cores} threads` : `${s.cpu.cores} cores`}</span>} />
+              <Row title="Memory" trailing={<span className="text-[15px] tabular-nums">{fmtGB(s.memory.availableBytes)} free of {fmtGB(s.memory.totalBytes)}</span>} />
+              <Row title="Graphics" trailing={<span className="text-[15px]">{graphics}</span>} />
+              <Row title="Disk" trailing={<span className="text-[15px] tabular-nums">{fmtGB(s.disk.freeBytes)} free</span>} />
             </Group>
             <SectionFooter>
               {s.gpus.some((g) => g.vendor === 'nvidia') && !s.gpuUsable
@@ -1012,8 +1013,8 @@ export const AssistantSheet: React.FC<{
         <div className="flex flex-col items-center text-center pt-1">
           <AssistantIcon size={52} />
           <h3 className="mt-3.5 text-[20px] leading-[25px] font-semibold text-white px-4">{reviewPlan.title}</h3>
-          <div className="mt-2 text-[14px] leading-[21px] max-w-[520px] text-left" style={{ color: ios.secondary }}>
-            <Markdown text={reviewPlan.explanation} className="!text-[14px] !leading-[21px]" />
+          <div className="mt-2 text-[15px] leading-[21px] max-w-[520px] text-left" style={{ color: ios.secondary }}>
+            <Markdown text={reviewPlan.explanation} className="!text-[15px] !leading-[21px]" />
           </div>
         </div>
         <section>
@@ -1029,12 +1030,12 @@ export const AssistantSheet: React.FC<{
                 )}
                 {showCommands && (s.howTo || []).length > 0 && (
                   <div className="px-4 pb-3.5 space-y-2.5">
-                    <div className="text-[12px] font-semibold uppercase tracking-wide" style={{ color: ios.tertiary }}>
+                    <div className="text-[12px] font-semibold uppercase tracking-wide" style={{ color: ios.secondary }}>
                       By hand
                     </div>
                     {s.howTo!.map((h, k) => (
                       <div key={k} className="space-y-1">
-                        {h.note && <p className="text-[12.5px] leading-[18px]" style={{ color: ios.secondary }}>{h.note}</p>}
+                        {h.note && <p className="text-[13px] leading-[18px]" style={{ color: ios.secondary }}>{h.note}</p>}
                         <CommandBlock command={h.command} explain={h.explain} />
                       </div>
                     ))}
@@ -1095,7 +1096,7 @@ export const AssistantSheet: React.FC<{
             </svg>
           </IconTile>
           <h3 className="mt-3.5 text-[20px] font-semibold text-white">Do it yourself, step by step</h3>
-          <p className="mt-1.5 text-[14px] leading-[20px] max-w-[460px]" style={{ color: ios.secondary }}>
+          <p className="mt-1.5 text-[15px] leading-[20px] max-w-[460px]" style={{ color: ios.secondary }}>
             You’ll type each command in a terminal on your server (for example over SSH). Every step explains what the command does. Nothing here runs by
             itself, and you can go back and forth as you like.
           </p>
@@ -1113,11 +1114,11 @@ export const AssistantSheet: React.FC<{
     ) : (
       <div className="space-y-6">
         <div>
-          <div className="text-[12px] font-semibold uppercase tracking-wide" style={{ color: ios.tertiary }}>
+          <div className="text-[12px] font-semibold uppercase tracking-wide" style={{ color: ios.secondary }}>
             Step {guideAt} of {steps.length}
           </div>
           <h3 className="mt-1 text-[20px] leading-[25px] font-semibold text-white">{s.label}</h3>
-          <p className="mt-1.5 text-[14px] leading-[20px]" style={{ color: ios.secondary }}>
+          <p className="mt-1.5 text-[15px] leading-[20px]" style={{ color: ios.secondary }}>
             {s.action.reason}
           </p>
         </div>
@@ -1126,12 +1127,12 @@ export const AssistantSheet: React.FC<{
             <div className="flex gap-3">
               <span
                 className="w-[22px] h-[22px] rounded-full flex items-center justify-center text-[12px] font-semibold flex-shrink-0 mt-px"
-                style={{ background: 'rgba(10,132,255,0.2)', color: ios.blue }}
+                style={{ background: 'rgba(10,132,255,0.2)', color: ios.link }}
               >
                 {k + 1}
               </span>
               <div className="flex-1 min-w-0 space-y-2">
-                {h.note && <p className="text-[14px] leading-[20px] text-white">{h.note}</p>}
+                {h.note && <p className="text-[15px] leading-[20px] text-white">{h.note}</p>}
                 <CommandBlock command={h.command} explain={h.explain} />
                 {s.action.type === 'write_file' && h.command.startsWith('nano') && s.action.path && (
                   <LinkButton onClick={() => window.dispatchEvent(new CustomEvent('manifexus:open-terminal', { detail: { file: s.action.path } }))}>
@@ -1247,7 +1248,7 @@ export const AssistantSheet: React.FC<{
         <div className="flex flex-col items-center text-center pt-6">
           <AssistantIcon size={64} />
           <h3 className="mt-4 text-[22px] font-semibold text-white">How can I help?</h3>
-          <p className="mt-1.5 text-[14px] leading-[20px] max-w-[420px]" style={{ color: ios.secondary }}>
+          <p className="mt-1.5 text-[15px] leading-[20px] max-w-[420px]" style={{ color: ios.secondary }}>
             I can look at your apps, logs and files, explain what’s going on, and fix things after you approve.
           </p>
           <Group className="mt-7 w-full max-w-[460px] text-left">
@@ -1272,7 +1273,7 @@ export const AssistantSheet: React.FC<{
                   {it.route && <RouteChips route={it.route} />}
                   <WorkLog item={it} onToggle={() => setItems((list) => list.map((x) => (x === it ? { ...it, showWork: !it.showWork } : x)))} />
                   {it.text && (
-                    <div className="motion-safe:animate-[ios-rise-in_280ms_ease-out]">
+                    <div ref={enter('rise')}>
                       <Markdown text={it.text} lead={Boolean(it.route)} />
                     </div>
                   )}
@@ -1283,17 +1284,17 @@ export const AssistantSheet: React.FC<{
                           Proposed Changes
                         </div>
                         <div className="mt-1 text-[16px] font-semibold text-white">{it.plan.title}</div>
-                        <ul className="mt-2 space-y-1 text-[14px]" style={{ color: ios.secondary }}>
+                        <ul className="mt-2 space-y-1 text-[15px]" style={{ color: ios.secondary }}>
                           {it.plan.steps.map((s, k) => (
                             <li key={k} className="flex gap-2">
-                              <span style={{ color: ios.tertiary }}>{k + 1}.</span>
+                              <span style={{ color: ios.secondary }}>{k + 1}.</span>
                               <span>{s.label}</span>
                             </li>
                           ))}
                         </ul>
                       </div>
                       <div className="flex items-center justify-between px-4 py-2.5" style={{ borderTop: `0.5px solid ${ios.separator}` }}>
-                        <span className="text-[13px]" style={{ color: it.planState === 'done' || it.planState === 'self' ? ios.green : ios.tertiary }}>
+                        <span className="text-[13px]" style={{ color: it.planState === 'done' || it.planState === 'self' ? ios.green : ios.secondary }}>
                           {it.planState === 'done'
                             ? 'Started'
                             : it.planState === 'self'
@@ -1310,7 +1311,7 @@ export const AssistantSheet: React.FC<{
                               setReviewPlan(it.plan!);
                               push('review');
                             }}
-                            className="!h-[32px] !px-4 !text-[14px]"
+                            className="!h-[32px] !px-4 !text-[15px]"
                           >
                             Review
                           </Button>
@@ -1321,14 +1322,14 @@ export const AssistantSheet: React.FC<{
                   {!it.streaming && it.actions && it.actions.length > 0 && (
                     <div className="flex flex-wrap gap-2">
                       {it.actions.map((x, k) => (
-                        <Button key={k} tone="gray" onClick={() => onAction?.(x)} className="!h-[34px] !px-4 !text-[14px]">
+                        <Button key={k} tone="gray" onClick={() => onAction?.(x)} className="!h-[34px] !px-4 !text-[15px]">
                           {x.label}
                         </Button>
                       ))}
                     </div>
                   )}
                   {it.error && (
-                    <p className="text-[14px]" style={{ color: ios.orange }}>
+                    <p className="text-[15px]" style={{ color: ios.orange }}>
                       {it.error}
                     </p>
                   )}
@@ -1344,7 +1345,7 @@ export const AssistantSheet: React.FC<{
         <span className="text-[13px] truncate" style={{ color: ios.secondary }}>
           Working on your question…
         </span>
-        <Button tone="gray" onClick={() => abort.current?.abort()} className="!h-[34px] !px-4 !text-[14px] flex-shrink-0">
+        <Button tone="gray" onClick={() => abort.current?.abort()} className="!h-[34px] !px-4 !text-[15px] flex-shrink-0">
           Stop
         </Button>
       </div>
@@ -1370,7 +1371,7 @@ export const AssistantSheet: React.FC<{
           placeholder={status.ready ? 'Ask about your apps, or what to fix…' : status.setupBusy ? `Finishing setup: ${status.setupBusy}…` : 'Set up the built-in AI first'}
           disabled={!status.ready}
           aria-label="Ask Manifexus"
-          className="flex-1 min-h-[38px] max-h-[140px] resize-none rounded-[19px] px-4 py-[8px] text-[15px] leading-[21px] text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0A84FF] placeholder:text-[rgba(235,235,245,0.4)] disabled:opacity-50"
+          className="flex-1 min-h-[38px] max-h-[140px] resize-none rounded-[19px] px-4 py-[8px] text-[15px] leading-[21px] text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0A84FF] placeholder:text-[rgba(235,235,245,0.45)] disabled:opacity-50"
           style={{ background: ios.fill, fieldSizing: 'content' } as React.CSSProperties}
         />
         {(
@@ -1399,14 +1400,14 @@ export const AssistantSheet: React.FC<{
       <span className="flex items-center gap-4">
         {backLabel && onBack && gear}
         {!busy && chats.length > 0 && (
-          <button type="button" onClick={() => { setChats(loadChats()); push('history'); }} aria-label="Previous chats" title="Previous chats" className="p-1 -m-1 rounded hover:opacity-80" style={{ color: ios.blue }}>
+          <button type="button" onClick={() => { setChats(loadChats()); push('history'); }} aria-label="Previous chats" title="Previous chats" className="p-1 -m-1 rounded hover:opacity-80" style={{ color: ios.link }}>
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5M12 7v5l3 2" />
             </svg>
           </button>
         )}
         {items.length > 0 && !busy && (
-          <button type="button" onClick={() => { setItems([]); setChatId(newChatId()); setChats(loadChats()); }} aria-label="New conversation" title="New conversation" className="p-1 -m-1 rounded hover:opacity-80" style={{ color: ios.blue }}>
+          <button type="button" onClick={() => { setItems([]); setChatId(newChatId()); setChats(loadChats()); }} aria-label="New conversation" title="New conversation" className="p-1 -m-1 rounded hover:opacity-80" style={{ color: ios.link }}>
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
             </svg>
@@ -1430,7 +1431,7 @@ export const AssistantSheet: React.FC<{
       bodyRef={bodyRef}
       zIndex={65}
     >
-      <div key={view} className={stack.length > 1 ? 'motion-safe:animate-[ios-push-in_200ms_ease-out]' : ''}>
+      <div key={view} ref={stack.length > 1 ? enter('push') : undefined}>
         {body}
       </div>
     </Sheet>

@@ -74,10 +74,10 @@ export const CommandBlock: React.FC<{ command: string; equivalent?: boolean; exp
   return (
     <div className="min-w-0 rounded-[12px] overflow-hidden" style={{ background: 'rgba(0,0,0,0.34)', boxShadow: '0 0 0 0.5px rgba(255,255,255,0.08)' }}>
       <div className="flex items-start gap-2 pl-3 pr-1.5 py-2">
-        <span className="font-mono text-[12.5px] leading-[20px] select-none" style={{ color: failed ? ios.red : ios.green }} aria-hidden>
+        <span className="font-mono text-[13px] leading-[20px] select-none" style={{ color: failed ? ios.red : ios.green }} aria-hidden>
           $
         </span>
-        <code className="flex-1 min-w-0 font-mono text-[12.5px] leading-[20px] whitespace-pre-wrap break-all" style={{ color: 'rgba(235,235,245,0.94)' }}>
+        <code className="flex-1 min-w-0 font-mono text-[13px] leading-[20px] whitespace-pre-wrap break-all" style={{ color: 'rgba(235,235,245,0.94)' }}>
           {command}
         </code>
         <button
@@ -98,7 +98,7 @@ export const CommandBlock: React.FC<{ command: string; equivalent?: boolean; exp
       {showMeaning && (
         <div className="px-3 pt-2 pb-2.5 space-y-1.5" style={{ background: 'rgba(255,255,255,0.035)', borderTop: '0.5px solid rgba(255,255,255,0.07)' }}>
           {parts.length > 0 && (
-            <dl className="grid gap-x-3 gap-y-1 text-[12.5px] leading-[18px]" style={{ gridTemplateColumns: 'max-content minmax(0, 1fr)' }}>
+            <dl className="grid gap-x-3 gap-y-1 text-[13px] leading-[18px]" style={{ gridTemplateColumns: 'max-content minmax(0, 1fr)' }}>
               {parts.map((e, i) => (
                 <React.Fragment key={i}>
                   <dt className="font-mono max-w-[38vw] sm:max-w-[200px] truncate" style={{ color: '#9CC8FF' }} title={e.part}>
@@ -110,7 +110,7 @@ export const CommandBlock: React.FC<{ command: string; equivalent?: boolean; exp
             </dl>
           )}
           {notes.map((n, i) => (
-            <p key={i} className="text-[12px] leading-[17px]" style={{ color: ios.tertiary }}>
+            <p key={i} className="text-[12px] leading-[17px]" style={{ color: ios.secondary }}>
               {n}
             </p>
           ))}

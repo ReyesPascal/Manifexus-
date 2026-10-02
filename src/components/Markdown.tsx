@@ -29,7 +29,7 @@ export function inline(s: string, key: string | number = 0): React.ReactNode[] {
       const m = /^\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)$/.exec(part);
       if (m)
         return (
-          <a key={k} href={m[2]} target="_blank" rel="noreferrer noopener" className="underline underline-offset-2" style={{ color: ios.blue }}>
+          <a key={k} href={m[2]} target="_blank" rel="noreferrer noopener" className="underline underline-offset-2" style={{ color: ios.link }}>
             {m[1]}
           </a>
         );
@@ -43,7 +43,7 @@ const CodeBlock: React.FC<{ code: string; lang?: string }> = ({ code, lang }) =>
   const [copied, setCopied] = useState(false);
   return (
     <div className="rounded-[10px] overflow-hidden" style={{ background: 'rgba(0,0,0,0.38)', boxShadow: '0 0 0 0.5px rgba(255,255,255,0.08)' }}>
-      <div className="flex items-center justify-between px-3 h-[28px] text-[11.5px]" style={{ color: ios.tertiary, borderBottom: '0.5px solid rgba(255,255,255,0.06)' }}>
+      <div className="flex items-center justify-between px-3 h-[28px] text-[12px]" style={{ color: ios.secondary, borderBottom: '0.5px solid rgba(255,255,255,0.06)' }}>
         <span className="uppercase tracking-wide font-medium">{lang || 'text'}</span>
         <button
           type="button"
@@ -59,7 +59,7 @@ const CodeBlock: React.FC<{ code: string; lang?: string }> = ({ code, lang }) =>
           {copied ? 'Copied' : 'Copy'}
         </button>
       </div>
-      <pre className="px-3 py-2.5 font-mono text-[12.5px] leading-[19px] overflow-x-auto whitespace-pre" style={{ color: 'rgba(235,235,245,0.85)' }}>
+      <pre className="px-3 py-2.5 font-mono text-[13px] leading-[19px] overflow-x-auto whitespace-pre" style={{ color: 'rgba(235,235,245,0.85)' }}>
         {code}
       </pre>
     </div>
@@ -180,7 +180,7 @@ export const Markdown: React.FC<{ text: string; lead?: boolean; className?: stri
         }
         if (b.t === 'h')
           return (
-            <p key={i} className={`font-semibold text-white ${b.level <= 2 ? 'text-[17px] leading-[24px] pt-1' : 'text-[15.5px]'}`}>
+            <p key={i} className={`font-semibold text-white ${b.level <= 2 ? 'text-[17px] leading-[24px] pt-1' : 'text-[16px]'}`}>
               {inline(b.text, i)}
             </p>
           );
@@ -197,7 +197,7 @@ export const Markdown: React.FC<{ text: string; lead?: boolean; className?: stri
         if (b.t === 'table')
           return (
             <div key={i} className="overflow-x-auto rounded-[10px]" style={{ boxShadow: '0 0 0 0.5px rgba(255,255,255,0.1)' }}>
-              <table className="w-full text-[13.5px] leading-[19px]">
+              <table className="w-full text-[13px] leading-[19px]">
                 <thead>
                   <tr style={{ background: 'rgba(255,255,255,0.06)' }}>
                     {b.head.map((c, k) => (
@@ -228,7 +228,7 @@ export const Markdown: React.FC<{ text: string; lead?: boolean; className?: stri
             {b.items.map((it, k) => (
               <li key={k} className="flex gap-2.5">
                 {b.ordered ? (
-                  <span className="mt-[2px] w-[20px] h-[20px] rounded-full flex items-center justify-center text-[11.5px] font-semibold flex-shrink-0 tabular-nums" style={{ background: 'rgba(10,132,255,0.2)', color: ios.blue }}>
+                  <span className="mt-[2px] w-[20px] h-[20px] rounded-full flex items-center justify-center text-[12px] font-semibold flex-shrink-0 tabular-nums" style={{ background: 'rgba(10,132,255,0.2)', color: ios.link }}>
                     {it.num ?? k + 1}
                   </span>
                 ) : (
@@ -239,7 +239,7 @@ export const Markdown: React.FC<{ text: string; lead?: boolean; className?: stri
                   {it.children.length > 0 && (
                     <ul className="mt-1 space-y-1">
                       {it.children.map((c, j) => (
-                        <li key={j} className="flex gap-2 text-[14px]" style={{ color: ios.secondary }}>
+                        <li key={j} className="flex gap-2 text-[15px]" style={{ color: ios.secondary }}>
                           <span className="mt-[8px] w-[4px] h-[4px] rounded-full flex-shrink-0" style={{ background: ios.tertiary }} />
                           <span className="min-w-0">{inline(c, `${i}-${k}-${j}`)}</span>
                         </li>

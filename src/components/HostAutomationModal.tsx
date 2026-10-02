@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { enter } from '../motion';
 import { ShieldCheck } from 'lucide-react';
 import { AutomationPrivileges } from '../types';
 import { BackButton, Group, IconTile, LinkButton, Row, SectionFooter, SectionHeader, Sheet, Switch, ios } from './ui/ios';
@@ -37,8 +38,8 @@ export const StepMark: React.FC<{ status: Step['status'] }> = ({ status }) =>
       style={{ background: status === 'done' ? ios.green : status === 'warn' ? ios.orange : ios.red }}
       aria-label={status === 'done' ? 'Done' : status === 'warn' ? 'Not available' : 'Didn’t work'}
     >
-      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-        {status === 'done' ? <path d="m5 12.5 4.5 4.5L19 7.5" /> : status === 'warn' ? <path d="M12 6v7M12 18h.01" /> : <path d="M6 6l12 12M18 6 6 18" />}
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden ref={enter('draw')}>
+        {status === 'done' ? <path d="m5 12.5 4.5 4.5L19 7.5" pathLength={1} /> : status === 'warn' ? <path d="M12 6v7M12 18h.01" /> : <path d="M6 6l12 12M18 6 6 18" />}
       </svg>
     </span>
   );

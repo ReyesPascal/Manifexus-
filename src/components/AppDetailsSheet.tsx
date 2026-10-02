@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { enter } from '../motion';
 import {
   BackButton,
   Button,
@@ -181,7 +182,7 @@ const Stat: React.FC<{ label: string; value: string; sub?: string; tone?: string
       {value}
     </div>
     {sub && (
-      <div className="mt-0.5 text-[11.5px] truncate" style={{ color: ios.tertiary }}>
+      <div className="mt-0.5 text-[12px] truncate" style={{ color: ios.secondary }}>
         {sub}
       </div>
     )}
@@ -224,9 +225,9 @@ const StorageRow: React.FC<{ mount: ContainerMount }> = ({ mount: m }) => {
           setTimeout(() => setCopied(false), 1400);
         }
       }}
-      title={<span className="font-mono text-[14px] truncate block">{m.destination}</span>}
+      title={<span className="font-mono text-[15px] truncate block">{m.destination}</span>}
       subtitle={
-        <span className="font-mono text-[12.5px] truncate block" style={{ color: copied ? ios.green : undefined }}>
+        <span className="font-mono text-[13px] truncate block" style={{ color: copied ? ios.green : undefined }}>
           {copied ? 'Copied' : m.type === 'volume' && m.name ? `Volume “${m.name}”` : m.source}
         </span>
       }
@@ -253,7 +254,7 @@ const LinkRow: React.FC<{ title: string; url: string; display: string }> = ({ ti
     onClick={() => window.open(url, '_blank', 'noopener')}
     title={title}
     trailing={
-      <span className="inline-flex items-center gap-1 max-w-[62vw] sm:max-w-[360px]" style={{ color: ios.blue }}>
+      <span className="inline-flex items-center gap-1 max-w-[62vw] sm:max-w-[360px]" style={{ color: ios.link }}>
         <span className="truncate">{display}</span>
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden className="flex-shrink-0">
           <path d="M7 17 17 7M9 7h8v8" />
@@ -445,7 +446,7 @@ export const AppDetailsSheet: React.FC<{
     const state = diag?.checks.find((c) => c.id === 'state');
     const unhealthy = diag?.checks.find((c) => c.id === 'health' && c.level === 'error');
     if (unhealthy) return { text: 'Running · Unhealthy', color: ios.orange, bg: 'rgba(255,159,10,0.15)' };
-    if (state?.title === 'Keeps restarting') return { text: 'Keeps Restarting', color: ios.red, bg: 'rgba(255,69,58,0.15)' };
+    if (state?.title === 'Keeps restarting') return { text: 'Keeps Restarting', color: ios.redText, bg: 'rgba(255,69,58,0.15)' };
     if (running) return { text: `Running${diag?.onServerSince || diag?.startedAt ? ` · ${uptime(diag.onServerSince || diag.startedAt)}` : ''}`, color: ios.green, bg: 'rgba(48,209,88,0.15)' };
     return {
       text: `Stopped${diag?.exitCode !== undefined ? ` · exit ${diag.exitCode}` : ''}`,
@@ -507,27 +508,27 @@ export const AppDetailsSheet: React.FC<{
           <div className="mt-5 flex flex-wrap justify-center gap-2">
             {system ? (
               <>
-                <Button onClick={copyReport} variant="tinted" className="!h-[36px] !px-4 !text-[14px]">
+                <Button onClick={copyReport} variant="tinted" className="!h-[36px] !px-4 !text-[15px]">
                   {report === 'busy' ? 'Preparing…' : report === 'done' ? 'Copied' : report === 'failed' ? 'Couldn’t Copy' : 'Copy Report'}
                 </Button>
-                <Button onClick={() => download('/api/diagnostics/report?download=1')} tone="gray" className="!h-[36px] !px-4 !text-[14px]">
+                <Button onClick={() => download('/api/diagnostics/report?download=1')} tone="gray" className="!h-[36px] !px-4 !text-[15px]">
                   Download
                 </Button>
               </>
             ) : (
               <>
                 {launchUrl && running && (
-                  <Button onClick={() => window.open(launchUrl, '_blank', 'noopener')} variant="tinted" className="!h-[36px] !px-4 !text-[14px]">
+                  <Button onClick={() => window.open(launchUrl, '_blank', 'noopener')} variant="tinted" className="!h-[36px] !px-4 !text-[15px]">
                     Open
                   </Button>
                 )}
                 {onAction && running && (
-                  <Button onClick={() => act('restart')} tone="gray" disabled={Boolean(busyAction)} className="!h-[36px] !px-4 !text-[14px]">
+                  <Button onClick={() => act('restart')} tone="gray" disabled={Boolean(busyAction)} className="!h-[36px] !px-4 !text-[15px]">
                     {busyAction === 'restart' ? 'Restarting…' : 'Restart'}
                   </Button>
                 )}
                 {onAction && (
-                  <Button onClick={() => act(running ? 'stop' : 'start')} tone="gray" disabled={Boolean(busyAction)} className="!h-[36px] !px-4 !text-[14px]">
+                  <Button onClick={() => act(running ? 'stop' : 'start')} tone="gray" disabled={Boolean(busyAction)} className="!h-[36px] !px-4 !text-[15px]">
                     {busyAction === 'stop' ? 'Stopping…' : busyAction === 'start' ? 'Starting…' : running ? 'Stop' : 'Start'}
                   </Button>
                 )}
@@ -554,7 +555,7 @@ export const AppDetailsSheet: React.FC<{
                     })
                   }
                   leading={<FixGlyph />}
-                  title={<span style={{ color: ios.blue }}>{issues.length === 1 ? 'Fix This' : 'Fix These'}</span>}
+                  title={<span style={{ color: ios.link }}>{issues.length === 1 ? 'Fix This' : 'Fix These'}</span>}
                   subtitle={issues.some((c) => c.fix?.auto) ? 'Automatically, step by step yourself, or with the built-in AI' : 'Step by step yourself, or with the built-in AI'}
                   chevron
                 />
@@ -606,7 +607,7 @@ export const AppDetailsSheet: React.FC<{
                 <Row
                   key={i}
                   leading={<span className="w-[7px] h-[7px] rounded-full" style={{ background: e.level === 'warn' || e.level === 'error' ? ios.orange : ios.blue }} />}
-                  title={<span className="text-[14px] whitespace-normal">{eventText(e.message, container.cleanName)}</span>}
+                  title={<span className="text-[15px] whitespace-normal">{eventText(e.message, container.cleanName)}</span>}
                   trailing={<span className="text-[13px] tabular-nums whitespace-nowrap">{fmtWhen(e.ts)}</span>}
                 />
               ))}
@@ -710,7 +711,7 @@ export const AppDetailsSheet: React.FC<{
         {!system && !partOf && onDeleteApp && (
           <section>
             <Group>
-              <Row onClick={onDeleteApp} title={<span style={{ color: ios.red }}>Delete App…</span>} />
+              <Row onClick={onDeleteApp} title={<span style={{ color: ios.redText }}>Delete App…</span>} />
             </Group>
             <SectionFooter>
               Removes {container.customName || container.friendlyName || container.cleanName}
@@ -850,7 +851,7 @@ export const AppDetailsSheet: React.FC<{
                 {l || ' '}
               </div>
             ))}
-            {q && shown.length === 0 && <div style={{ color: ios.tertiary }}>No lines match.</div>}
+            {q && shown.length === 0 && <div style={{ color: ios.secondary }}>No lines match.</div>}
           </div>
         )}
       </div>
@@ -942,7 +943,7 @@ export const AppDetailsSheet: React.FC<{
               onChange={(e) => setCustom((c) => ({ ...c, notes: e.target.value }))}
               rows={4}
               placeholder="Anything you want to remember about this app"
-              className="w-full bg-transparent px-4 py-3 text-[15px] leading-[21px] resize-none focus:outline-none placeholder:text-[rgba(235,235,245,0.3)]"
+              className="w-full bg-transparent px-4 py-3 text-[15px] leading-[21px] resize-none focus:outline-none placeholder:text-[rgba(235,235,245,0.45)]"
               style={{ color: ios.label }}
             />
           </Group>
@@ -990,7 +991,7 @@ export const AppDetailsSheet: React.FC<{
       footer={footer}
       bodyRef={bodyRef}
     >
-      <div key={view} className={stack.length > 1 ? 'motion-safe:animate-[ios-push-in_200ms_ease-out]' : ''}>
+      <div key={view} ref={stack.length > 1 ? enter('push') : undefined}>
         {body}
       </div>
     </Sheet>
@@ -1010,7 +1011,7 @@ const EnvList: React.FC<{ vars: { key: string; value: string; isSensitive: boole
       <Group>
         {list.map((v) =>
           v.isSensitive ? (
-            <Row key={v.key} title={<span className="font-mono text-[13px]">{v.key}</span>} trailing={<span style={{ color: ios.tertiary }}>Hidden</span>} />
+            <Row key={v.key} title={<span className="font-mono text-[13px]">{v.key}</span>} trailing={<span style={{ color: ios.secondary }}>Hidden</span>} />
           ) : (
             <CopyRow key={v.key} title={v.key} value={v.value} mono />
           )

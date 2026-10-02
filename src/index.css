@@ -1,5 +1,36 @@
 @import "tailwindcss";
 
+/* Type: Inter for everything people read (bundled, so it looks the same on Mac, Windows and Linux, and works
+   offline), Geist Mono only for real paths, commands and code. Both under the SIL Open Font License (see
+   src/assets/fonts). Inter's display cuts kick in on their own at large sizes (optical sizing), and its
+   alternate l and I keep 1 / l / I apart in small text. */
+@font-face {
+  font-family: 'Inter';
+  src: url('./assets/fonts/InterVariable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Geist Mono';
+  src: url('./assets/fonts/GeistMono-Variable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+:root {
+  --mfx-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, 'Segoe UI', Roboto, sans-serif;
+  --mfx-mono: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+html, body {
+  font-family: var(--mfx-sans);
+  font-optical-sizing: auto;
+  font-feature-settings: 'cv05' 1, 'cv08' 1;
+  -webkit-font-smoothing: antialiased;
+}
+button, input, select, textarea { font-family: inherit; font-feature-settings: inherit; }
+.font-mono, code, pre, kbd, samp { font-family: var(--mfx-mono) !important; font-feature-settings: normal; }
+
 @layer utilities {
   /* Glowing pulse for active container telemetry */
   @keyframes cyber-pulse {
@@ -140,13 +171,58 @@ body {
 }
 .mfx-pop { animation: mfx-pop 0.45s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
 
-/* An app restarting or moving: a soft blue ring breathes around its card */
-@keyframes mfx-busy {
-  0%, 100% { box-shadow: 0 0 0 2px rgba(10, 132, 255, 0.35), 0 0 12px rgba(10, 132, 255, 0.15); }
-  50% { box-shadow: 0 0 0 2px rgba(10, 132, 255, 0.85), 0 0 30px rgba(10, 132, 255, 0.35); }
+/* An app restarting or moving (React Bits' BorderGlow): a light travels around its card's edge, over a
+   steady soft blue ring, so it's clear something is happening without flashing */
+@property --mfx-angle { syntax: '<angle>'; initial-value: 0deg; inherits: false; }
+@keyframes mfx-orbit { to { --mfx-angle: 360deg; } }
+.mfx-busy { box-shadow: 0 0 0 1.5px rgba(10, 132, 255, 0.45), 0 0 22px rgba(10, 132, 255, 0.22); }
+.mfx-busy::before {
+  content: '';
+  position: absolute;
+  inset: -1.5px;
+  border-radius: inherit;
+  padding: 1.5px;
+  pointer-events: none;
+  background: conic-gradient(from var(--mfx-angle), transparent 0deg, rgba(125, 190, 255, 0.95) 50deg, transparent 110deg);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+  animation: mfx-orbit 2.2s linear infinite;
 }
-.mfx-busy { animation: mfx-busy 1.1s ease-in-out infinite; }
+
+/* Work in progress (React Bits' ShinyText): a soft light sweeps across "Moving…", "Starting…" */
+@keyframes mfx-shimmer { from { background-position: 150% 0; } to { background-position: -50% 0; } }
+.mfx-shimmer {
+  background: linear-gradient(100deg, currentColor 35%, rgba(255, 255, 255, 0.95) 50%, currentColor 65%) 0 0 / 250% 100% no-repeat;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: mfx-shimmer 2s linear infinite;
+}
+
+
 
 @media (prefers-reduced-motion: reduce) {
-  .mfx-pop, .mfx-busy { animation: none; }
+  .mfx-pop, .mfx-busy, .mfx-busy::before, .mfx-shimmer { animation: none !important; }
+  .mfx-shimmer { -webkit-text-fill-color: currentColor; background: none; }
+}
+
+/* Light on glass (from React Bits' SpotlightCard): a soft highlight follows the pointer across a stack,
+   the way light catches a pane of glass. Quiet by design; off with Reduce Motion or Reduce Transparency. */
+.mfx-specular { position: relative; }
+.mfx-specular::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 400ms ease;
+  background: radial-gradient(520px circle at var(--mx, 50%) var(--my, 0%), rgba(255, 255, 255, 0.075), transparent 45%);
+}
+@media (hover: hover) and (pointer: fine) {
+  .mfx-specular:hover::after { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce), (prefers-reduced-transparency: reduce) {
+  .mfx-specular::after { display: none; }
 }

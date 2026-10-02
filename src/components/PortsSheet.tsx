@@ -137,7 +137,7 @@ export const PortsSheet: React.FC<PortsSheetProps> = ({ open, onClose, container
                   trailing={
                     <>
                       {portText(e.hostPort)}
-                      <span style={{ color: ios.blue }}>
+                      <span style={{ color: ios.link }}>
                         <ExternalGlyph />
                       </span>
                     </>
@@ -182,7 +182,7 @@ export const PortsSheet: React.FC<PortsSheetProps> = ({ open, onClose, container
                   leading={<AppIcon container={e.app} size={29} />}
                   title={appName(e.app)}
                   subtitle={describe(e)}
-                  trailing={<span className="font-mono text-[15px] tabular-nums" style={{ color: ios.tertiary }}>{e.hostPort}</span>}
+                  trailing={<span className="font-mono text-[15px] tabular-nums" style={{ color: ios.secondary }}>{e.hostPort}</span>}
                 />
               ))}
             </Group>

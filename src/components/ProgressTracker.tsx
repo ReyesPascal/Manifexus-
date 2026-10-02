@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { enter } from '../motion';
 import { createPortal } from 'react-dom';
 import { usePrefs } from '../prefs';
 import { CommandItem, StepCommands, useLearn, useLearnSteps } from './Commands';
@@ -150,9 +151,10 @@ const Spinner: React.FC<{ size: number; color?: string }> = ({ size, color = '#f
   </svg>
 );
 
+/** A mark that draws itself in when it appears (React Bits' StatusMark) */
 const Mark: React.FC<{ d: string; size: number; stroke?: number }> = ({ d, size, stroke = 3 }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <path d={d} />
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" ref={enter('draw')}>
+    <path d={d} pathLength={1} />
   </svg>
 );
 
@@ -183,7 +185,7 @@ const StepIcon: React.FC<{ step: TrackerStep }> = ({ step }) => {
   return (
     <span
       className={`${box} text-[12px] font-semibold tabular-nums`}
-      style={{ boxShadow: `inset 0 0 0 1.5px ${step.status === 'skipped' ? 'rgba(235,235,245,0.18)' : 'rgba(235,235,245,0.3)'}`, color: ios.tertiary }}
+      style={{ boxShadow: `inset 0 0 0 1.5px ${step.status === 'skipped' ? 'rgba(235,235,245,0.18)' : 'rgba(235,235,245,0.45)'}`, color: ios.secondary }}
     >
       {step.index}
     </span>
@@ -261,9 +263,11 @@ export const ProgressView: React.FC<{
   const current = run.steps.find((s) => s.status === 'running');
   const tile =
     run.status === 'done' ? (
-      <IconTile color={ios.green} size={60}>
-        <Mark d={CHECK} size={32} />
-      </IconTile>
+      <span ref={enter('badge')} className="inline-flex">
+        <IconTile color={ios.green} size={60}>
+          <Mark d={CHECK} size={32} />
+        </IconTile>
+      </span>
     ) : run.status === 'failed' ? (
       <IconTile color={ios.red} size={60}>
         <Mark d={BANG} size={32} stroke={3.2} />
@@ -288,8 +292,8 @@ export const ProgressView: React.FC<{
         : run.status === 'failed'
           ? run.message || 'Something went wrong.'
           : current?.name
-            ? `${current.name}…`
-            : 'Starting…';
+            ? <span className="mfx-shimmer">{current.name}…</span>
+            : <span className="mfx-shimmer">Starting…</span>;
 
   const openActivity = () => run.activityId && window.dispatchEvent(new CustomEvent('manifexus:open-activity', { detail: { id: run.activityId } }));
   const copyReport = async () => {
@@ -310,13 +314,13 @@ export const ProgressView: React.FC<{
         {tile}
         <h3 className="mt-4 text-[22px] leading-[27px] font-semibold text-white px-4">{title}</h3>
         <p
-          className="mt-1.5 text-[14px] leading-[19px] max-w-[460px] px-4 break-words line-clamp-3"
+          className="mt-1.5 text-[15px] leading-[19px] max-w-[460px] px-4 break-words line-clamp-3"
           style={{ color: run.status === 'failed' ? '#FF8A80' : ios.secondary }}
         >
           {subtitle}
         </p>
         {run.status === 'done' && onDone && !onFinished && !showCommands && (
-          <p className="mt-3 text-[12px]" style={{ color: ios.tertiary }}>
+          <p className="mt-3 text-[12px]" style={{ color: ios.secondary }}>
             Closing…
           </p>
         )}
@@ -356,7 +360,7 @@ export const ProgressView: React.FC<{
               <Row
                 leading={<StepIcon step={s} />}
                 title={
-                  <span style={{ color: s.status === 'pending' || s.status === 'skipped' ? ios.tertiary : s.status === 'failed' ? '#FF8A80' : ios.label }}>
+                  <span className={s.status === 'running' ? 'mfx-shimmer' : undefined} style={{ color: s.status === 'pending' || s.status === 'skipped' ? ios.secondary : s.status === 'failed' ? '#FF8A80' : ios.label }}>
                     {s.name}
                   </span>
                 }
@@ -407,7 +411,7 @@ const AllStepsSheet: React.FC<{ open: boolean; onClose: () => void; run: RunStat
             <div key={s.index}>
               <Row
                 leading={<StepIcon step={s} />}
-                title={<span style={{ color: s.status === 'failed' ? '#FF8A80' : s.status === 'pending' || s.status === 'skipped' ? ios.tertiary : ios.label }}>{s.name}</span>}
+                title={<span style={{ color: s.status === 'failed' ? '#FF8A80' : s.status === 'pending' || s.status === 'skipped' ? ios.secondary : ios.label }}>{s.name}</span>}
                 subtitle={s.status === 'failed' && s.detail ? <span className="break-words">{s.detail}</span> : undefined}
                 trailing={s.durationMs !== undefined ? <span className="text-[13px] tabular-nums">{fmt(s.durationMs)}</span> : undefined}
               />

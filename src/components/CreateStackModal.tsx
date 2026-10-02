@@ -110,7 +110,7 @@ export const CreateStackModal: React.FC<CreateStackModalProps> = ({ isOpen, onCl
           </span>
         </div>
         <h3 className="mt-4 text-[22px] font-semibold text-white">{made.name} Is Ready</h3>
-        <p className="mt-1.5 text-[14px] leading-[20px] max-w-[420px]" style={{ color: ios.secondary }}>
+        <p className="mt-1.5 text-[15px] leading-[20px] max-w-[420px]" style={{ color: ios.secondary }}>
           Its folder is <span className="font-mono text-[13px] text-white/80">{made.dir}</span>. Add apps to it now, or anytime with the + on the stack.
         </p>
       </div>
@@ -152,11 +152,11 @@ export const CreateStackModal: React.FC<CreateStackModalProps> = ({ isOpen, onCl
             aria-label="Choose an icon for this stack"
           >
             <IconTileFor choice={shownIcon} size={72} />
-            <span className="text-[13px] font-medium group-hover:opacity-80" style={{ color: ios.blue }}>
+            <span className="text-[13px] font-medium group-hover:opacity-80" style={{ color: ios.link }}>
               Edit Icon
             </span>
           </button>
-          <p className="mt-3 text-[14px] leading-[20px] max-w-[440px]" style={{ color: ios.secondary }}>
+          <p className="mt-3 text-[15px] leading-[20px] max-w-[440px]" style={{ color: ios.secondary }}>
             A stack is a folder for apps that belong together, like a media server and its downloaders. It starts empty; you add apps next.
           </p>
         </div>
@@ -181,7 +181,7 @@ export const CreateStackModal: React.FC<CreateStackModalProps> = ({ isOpen, onCl
               problem
             ) : (
               <>
-                Folder: <span className="font-mono text-[12.5px]" style={{ color: slug ? 'rgba(235,235,245,0.85)' : undefined }}>{folder}</span>
+                Folder: <span className="font-mono text-[13px]" style={{ color: slug ? 'rgba(235,235,245,0.85)' : undefined }}>{folder}</span>
               </>
             )}
           </SectionFooter>
@@ -202,7 +202,7 @@ export const CreateStackModal: React.FC<CreateStackModalProps> = ({ isOpen, onCl
               <Row
                 title="Put It In"
                 onClick={() => setCustomDir(defaultBaseDir)}
-                trailing={<span className="font-mono text-[13.5px] truncate max-w-[52vw] sm:max-w-[360px]">{defaultBaseDir || '…'}</span>}
+                trailing={<span className="font-mono text-[13px] truncate max-w-[52vw] sm:max-w-[360px]">{defaultBaseDir || '…'}</span>}
                 chevron
               />
             ) : (
@@ -215,7 +215,7 @@ export const CreateStackModal: React.FC<CreateStackModalProps> = ({ isOpen, onCl
         </section>
 
         {error && (
-          <p className="text-[14px] px-1" style={{ color: ios.orange }} role="alert">
+          <p className="text-[15px] px-1" style={{ color: ios.orange }} role="alert">
             {error}
           </p>
         )}
@@ -237,7 +237,7 @@ export const CreateStackModal: React.FC<CreateStackModalProps> = ({ isOpen, onCl
       onClose={onClose}
       leftAction={
         made ? undefined : (
-          <button type="button" onClick={onClose} className="text-[17px] rounded hover:opacity-80 focus-visible:outline-2 focus-visible:outline-[#0A84FF]" style={{ color: ios.blue }}>
+          <button type="button" onClick={onClose} className="text-[17px] rounded hover:opacity-80 focus-visible:outline-2 focus-visible:outline-[#0A84FF]" style={{ color: ios.link }}>
             Cancel
           </button>
         )

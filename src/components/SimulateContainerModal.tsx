@@ -151,7 +151,7 @@ export const SimulateContainerModal: React.FC<SimulateContainerModalProps> = ({
               placeholder="e.g. media-stack, observability, home-suite"
               className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-cyan-500 font-mono"
             />
-            <span className="text-[10px] text-slate-500">
+            <span className="text-[11px] text-slate-500">
               Leave empty to simulate a standalone `docker run` container.
             </span>
           </div>

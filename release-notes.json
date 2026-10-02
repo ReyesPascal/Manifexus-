@@ -2,6 +2,27 @@
   "_about": "What's new in each version of Manifexus, newest first. Shown in Updates. Write for people, not developers: short, plain sentences about what they can now do. The newest entry's version is what gets built and tagged; older entries can give the \"commit\" they were released from.",
   "releases": [
     {
+      "version": "3.0",
+      "date": "2026-10-02",
+      "headline": "A fresh new look, easier to read everywhere.",
+      "new": [
+        "Liquid Glass: the toolbar, search, New Stack and the short messages at the bottom are now Apple-style Liquid Glass. In Chrome, Brave and Edge their edges bend the light behind them; other browsers keep frosted glass.",
+        "Every screen now has the dashboard's look: Settings, Restore, Activity, app and stack details and every other sheet use the same midnight glass as your stacks.",
+        "A new font, Inter, the closest to Apple's own. It's built in, so it looks the same on Mac, Windows and Linux, even with no internet. Paths and commands use Geist Mono."
+      ],
+      "improved": [
+        "Easier to read: the dashboard is drawn at full size, every text size follows Apple's type scale, nothing is smaller than 11 points, and quiet labels, links, warnings and placeholders all meet Apple's contrast guidelines.",
+        "Smoother motion everywhere: screens rise into place and their lists arrive one row after another, apps glide to their new stack, and numbers count to their new value. With Reduce Motion on, everything just appears.",
+        "Long screens fade softly under their title bar and buttons instead of being cut off.",
+        "Choices like Simple / Advanced slide to what you pick, like on iPhone.",
+        "Work in progress is easy to spot: \"Moving…\" and \"Restarting…\" shimmer while they run, a busy app has a light circling its card, and a finished job draws its check mark.",
+        "Point at a stack and a soft light follows your pointer across its glass.",
+        "Getting Started shows your progress as dots, and Manifexus welcomes you the very first time it opens.",
+        "Bigger, easier-to-hit buttons, like the rename pencil."
+      ],
+      "fixed": []
+    },
+    {
       "version": "2.9",
       "date": "2026-10-02",
       "headline": "Practice on a messy server before touching yours.",

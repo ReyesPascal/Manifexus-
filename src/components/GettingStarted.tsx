@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { enter } from '../motion';
 import { ShieldCheck, Layers, History, Search } from 'lucide-react';
 import { AutomationPrivileges, ManifexusConfig } from '../types';
 import { BackButton, Button, FieldRow, Group, IconTile, LinkButton, Row, SectionFooter, SectionHeader, Segmented, Sheet, Switch, ios } from './ui/ios';
@@ -108,7 +109,7 @@ export const GettingStartedSheet: React.FC<SetupProps> = ({ open, config, onSave
           <div className="w-[76px] h-[76px] rounded-[19px] flex items-center justify-center" style={{ background: 'linear-gradient(145deg, #3d8bff, #6a5cff)', boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.35), 0 12px 28px -10px rgba(40,90,255,0.6)' }}>
             <Layers className="w-9 h-9 text-white" />
           </div>
-          <h3 className="mt-4 text-[26px] font-semibold text-white tracking-[-0.02em]">Welcome to Manifexus</h3>
+          <h3 className="mt-4 text-[28px] font-semibold text-white tracking-[-0.02em]">Welcome to Manifexus</h3>
           <p className="mt-1.5 text-[15px] leading-[21px] max-w-[440px]" style={{ color: ios.secondary }}>
             All your Docker apps in one place. A minute of setup, then a quick tour of where everything is.
           </p>
@@ -137,7 +138,7 @@ export const GettingStartedSheet: React.FC<SetupProps> = ({ open, config, onSave
             <FieldRow id="gs-address" label="Address" value={address} onChange={setAddress} placeholder="localhost" autoFocus />
           </Group>
           <SectionFooter>
-            Apps open at addresses like <span className="font-mono text-[12.5px]" style={{ color: 'rgba(235,235,245,0.85)' }}>http://{address.trim() || 'localhost'}:8080</span>. This is filled in with the address you used to open Manifexus.
+            Apps open at addresses like <span className="font-mono text-[13px]" style={{ color: 'rgba(235,235,245,0.85)' }}>http://{address.trim() || 'localhost'}:8080</span>. This is filled in with the address you used to open Manifexus.
           </SectionFooter>
         </section>
       </div>
@@ -222,7 +223,7 @@ export const GettingStartedSheet: React.FC<SetupProps> = ({ open, config, onSave
             <path d="m5 12.5 4.5 4.5L19 7.5" />
           </svg>
         </span>
-        <h3 className="mt-4 text-[24px] font-semibold text-white">You’re All Set</h3>
+        <h3 className="mt-4 text-[22px] font-semibold text-white"><BlurIn text="You’re All Set" /></h3>
         <p className="mt-1.5 text-[15px] leading-[21px] max-w-[420px]" style={{ color: ios.secondary }}>
           Next, practice on a pretend server that’s gotten messy: tidy it up and undo a change, safely. Then a quick look around your real dashboard. You can do this again anytime from Settings.
         </p>
@@ -245,7 +246,7 @@ export const GettingStartedSheet: React.FC<SetupProps> = ({ open, config, onSave
     <Sheet
       open={open}
       title="Getting Started"
-      subtitle={stepNo ? `Step ${stepNo} of 4` : undefined}
+      subtitle={stepNo ? <Steps at={stepNo} of={4} /> : undefined}
       onClose={() => void finish(false)}
       closeLabel={page === 'done' ? 'Done' : 'Skip'}
       leftAction={at > 0 && page !== 'done' ? <BackButton label="Back" onClick={() => setPage(PAGES[at - 1])} /> : undefined}
@@ -256,6 +257,30 @@ export const GettingStartedSheet: React.FC<SetupProps> = ({ open, config, onSave
     </Sheet>
   );
 };
+
+/** Where you are in setup (React Bits' Stepper): done steps green, this one blue and wider */
+const Steps: React.FC<{ at: number; of: number }> = ({ at, of }) => (
+  <span className="inline-flex items-center gap-1.5 align-middle" role="img" aria-label={`Step ${at} of ${of}`}>
+    {Array.from({ length: of }, (_, i) => (
+      <span
+        key={i}
+        className="h-[6px] rounded-full transition-all duration-300 ease-out motion-reduce:transition-none"
+        style={{ width: i + 1 === at ? 20 : 6, background: i + 1 < at ? ios.green : i + 1 === at ? ios.blue : 'rgba(235,235,245,0.3)' }}
+      />
+    ))}
+  </span>
+);
+
+/** Letters that come into focus one after another (React Bits' BlurText) */
+export const BlurIn: React.FC<{ text: string; className?: string; style?: React.CSSProperties }> = ({ text, className = '', style }) => (
+  <span ref={enter('blur')} className={className} style={style} aria-label={text}>
+    {Array.from(text).map((ch, i) => (
+      <span key={i} aria-hidden style={{ display: 'inline-block', whiteSpace: 'pre' }}>
+        {ch}
+      </span>
+    ))}
+  </span>
+);
 
 const Intro: React.FC<{ title: string; text: string }> = ({ title, text }) => (
   <div className="text-center pt-2">
@@ -427,7 +452,7 @@ export const Tour: React.FC<{ open: boolean; onClose: () => void; onClearSearch?
             {i + 1} of {TOUR.length}
           </span>
         </div>
-        <p className="mt-1 text-[14px] leading-[20px]" style={{ color: 'rgba(235,235,245,0.8)' }}>
+        <p className="mt-1 text-[15px] leading-[20px]" style={{ color: 'rgba(235,235,245,0.8)' }}>
           {step.text}
         </p>
         {step.tryIt && (

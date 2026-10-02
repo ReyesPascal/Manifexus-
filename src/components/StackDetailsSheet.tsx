@@ -79,7 +79,7 @@ export const StackDetailsSheet: React.FC<{
           >
             {icon || <StackIcon name={displayName || project} apps={apps} choice={iconChoice} size={72} />}
             {onChooseIcon && (
-              <span className="text-[13px] font-medium group-hover:opacity-80" style={{ color: ios.blue }}>
+              <span className="text-[13px] font-medium group-hover:opacity-80" style={{ color: ios.link }}>
                 Edit Icon
               </span>
             )}
@@ -105,34 +105,34 @@ export const StackDetailsSheet: React.FC<{
                 onRename(n);
               }}
               onCancel={() => setRenaming(false)}
-              className="mt-3.5 text-[24px] leading-[29px] h-[36px] font-semibold text-center max-w-[320px]"
+              className="mt-3.5 text-[22px] leading-[29px] h-[36px] font-semibold text-center max-w-[320px]"
               style={{ fontFamily: displayFont, letterSpacing: '-0.02em' }}
             />
           ) : (
-            <h3 className="mt-3.5 text-[24px] leading-[29px] font-semibold text-white" style={{ fontFamily: displayFont, letterSpacing: '-0.02em' }}>
+            <h3 className="mt-3.5 text-[22px] leading-[29px] font-semibold text-white" style={{ fontFamily: displayFont, letterSpacing: '-0.02em' }}>
               {displayName || project}
             </h3>
           )}
           {displayName && displayName !== project && (
-            <div className="mt-0.5 text-[13px] font-mono" style={{ color: ios.tertiary }}>
+            <div className="mt-0.5 text-[13px] font-mono" style={{ color: ios.secondary }}>
               {project}
             </div>
           )}
-          <div className="mt-1 text-[14px]" style={{ color: ios.secondary }}>
+          <div className="mt-1 text-[15px]" style={{ color: ios.secondary }}>
             <Health apps={apps} alsoCheck={apps.flatMap((a) => helpersOf?.get(a.id) || [])} />
             {note && ` · ${note}`}
           </div>
           <div className="mt-4 flex flex-wrap justify-center gap-2">
-            <Button onClick={onAddApp} variant="tinted" className="!h-[36px] !px-4 !text-[14px]">
+            <Button onClick={onAddApp} variant="tinted" className="!h-[36px] !px-4 !text-[15px]">
               {addLabel}
             </Button>
             {onRename && !renaming && (
-              <Button onClick={() => setRenaming(true)} tone="gray" className="!h-[36px] !px-4 !text-[14px]">
+              <Button onClick={() => setRenaming(true)} tone="gray" className="!h-[36px] !px-4 !text-[15px]">
                 Rename
               </Button>
             )}
             {onEditCompose && (
-              <Button onClick={onEditCompose} tone="gray" className="!h-[36px] !px-4 !text-[14px]">
+              <Button onClick={onEditCompose} tone="gray" className="!h-[36px] !px-4 !text-[15px]">
                 Edit Compose File
               </Button>
             )}
@@ -183,7 +183,7 @@ export const StackDetailsSheet: React.FC<{
         <section>
           <Group>
             <Row onClick={onOpenRestore} title="Restore" subtitle="Go back to before any change to this stack" chevron />
-            {onDelete && <Row onClick={onDelete} title={<span style={{ color: ios.red }}>Delete Stack…</span>} />}
+            {onDelete && <Row onClick={onDelete} title={<span style={{ color: ios.redText }}>Delete Stack…</span>} />}
           </Group>
           {onDelete && <SectionFooter>Deleting keeps a full backup first, so it can be undone from Restore.</SectionFooter>}
         </section>

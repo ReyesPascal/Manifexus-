@@ -52,7 +52,7 @@ const Header: React.FC<{ title: string; sub: React.ReactNode; icon?: React.React
   <div className="flex flex-col items-center text-center pt-1">
     {icon || <AssistantIcon size={60} />}
     <h3 className="mt-3.5 text-[22px] leading-[27px] font-semibold text-white">{title}</h3>
-    <p className="mt-1.5 text-[14px] leading-[20px] max-w-[470px]" style={{ color: ios.secondary }}>
+    <p className="mt-1.5 text-[15px] leading-[20px] max-w-[470px]" style={{ color: ios.secondary }}>
       {sub}
     </p>
   </div>
@@ -95,7 +95,7 @@ export function setupWizard(p: Props): { title: string; subtitle?: string; body:
   const bg = downloadLine(status);
   const next = (label = 'Continue') => (
     <div className="flex items-center justify-between gap-3">
-      <span className="text-[12.5px] tabular-nums min-w-0 truncate" style={{ color: ios.secondary }}>
+      <span className="text-[13px] tabular-nums min-w-0 truncate" style={{ color: ios.secondary }}>
         {bg || ''}
       </span>
       <Button onClick={() => go(page + 1)} className="sm:min-w-[170px] flex-shrink-0">
@@ -162,7 +162,7 @@ export function setupWizard(p: Props): { title: string; subtitle?: string; body:
           subtitle={
             <span className="block" style={{ opacity: m.fit === 'no' ? 0.55 : 1 }}>
               {m.blurb}
-              <span className="block mt-0.5 tabular-nums" style={{ color: m.fit === 'no' ? ios.red : m.fit === 'tight' ? ios.orange : ios.tertiary }}>
+              <span className="block mt-0.5 tabular-nums" style={{ color: m.fit === 'no' ? ios.red : m.fit === 'tight' ? ios.orange : ios.secondary }}>
                 {fmtGB(m.downloadBytes)} · answers in {fmtSecs(m.seconds)}
                 {m.why ? ` · ${m.why}` : ''}
               </span>
@@ -188,11 +188,11 @@ export function setupWizard(p: Props): { title: string; subtitle?: string; body:
           <Group>
             <Row
               title="Processor"
-              trailing={<span className="text-[14px] truncate max-w-[55vw] sm:max-w-[400px]">{s.cpu.model.replace(/\(R\)|\(TM\)|CPU|Processor/g, '').replace(/\s+/g, ' ').trim()} · {s.cpu.physicalCores || s.cpu.cores} cores</span>}
+              trailing={<span className="text-[15px] truncate max-w-[55vw] sm:max-w-[400px]">{s.cpu.model.replace(/\(R\)|\(TM\)|CPU|Processor/g, '').replace(/\s+/g, ' ').trim()} · {s.cpu.physicalCores || s.cpu.cores} cores</span>}
             />
-            <Row title="Memory" trailing={<span className="text-[14px] tabular-nums">{fmtGB(s.memory.availableBytes)} free of {fmtGB(s.memory.totalBytes)}</span>} />
-            <Row title="Graphics" trailing={<span className="text-[14px]">{s.gpus.length ? s.gpus.map((g) => g.name).join(', ') : 'None'}</span>} />
-            <Row title="Disk" trailing={<span className="text-[14px] tabular-nums">{fmtGB(s.disk.freeBytes)} free</span>} />
+            <Row title="Memory" trailing={<span className="text-[15px] tabular-nums">{fmtGB(s.memory.availableBytes)} free of {fmtGB(s.memory.totalBytes)}</span>} />
+            <Row title="Graphics" trailing={<span className="text-[15px]">{s.gpus.length ? s.gpus.map((g) => g.name).join(', ') : 'None'}</span>} />
+            <Row title="Disk" trailing={<span className="text-[15px] tabular-nums">{fmtGB(s.disk.freeBytes)} free</span>} />
           </Group>
           <SectionFooter>{s.gpuUsable ? 'The AI can use your graphics card, so it answers quickly.' : `The AI runs on the processor and keeps up to ${fmtGB(status.budgetBytes)} of memory for itself, so your apps never run short.`}</SectionFooter>
         </section>
@@ -220,7 +220,7 @@ export function setupWizard(p: Props): { title: string; subtitle?: string; body:
                       subtitle={
                         <span className="block whitespace-normal">
                           {r.reasons?.[id] || m.blurb}
-                          <span className="block mt-0.5 tabular-nums" style={{ color: ios.tertiary }}>
+                          <span className="block mt-0.5 tabular-nums" style={{ color: ios.secondary }}>
                             {fmtGB(m.downloadBytes)} download · {fmtGB(m.memoryBytes)} of memory while answering
                           </span>
                         </span>
@@ -262,7 +262,7 @@ export function setupWizard(p: Props): { title: string; subtitle?: string; body:
     );
     footer = (
       <div className="flex items-center justify-between gap-3">
-        <span className="text-[12.5px] min-w-0" style={{ color: p.bundleError ? ios.orange : ios.secondary }}>
+        <span className="text-[13px] min-w-0" style={{ color: p.bundleError ? ios.orange : ios.secondary }}>
           {p.bundleError || (size ? `${fmtGB(size)} to download · ${fmtGB(s.disk.freeBytes)} free` : quick ? 'Already downloaded' : 'Choose a quick helper')}
         </span>
         <Button
@@ -304,7 +304,7 @@ export function setupWizard(p: Props): { title: string; subtitle?: string; body:
                     {f.title}
                     {f.value === 'ask' && <Badge>Recommended</Badge>}
                   </span>
-                  <span className="block mt-0.5 text-[13.5px] leading-[19px]" style={{ color: ios.secondary }}>
+                  <span className="block mt-0.5 text-[13px] leading-[19px]" style={{ color: ios.secondary }}>
                     {more.example}
                   </span>
                 </span>
@@ -324,7 +324,7 @@ export function setupWizard(p: Props): { title: string; subtitle?: string; body:
         <Header title="What It May Look At" sub="The more it can see, the better it finds causes. Turn off anything you’d rather it didn’t read." />
         <section>
           <Group>
-            <Row title="Apps, Stacks and Diagnostics" subtitle="Which apps you have, whether they’re running, and Manifexus’s health checks. Always on: it’s what it’s for." trailing={<span className="text-[13px]" style={{ color: ios.tertiary }}>Always</span>} />
+            <Row title="Apps, Stacks and Diagnostics" subtitle="Which apps you have, whether they’re running, and Manifexus’s health checks. Always on: it’s what it’s for." trailing={<span className="text-[13px]" style={{ color: ios.secondary }}>Always</span>} />
             {ACCESS.map((a) => (
               <Row key={a.key} title={a.title} subtitle={a.sub} trailing={<Switch checked={access[a.key]} onChange={(v) => p.setting({ access: { [a.key]: v } })} label={a.title} />} />
             ))}
@@ -369,7 +369,7 @@ export function setupWizard(p: Props): { title: string; subtitle?: string; body:
             <SectionHeader>What That Looks Like</SectionHeader>
             <Group>
               {rows.map(([when, what, time]) => (
-                <Row key={when} title={when} subtitle={what} trailing={<span className="text-[13px] tabular-nums" style={{ color: ios.tertiary }}>{time}</span>} />
+                <Row key={when} title={when} subtitle={what} trailing={<span className="text-[13px] tabular-nums" style={{ color: ios.secondary }}>{time}</span>} />
               ))}
             </Group>
             <SectionFooter>Each answer shows which model worked on it, what it looked at and how long each step took.</SectionFooter>
@@ -413,10 +413,10 @@ export function setupWizard(p: Props): { title: string; subtitle?: string; body:
         <section>
           <SectionHeader>Your Choices</SectionHeader>
           <Group>
-            <Row onClick={() => go(1)} title="Models" trailing={<span className="text-[14px] truncate max-w-[50vw] sm:max-w-[360px]">{models}</span>} chevron />
-            <Row onClick={() => go(2)} title="May Do" trailing={<span className="text-[14px]">{FREEDOM.find((f) => f.value === freedom)?.title}</span>} chevron />
-            <Row onClick={() => go(3)} title="May Look At" trailing={<span className="text-[14px] truncate max-w-[50vw] sm:max-w-[360px]">{seeing}</span>} chevron />
-            <Row onClick={() => go(4)} title="Thinking" trailing={<span className="text-[14px]">{auto ? 'Chooses automatically' : 'Always the fixer'}</span>} chevron />
+            <Row onClick={() => go(1)} title="Models" trailing={<span className="text-[15px] truncate max-w-[50vw] sm:max-w-[360px]">{models}</span>} chevron />
+            <Row onClick={() => go(2)} title="May Do" trailing={<span className="text-[15px]">{FREEDOM.find((f) => f.value === freedom)?.title}</span>} chevron />
+            <Row onClick={() => go(3)} title="May Look At" trailing={<span className="text-[15px] truncate max-w-[50vw] sm:max-w-[360px]">{seeing}</span>} chevron />
+            <Row onClick={() => go(4)} title="Thinking" trailing={<span className="text-[15px]">{auto ? 'Chooses automatically' : 'Always the fixer'}</span>} chevron />
           </Group>
           <SectionFooter>You can change any of these later in Settings → Built-in AI.</SectionFooter>
         </section>
@@ -424,7 +424,7 @@ export function setupWizard(p: Props): { title: string; subtitle?: string; body:
     );
     footer = (
       <div className="flex items-center justify-between gap-3">
-        <span className="text-[12.5px] tabular-nums min-w-0 truncate" style={{ color: ios.secondary }}>
+        <span className="text-[13px] tabular-nums min-w-0 truncate" style={{ color: ios.secondary }}>
           {!ready ? status.setupBusy || bg || 'Getting it ready…' : ''}
         </span>
         <Button disabled={!ready} onClick={p.finish} className="sm:min-w-[200px] flex-shrink-0">
