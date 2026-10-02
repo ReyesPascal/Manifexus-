@@ -10,6 +10,7 @@
         "Your settings are saved before Manifexus moves to an earlier version, and if that version doesn't start, the one you're on stays."
       ],
       "improved": [
+        "Manifexus gets to know new apps on its own, even when nobody has it open: their names, web pages and icons are ready the next time you look.",
         "Manifexus never runs on backups or settings saved by a newer version it can't read: started by hand on such a server, it shows a page saying which version to start instead and changes nothing."
       ]
     },

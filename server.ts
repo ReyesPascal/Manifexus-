@@ -1494,6 +1494,20 @@ async function startServer() {
   // The backup store: older backups move into it in the background, and unused backups are cleaned up
   scheduleBackupUpgrade();
   startAutoBackups();
+
+  // New apps' names, web pages and icons are learned on their own, not only while someone has the dashboard
+  // open: everything is ready the next time it's opened
+  const learnApps = async () => {
+    try {
+      const { containers } = await getContainersListShared();
+      await identityHosts();
+      refreshIdentity(containers.filter((c) => !isManifexusContainer(c)));
+    } catch {
+      // Docker unavailable for a moment: tries again on the next round
+    }
+  };
+  setTimeout(() => void learnApps(), 30 * 1000);
+  setInterval(() => void learnApps(), 2 * 60 * 1000);
   scheduleGarbageCollection(5 * 60 * 1000);
   setInterval(() => scheduleGarbageCollection(0), 6 * 60 * 60 * 1000);
 
