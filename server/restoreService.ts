@@ -37,6 +37,7 @@ import {
   removeVolume,
   type DataArchiveEntry,
 } from './dataBackupService';
+import { dumpStoredFile, dumpStoredTar, entryAvailable, listStoredFiles, scheduleGarbageCollection, storeBytes } from './backupStore';
 import { queryDockerEngine } from './dockerService';
 import { record, currentActivityId } from './activityLog';
 import { writeJsonAtomic } from './safeJson';
@@ -271,7 +272,8 @@ function toPoint(r: MergeHistoryRecord, all: MergeHistoryRecord[], keepDays: num
     apps: appNames(r),
     pinned: Boolean(r.pinned),
     backup: {
-      bytes: exists ? dirBytes(r.backupArchiveDir) : 0,
+      // Files in its folder, plus what the backup store added for it (store backups share unchanged data)
+      bytes: exists ? dirBytes(r.backupArchiveDir) + archives.reduce((s, a) => s + (a.snapshot ? a.bytes : 0), 0) : 0,
       hasData: archives.length > 0,
       dataSkipped: Boolean(r.dataBackupSkipped),
       expiresAt: exists && !r.pinned && keepDays ? new Date(new Date(r.timestamp).getTime() + keepDays * 86400000).toISOString() : undefined,
@@ -292,7 +294,9 @@ export function listRestorePoints(): { points: RestorePoint[]; storage: { bytes:
   const all = getMergeHistory();
   const { keepDays } = getRestoreSettings();
   const points = all.map((r) => toPoint(r, all, keepDays));
-  const bytes = points.reduce((s, p) => s + p.backup.bytes, 0);
+  // The space really used: every entry's own folder, plus the backup store once (entries share what's in it)
+  const own = all.reduce((s, r) => s + (backupExists(r) ? dirBytes(r.backupArchiveDir) : 0), 0);
+  const bytes = own + storeBytes();
   return { points, storage: { bytes, keepDays, count: points.filter((p) => p.backup.bytes > 0).length } };
 }
 
@@ -377,7 +381,7 @@ function targetsFor(chain: MergeHistoryRecord[]): StackTarget[] {
   for (const t of targets.values()) {
     if (!t.exists || t.data.length) continue;
     for (const r of oldestFirst) {
-      const found = projectVolumesIn(r.dataArchives || [], t.project, t.dir).filter((a) => fs.existsSync(a.archiveFile));
+      const found = projectVolumesIn(r.dataArchives || [], t.project, t.dir).filter((a) => entryAvailable(a));
       if (found.length) {
         t.data = found;
         break;
@@ -578,7 +582,7 @@ export async function executeRestore(id: string, emit: Emit, opts: { filesOnly?:
   for (const r of chain) {
     if (r.type !== 'APP_DELETE') continue;
     const k = norm(r.deletedApps?.workingDir);
-    appData.set(k, [...(appData.get(k) || []), ...(r.dataArchives || []).filter((a) => fs.existsSync(a.archiveFile))]);
+    appData.set(k, [...(appData.get(k) || []), ...(r.dataArchives || []).filter((a) => entryAvailable(a))]);
   }
 
   // This restore's own backup: how every stack looked just before it
@@ -853,6 +857,7 @@ function expireBackup(r: MergeHistoryRecord) {
   removeBackupFiles(r);
   r.backupDeletedAt = new Date().toISOString();
   saveMergeHistoryRecord(r);
+  if ((r.dataArchives || []).some((a) => a.snapshot)) scheduleGarbageCollection();
   record('info', 'backup', `Removed an expired backup of “${titleOf(r).title}”`, { id: r.id });
 }
 
@@ -861,6 +866,7 @@ export function deleteChanges(ids: string[]): number {
   const list = getMergeHistory().filter((r) => ids.includes(r.id));
   for (const r of list) removeBackupFiles(r);
   removeHistoryRecords(list.map((r) => r.id));
+  if (list.some((r) => (r.dataArchives || []).some((a) => a.snapshot))) scheduleGarbageCollection();
   if (list.length) {
     record('info', 'backup', `Deleted ${list.length} change${list.length === 1 ? '' : 's'} from Restore`, {
       removed: list.map((r) => ({ id: r.id, title: titleOf(r).title })),
@@ -934,9 +940,23 @@ export async function listBackupFiles(id: string): Promise<{ files: BackupFile[]
   const archives = r.dataArchives || [];
   for (let i = 0; i < archives.length; i++) {
     const a = archives[i];
-    if (!fs.existsSync(a.archiveFile)) continue;
+    if (!entryAvailable(a)) continue;
+    if (a.snapshot) {
+      try {
+        for (const f of await listStoredFiles(a, 5000 - files.length)) {
+          files.push({ group: a.kind === 'volume' ? `Volume ${a.source}` : a.source, path: f.path, bytes: f.bytes, archive: i });
+        }
+      } catch {
+        // unreadable: skip
+      }
+      if (files.length >= 5000) {
+        truncated = true;
+        break;
+      }
+      continue;
+    }
     try {
-      const listing = await runTar(['-tzvf', a.archiveFile]);
+      const listing = await runTar([a.archiveFile.endsWith('.zst') ? '--zstd' : '-z', '-tvf', a.archiveFile]);
       for (const line of listing.split('\n')) {
         // -rw-r--r-- user/group 1234 2026-09-26 18:00 ./config/app.ini
         const m = line.match(/^(\S)\S*\s+\S+\s+(\d+)\s+\S+\s+\S+\s+(.*)$/);
@@ -973,25 +993,49 @@ export function streamBackupFile(id: string, archive: number, filePath: string, 
     return true;
   }
   const a = (r.dataArchives || [])[archive];
-  if (!a || !fs.existsSync(a.archiveFile)) return false;
-  const p = spawn('tar', ['-xzOf', a.archiveFile, '--', `./${filePath}`]);
-  p.stdout.pipe(res);
+  if (!a || !entryAvailable(a)) return false;
+  const p = a.snapshot ? dumpStoredFile(a, filePath) : spawn('tar', [a.archiveFile.endsWith('.zst') ? '--zstd' : '-z', '-xOf', a.archiveFile, '--', `./${filePath}`]);
+  p.stdout?.pipe(res);
   p.on('error', () => res.end());
   // A download cancelled halfway stops the unpacking too (otherwise it waits forever on a full pipe)
   res.on('close', () => p.exitCode === null && p.kill());
   return true;
 }
 
-/** Streams the whole backup as one .tar.gz. */
-export function streamBackupArchive(id: string, res: Response): boolean {
+/**
+ * Streams the whole backup as one .tar.gz: its folder (compose files, archives), plus each item kept in the
+ * backup store as a .tar inside it.
+ */
+export async function streamBackupArchive(id: string, res: Response): Promise<boolean> {
   const r = getHistoryRecordById(id);
   if (!r || !backupExists(r)) return false;
   const day = r.timestamp.slice(0, 10);
+  const stored = (r.dataArchives || []).filter((a) => a.snapshot && entryAvailable(a));
+  // Store items are written out next to the folder first, in a temporary copy that's removed afterwards
+  let staging: string | undefined;
+  if (stored.length) {
+    staging = path.join(resolveBackupDir(), '.tmp', `download_${Date.now()}`);
+    const data = path.join(staging, path.basename(r.backupArchiveDir), 'data');
+    fs.mkdirSync(data, { recursive: true });
+    for (const f of fs.readdirSync(r.backupArchiveDir)) {
+      const from = path.join(r.backupArchiveDir, f);
+      if (fs.statSync(from).isFile()) fs.copyFileSync(from, path.join(staging, path.basename(r.backupArchiveDir), f));
+    }
+    for (const a of stored) {
+      await dumpStoredTar(a, path.join(data, `${a.kind === 'volume' ? 'volume' : 'folder'}-${a.source.replace(/[^a-zA-Z0-9_.-]/g, '_')}.tar`));
+    }
+  }
   res.setHeader('Content-Disposition', `attachment; filename="manifexus-backup-${r.targetStackName}-${day}.tar.gz"`);
   res.setHeader('Content-Type', 'application/gzip');
-  const p = spawn('tar', ['-czf', '-', '-C', path.dirname(r.backupArchiveDir), path.basename(r.backupArchiveDir)]);
+  const base = staging || path.dirname(r.backupArchiveDir);
+  const p = spawn('tar', ['-czf', '-', '-C', base, path.basename(r.backupArchiveDir)]);
   p.stdout.pipe(res);
-  p.on('error', () => res.end());
+  const cleanup = () => staging && fs.rmSync(staging, { recursive: true, force: true });
+  p.on('error', () => {
+    cleanup();
+    res.end();
+  });
+  p.on('close', cleanup);
   res.on('close', () => p.exitCode === null && p.kill());
   record('info', 'backup', `Downloaded the backup of “${titleOf(r).title}”`, { id });
   return true;
@@ -1003,7 +1047,7 @@ export async function restoreToFolder(id: string, destination: string, log: (m: 
   if (!r || !backupExists(r)) throw new Error('The backup for this change is no longer available.');
   const dest = norm(destination.trim());
   if (!dest.startsWith('/') || dest.split('/').filter(Boolean).length < 2) throw new Error('Choose a full folder path, like /home/you/restored.');
-  const archives = (r.dataArchives || []).filter((a) => fs.existsSync(a.archiveFile));
+  const archives = (r.dataArchives || []).filter((a) => entryAvailable(a));
   if (!archives.length) throw new Error('This backup has no folders or volumes to copy (only compose files).');
   const targets = archives.map((a) =>
     archives.length === 1 ? dest : path.posix.join(dest, a.kind === 'volume' ? `volume-${a.source}` : path.posix.basename(a.source))

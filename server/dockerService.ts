@@ -264,6 +264,8 @@ export async function pullDockerImage(imageName: string): Promise<boolean> {
 
 // Inspect host and find an already downloaded image for host orchestration tasks
 export async function getBestAvailableImage(): Promise<string> {
+  // For running Manifexus outside Docker (development and tests): the image helpers should use
+  if (process.env.MANIFEXUS_HELPER_IMAGE) return process.env.MANIFEXUS_HELPER_IMAGE;
   try {
     // 1. Inspect running containers: Manifexus itself is guaranteed to be running on host!
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

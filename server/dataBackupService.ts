@@ -25,14 +25,23 @@ import path from 'path';
 import { queryDockerEngine, getBestAvailableImage, fetchContainerLogs } from './dockerService';
 import { record } from './activityLog';
 import { resolveBackupDir } from './historyService';
+import { resolveContainerPath } from './hostFsService';
+import { backupToStore, entryAvailable, restoreEnv, restoreScript, storeUsable } from './backupStore';
 
 export interface DataArchiveEntry {
   kind: 'directory' | 'volume';
   /** Host directory path, or Docker volume name */
   source: string;
-  /** Archive file path inside the Manifexus container (under the backups dir) */
+  /** Archive file path inside the Manifexus container (under the backups dir): .tar.zst or .tar.gz. Empty for a
+   *  backup kept in the backup store (see backupStore.ts) */
   archiveFile: string;
+  /** Space the backup takes: the archive's size, or what the backup store added for it */
   bytes: number;
+  /** Kept in the backup store (restic): the snapshot, and the folder inside it that holds this data */
+  snapshot?: string;
+  snapshotPath?: string;
+  /** Size of the data itself, before compression */
+  dataBytes?: number;
   /** For volumes: labels/driver so the volume can be recreated identically on restore */
   volumeLabels?: Record<string, string>;
   volumeDriver?: string;
@@ -49,7 +58,9 @@ export interface StackDataFootprint {
 }
 
 const DOCKER_SOCKET_PATH = process.env.DOCKER_SOCKET_PATH || '/var/run/docker.sock';
-const POLL_INTERVAL_MS = 1000;
+// Helpers are checked often at first (most finish in well under a second), then less often
+const POLL_FIRST_MS = 100;
+const POLL_MAX_MS = 1000;
 const DEFAULT_HELPER_TIMEOUT_MS = 6 * 60 * 60 * 1000; // 6h: large media folders can be slow
 
 let cachedSelfId: string | null | undefined;
@@ -106,7 +117,7 @@ async function runHelper(
 }
 
 /** Like runHelper, but also returns everything the helper printed (stdout + stderr). */
-async function runHelperDetailed(
+export async function runHelperDetailed(
   script: string,
   binds: string[],
   timeoutMs: number = DEFAULT_HELPER_TIMEOUT_MS,
@@ -150,8 +161,10 @@ async function runHelperDetailed(
   try {
     await queryDockerEngine(`/containers/${id}/start`, 'POST');
     const deadline = Date.now() + timeoutMs;
+    let pollMs = POLL_FIRST_MS;
     while (Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+      await new Promise((r) => setTimeout(r, pollMs));
+      pollMs = Math.min(POLL_MAX_MS, Math.round(pollMs * 1.5));
       try {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const state = await queryDockerEngine<any>(`/containers/${id}/json`, 'GET');
@@ -243,24 +256,70 @@ function shellQuote(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
-/**
- * tar script for archiving /src into `file`. GNU tar exits 1 when a file changed while being read
- * (normal for apps that keep running, e.g. logs); that is a warning, not a failed backup. Exit 2+
- * is a real error.
- */
-/**
- * Archive /src into `file`. GNU tar (the Manifexus image) keeps going past files that change while it
- * reads; BusyBox tar (Alpine-based helper images) doesn't know those options, so it gets the plain form.
- */
-function tarScript(file: string): string {
-  const f = shellQuote(file);
-  return `if tar --version 2>/dev/null | grep -q GNU; then tar --warning=no-file-changed --warning=no-file-removed -C /src -czpf ${f} . ; else tar -C /src -czf ${f} . ; fi; rc=$?; [ $rc -le 1 ] && [ -s ${f} ]`;
+/** What the helper image can do: zstd (fast, all cores), GNU tar, restic (the backup store). Checked once per image. */
+export interface HelperCaps {
+  image: string;
+  zstd: boolean;
+  gnuTar: boolean;
+  restic: boolean;
+}
+const capsCache = new Map<string, Promise<HelperCaps>>();
+export async function helperCaps(): Promise<HelperCaps> {
+  const image = await getBestAvailableImage();
+  if (!capsCache.has(image)) {
+    const probe = (async () => {
+      const r = await runHelperDetailed(
+        'printf "zstd=%s\\n" "$(command -v zstd >/dev/null && echo 1)"; printf "gnu=%s\\n" "$(tar --version 2>/dev/null | grep -q GNU && echo 1)"; printf "restic=%s\\n" "$(restic version 2>/dev/null | grep -qE "restic 0\\.(1[7-9]|[2-9][0-9])" && echo 1)"',
+        [],
+        60 * 1000,
+        [],
+        { purpose: 'Check the backup tools', probe: true }
+      );
+      const has = (k: string) => new RegExp(`${k}=1`).test(r.output);
+      return { image, zstd: has('zstd'), gnuTar: has('gnu'), restic: has('restic') };
+    })();
+    capsCache.set(image, probe);
+    // A failed check is tried again next time instead of being remembered
+    probe.catch(() => capsCache.delete(image));
+  }
+  return capsCache.get(image)!;
 }
 
-/** Unpack an archive into /dst, keeping owners and permissions (BusyBox does that by default as root) */
+/**
+ * Archive /src<i> into `file`. zstd uses every core (about ten times faster than gzip, and smaller);
+ * gzip when the helper image has no zstd. GNU tar (the Manifexus image) keeps going past files that change
+ * while it reads (normal for apps that keep running, e.g. logs): exit 1 is a warning, not a failed backup.
+ * BusyBox tar (Alpine-based helper images) doesn't know those options, so it gets the plain form.
+ */
+function tarScript(file: string, src: string, caps: HelperCaps): string {
+  const f = shellQuote(file);
+  const create = caps.gnuTar ? `tar --warning=no-file-changed --warning=no-file-removed -C ${src} -cpf - .` : `tar -C ${src} -cf - .`;
+  if (file.endsWith('.zst')) {
+    return `rc=$( { { ${create}; echo $? >&3; } | zstd -q -3 -T0 > ${f}; } 3>&1 ); [ "\${rc:-2}" -le 1 ] && [ -s ${f} ]`;
+  }
+  return `${caps.gnuTar ? `tar --warning=no-file-changed --warning=no-file-removed -C ${src} -czpf ${f} .` : `tar -C ${src} -czf ${f} .`}; rc=$?; [ $rc -le 1 ] && [ -s ${f} ]`;
+}
+
+/** Unpack an archive (.tar.zst or .tar.gz) into /dst, keeping owners and permissions (BusyBox does that by default as root) */
 function untarScript(file: string): string {
   const f = shellQuote(file);
+  if (file.endsWith('.zst')) {
+    return `command -v zstd >/dev/null || { echo "This backup needs zstd to unpack, and this helper doesn't have it" >&2; exit 3; }; zstd -q -dc ${f} | if tar --version 2>/dev/null | grep -q GNU; then tar -C /dst -xpf -; else tar -C /dst -xf -; fi`;
+  }
   return `if tar --version 2>/dev/null | grep -q GNU; then tar -C /dst -xzpf ${f}; else tar -C /dst -xzf ${f}; fi`;
+}
+
+/** Script that puts one backed-up item into /dst, from the backup store or from its archive */
+function unpackScript(e: DataArchiveEntry): string {
+  return e.snapshot ? restoreScript(e) : untarScript(e.archiveFile);
+}
+function unpackEnv(e: DataArchiveEntry): string[] {
+  return e.snapshot ? restoreEnv() : [];
+}
+
+/** The archive file name ending for new backups */
+function archiveExt(caps: HelperCaps): string {
+  return caps.zstd ? '.tar.zst' : '.tar.gz';
 }
 
 /**
@@ -337,41 +396,58 @@ export async function provisionStackFolder(
   }
 }
 
-/** Size in bytes of a host directory or a named volume (0 if missing). */
-async function measure(bindSource: string): Promise<number> {
-  const out = tmpFile('du');
+/** Sizes in bytes of host directories or named volumes (0 if missing), all in one helper. */
+async function measureMany(sources: string[]): Promise<number[]> {
+  if (!sources.length) return [];
   try {
-    const code = await runHelper(
-      `if [ -d /src ]; then du -sb /src | cut -f1 > ${shellQuote(out)}; else echo 0 > ${shellQuote(out)}; fi`,
-      [`${bindSource}:/src:ro`],
+    const r = await runHelperDetailed(
+      sources.map((_, i) => `printf "size${i}=%s\\n" "$( [ -d /m${i} ] && du -sb /m${i} 2>/dev/null | cut -f1 )"`).join('; '),
+      sources.map((src, i) => `${src}:/m${i}:ro`),
       30 * 60 * 1000,
       [],
-      { purpose: `Measure size of ${bindSource}`, probe: true }
+      { purpose: `Measure size of ${sources.join(', ')}`, probe: true }
     );
-    if (code !== 0 || !fs.existsSync(out)) return 0;
-    return parseInt(fs.readFileSync(out, 'utf8').trim(), 10) || 0;
-  } finally {
-    try {
-      fs.unlinkSync(out);
-    } catch {
-      // ignore
-    }
+    return sources.map((_, i) => parseInt(r.output.match(new RegExp(`size${i}=(\\d+)`))?.[1] || '0', 10) || 0);
+  } catch {
+    return sources.map(() => 0);
   }
 }
 
 /** Does a host directory exist? (checked through a helper, since Manifexus can't see host paths) */
 export async function hostDirectoryExists(hostDir: string): Promise<boolean> {
-  const parent = path.posix.dirname(hostDir);
-  const name = path.posix.basename(hostDir);
-  try {
-    const code = await runHelper(`[ -d /parent/${shellQuote(name)} ]`, [`${parent}:/parent:ro`], 60 * 1000, [], {
-      purpose: `Check folder ${hostDir} exists`,
-      probe: true,
-    });
-    return code === 0;
-  } catch {
-    return false;
+  return (await hostDirectoriesExist([hostDir]))[0];
+}
+
+/**
+ * Which of these host directories exist. Folders Manifexus can see directly are checked right away; the rest in
+ * one helper that looks at the server's whole filesystem, read-only.
+ */
+export async function hostDirectoriesExist(hostDirs: string[]): Promise<boolean[]> {
+  const result: (boolean | undefined)[] = hostDirs.map((d) => {
+    const local = resolveContainerPath(path.posix.normalize(d));
+    if (!local) return undefined;
+    try {
+      return fs.statSync(local).isDirectory();
+    } catch {
+      return false;
+    }
+  });
+  const ask = hostDirs.map((d, i) => ({ d: path.posix.normalize(d), i })).filter((x) => result[x.i] === undefined);
+  if (ask.length) {
+    try {
+      const r = await runHelperDetailed(
+        ask.map((x, k) => `[ -d ${shellQuote('/host' + x.d)} ] && echo "dir${k}=1"`).join('; ') + '; true',
+        ['/:/host:ro'],
+        60 * 1000,
+        [],
+        { purpose: `Check ${ask.length === 1 ? `folder ${ask[0].d} exists` : `${ask.length} folders exist`}`, probe: true }
+      );
+      ask.forEach((x, k) => (result[x.i] = new RegExp(`dir${k}=1\\b`).test(r.output)));
+    } catch {
+      ask.forEach((x) => (result[x.i] = false));
+    }
   }
+  return result.map(Boolean);
 }
 
 /** Named volumes Compose created for a project — the ones `down -v` would remove. */
@@ -410,12 +486,10 @@ export async function getStackDataFootprint(params: {
 }): Promise<StackDataFootprint> {
   const { project, workingDir } = params;
   const dirExists = workingDir ? params.directoryExists ?? (await hostDirectoryExists(workingDir)) : false;
-  const directoryBytes = workingDir && dirExists ? await measure(workingDir) : 0;
-
-  const volumes: { name: string; bytes: number }[] = [];
-  for (const v of await getProjectVolumes(project)) {
-    volumes.push({ name: v.name, bytes: await measure(v.name) });
-  }
+  const projectVolumes = await getProjectVolumes(project);
+  const sizes = await measureMany([...(workingDir && dirExists ? [workingDir] : []), ...projectVolumes.map((v) => v.name)]);
+  const directoryBytes = workingDir && dirExists ? sizes.shift() || 0 : 0;
+  const volumes = projectVolumes.map((v, i) => ({ name: v.name, bytes: sizes[i] || 0 }));
 
   const externalMounts = Array.from(
     new Set((params.bindMounts || []).filter((m) => m && (!workingDir || !isInside(m, workingDir))))
@@ -441,10 +515,53 @@ export function getBackupFreeBytes(): number | null {
   }
 }
 
+interface BackupItem {
+  kind: 'directory' | 'volume';
+  source: string;
+  /** File name (without ending) for an archive, when the backup store isn't used */
+  fileBase: string;
+  volumeLabels?: Record<string, string>;
+  volumeDriver?: string;
+}
+
 /**
- * Archives a stack's directory and project volumes into `archiveDir` (which must be inside the
- * backups dir). Throws on any failure: callers must NOT proceed with a destructive step unless this
- * resolves. Stop the stack's containers first for a consistent copy of databases.
+ * Backs up folders and volumes: into the backup store when it can be used (only what changed is stored), else
+ * as one .tar.zst (or .tar.gz) archive each in `archiveDir`. Either way all of them in one helper. Throws on
+ * any failure: callers must NOT go ahead with a destructive step unless this resolves.
+ */
+async function backupItems(items: BackupItem[], archiveDir: string, opts: { purpose: string; log?: (m: string) => void; pre?: boolean }): Promise<DataArchiveEntry[]> {
+  if (!items.length) return [];
+  const log = opts.log || (() => {});
+  if (await storeUsable()) {
+    return backupToStore(items, { tags: [opts.pre ? 'pre' : `backup:${path.basename(archiveDir)}`], purpose: opts.purpose, log: opts.pre ? undefined : log });
+  }
+  if (opts.pre) return []; // a first pass only helps the backup store
+  const caps = await helperCaps();
+  const dataDir = path.join(archiveDir, 'data');
+  fs.mkdirSync(dataDir, { recursive: true });
+  const files = items.map((it) => path.join(dataDir, it.fileBase + archiveExt(caps)));
+  log(`Backing up ${items.map((it) => it.source).join(', ')}...`);
+  const r = await runHelperDetailed(
+    items.map((_, i) => `${tarScript(files[i], `/src${i}`, caps)} || { echo "MFXFAIL ${i}"; exit 2; }`).join('\n'),
+    items.map((it, i) => `${it.source}:/src${i}:ro`),
+    DEFAULT_HELPER_TIMEOUT_MS,
+    [],
+    { purpose: opts.purpose }
+  );
+  return items.map((it, i) => {
+    if (r.code !== 0 || !fs.existsSync(files[i])) {
+      const failed = Number(r.output.match(/MFXFAIL (\d+)/)?.[1] ?? i);
+      throw new Error(`Backing up ${items[failed].kind === 'volume' ? 'volume' : 'folder'} ${items[failed].source} failed (exit ${r.code}).`);
+    }
+    const bytes = fs.statSync(files[i]).size;
+    log(`${it.source} backed up (${formatBytes(bytes)} compressed).`);
+    return { kind: it.kind, source: it.source, archiveFile: files[i], bytes, volumeLabels: it.volumeLabels, volumeDriver: it.volumeDriver };
+  });
+}
+
+/**
+ * Backs up a stack's directory and project volumes. Throws on any failure: callers must NOT proceed with a
+ * destructive step unless this resolves. Stop the stack's containers first for a consistent copy of databases.
  */
 export async function archiveStackData(params: {
   project: string;
@@ -453,49 +570,15 @@ export async function archiveStackData(params: {
   log?: (msg: string) => void;
 }): Promise<DataArchiveEntry[]> {
   const { project, workingDir, archiveDir } = params;
-  const log = params.log || (() => {});
-  const dataDir = path.join(archiveDir, 'data');
-  fs.mkdirSync(dataDir, { recursive: true });
-
-  const entries: DataArchiveEntry[] = [];
   const safeProject = project.replace(/[^a-zA-Z0-9_.-]/g, '_');
-
+  const items: BackupItem[] = [];
   if (workingDir && (await hostDirectoryExists(workingDir))) {
-    const file = path.join(dataDir, `${safeProject}__dir.tar.gz`);
-    log(`Archiving stack folder ${workingDir}...`);
-    const code = await runHelper(tarScript(file), [`${workingDir}:/src:ro`], DEFAULT_HELPER_TIMEOUT_MS, [], {
-      purpose: `Back up folder ${workingDir}`,
-    });
-    if (code !== 0 || !fs.existsSync(file)) {
-      throw new Error(`Backing up folder ${workingDir} failed (exit ${code}).`);
-    }
-    const bytes = fs.statSync(file).size;
-    entries.push({ kind: 'directory', source: workingDir, archiveFile: file, bytes });
-    log(`Folder archived (${formatBytes(bytes)} compressed).`);
+    items.push({ kind: 'directory', source: workingDir, fileBase: `${safeProject}__dir` });
   }
-
   for (const v of await getProjectVolumes(project)) {
-    const file = path.join(dataDir, `${safeProject}__vol__${v.name.replace(/[^a-zA-Z0-9_.-]/g, '_')}.tar.gz`);
-    log(`Archiving volume ${v.name}...`);
-    const code = await runHelper(tarScript(file), [`${v.name}:/src:ro`], DEFAULT_HELPER_TIMEOUT_MS, [], {
-      purpose: `Back up volume ${v.name}`,
-    });
-    if (code !== 0 || !fs.existsSync(file)) {
-      throw new Error(`Backing up volume ${v.name} failed (exit ${code}).`);
-    }
-    const bytes = fs.statSync(file).size;
-    entries.push({
-      kind: 'volume',
-      source: v.name,
-      archiveFile: file,
-      bytes,
-      volumeLabels: v.labels,
-      volumeDriver: v.driver,
-    });
-    log(`Volume ${v.name} archived (${formatBytes(bytes)} compressed).`);
+    items.push({ kind: 'volume', source: v.name, fileBase: `${safeProject}__vol__${v.name.replace(/[^a-zA-Z0-9_.-]/g, '_')}`, volumeLabels: v.labels, volumeDriver: v.driver });
   }
-
-  return entries;
+  return backupItems(items, archiveDir, { purpose: `Back up ${project}${workingDir ? ` (${workingDir})` : ''}`, log: params.log });
 }
 
 /**
@@ -553,47 +636,48 @@ export async function appOwnData(params: AppDataParams): Promise<{
           continue;
         }
         if ([...done].some((d) => d.startsWith('d:') && src.startsWith(d.slice(2) + '/'))) continue;
-        if (!(await hostDirectoryExists(src))) continue;
         done.add('d:' + src);
         own.push({ kind: 'directory', source: src, app: app.name });
       }
     }
   }
-  return { own, shared: Array.from(shared) };
+  // Folders that don't exist on the server have nothing to back up: checked all at once
+  const dirs = own.filter((o) => o.kind === 'directory');
+  const exists = await hostDirectoriesExist(dirs.map((o) => o.source));
+  const missing = new Set(dirs.filter((_, i) => !exists[i]).map((o) => o.source));
+  return { own: own.filter((o) => o.kind === 'volume' || !missing.has(o.source)), shared: Array.from(shared) };
 }
 
 /** How big each of an app's own volumes and folders is */
 export async function measureAppData(items: { kind: 'volume' | 'directory'; source: string }[]): Promise<{ kind: 'volume' | 'directory'; source: string; bytes: number }[]> {
-  const out = [];
-  for (const it of items) out.push({ ...it, bytes: await measure(it.source) });
-  return out;
+  const sizes = await measureMany(items.map((it) => it.source));
+  return items.map((it, i) => ({ ...it, bytes: sizes[i] }));
 }
 
-export async function archiveAppData(params: AppDataParams & { archiveDir: string; log?: (msg: string) => void }): Promise<DataArchiveEntry[]> {
-  const log = params.log || (() => {});
-  const dataDir = path.join(params.archiveDir, 'data');
-  fs.mkdirSync(dataDir, { recursive: true });
-  const entries: DataArchiveEntry[] = [];
+export async function archiveAppData(
+  params: AppDataParams & {
+    archiveDir: string;
+    log?: (msg: string) => void;
+    /** Already worked out (by a first pass): skip working it out again */
+    own?: { kind: 'volume' | 'directory'; source: string; app: string }[];
+    /** A first pass while the apps still run (backup store only): makes the real backup after stopping fast */
+    pre?: boolean;
+  }
+): Promise<DataArchiveEntry[]> {
   const safe = (x: string) => x.replace(/[^a-zA-Z0-9_.-]/g, '_').slice(0, 80);
-  const { own } = await appOwnData(params);
+  const own = params.own || (await appOwnData(params)).own;
+  const items: BackupItem[] = [];
   for (const it of own) {
     if (it.kind === 'volume') {
-      const file = path.join(dataDir, `${safe(it.app)}__vol__${safe(it.source)}.tar.gz`);
-      log(`Backing up ${it.app}’s volume ${it.source}...`);
-      const code = await runHelper(tarScript(file), [`${it.source}:/src:ro`], DEFAULT_HELPER_TIMEOUT_MS, [], { purpose: `Back up volume ${it.source}` });
-      if (code !== 0 || !fs.existsSync(file)) throw new Error(`Backing up volume ${it.source} failed (exit ${code}).`);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const vol = await queryDockerEngine<any>(`/volumes/${encodeURIComponent(it.source)}`, 'GET').catch(() => null);
-      entries.push({ kind: 'volume', source: it.source, archiveFile: file, bytes: fs.statSync(file).size, volumeLabels: vol?.Labels || {}, volumeDriver: vol?.Driver || 'local' });
+      items.push({ kind: 'volume', source: it.source, fileBase: `${safe(it.app)}__vol__${safe(it.source)}`, volumeLabels: vol?.Labels || {}, volumeDriver: vol?.Driver || 'local' });
     } else {
-      const file = path.join(dataDir, `${safe(it.app)}__dir__${safe(it.source)}.tar.gz`);
-      log(`Backing up ${it.source}...`);
-      const code = await runHelper(tarScript(file), [`${it.source}:/src:ro`], DEFAULT_HELPER_TIMEOUT_MS, [], { purpose: `Back up folder ${it.source}` });
-      if (code !== 0 || !fs.existsSync(file)) throw new Error(`Backing up folder ${it.source} failed (exit ${code}).`);
-      entries.push({ kind: 'directory', source: it.source, archiveFile: file, bytes: fs.statSync(file).size });
+      items.push({ kind: 'directory', source: it.source, fileBase: `${safe(it.app)}__dir__${safe(it.source)}` });
     }
   }
-  return entries;
+  const apps = Array.from(new Set(own.map((o) => o.app))).join(', ');
+  return backupItems(items, params.archiveDir, { purpose: `Back up ${apps}’s data${params.pre ? ' ahead, while it runs' : ''}`, log: params.log, pre: params.pre });
 }
 
 /**
@@ -607,8 +691,8 @@ export async function restoreStackData(
 ): Promise<void> {
   const log = opts.log || (() => {});
   for (const e of entries) {
-    if (!fs.existsSync(e.archiveFile)) {
-      log(`[Warning] Archive missing: ${e.archiveFile}. Skipping ${e.source}.`);
+    if (!entryAvailable(e)) {
+      log(`[Warning] Backup missing: ${e.archiveFile || `snapshot ${e.snapshot}`}. Skipping ${e.source}.`);
       continue;
     }
 
@@ -620,9 +704,9 @@ export async function restoreStackData(
         continue;
       }
       log(`Restoring folder ${e.source} from backup...`);
-      const code = await runHelper(`mkdir -p /dst && ${untarScript(e.archiveFile)}`, [
+      const code = await runHelper(`mkdir -p /dst && ${unpackScript(e)}`, [
         `${e.source}:/dst`,
-      ], DEFAULT_HELPER_TIMEOUT_MS, [], { purpose: `Restore folder ${e.source}` });
+      ], DEFAULT_HELPER_TIMEOUT_MS, unpackEnv(e), { purpose: `Restore folder ${e.source}` });
       if (code !== 0) throw new Error(`Restoring folder ${e.source} failed (exit ${code}).`);
       log(`Folder ${e.source} restored.`);
     } else {
@@ -646,7 +730,7 @@ export async function restoreStackData(
         });
       }
       log(`Restoring volume ${e.source} from backup...`);
-      const code = await runHelper(untarScript(e.archiveFile), [`${e.source}:/dst`], DEFAULT_HELPER_TIMEOUT_MS, [], {
+      const code = await runHelper(unpackScript(e), [`${e.source}:/dst`], DEFAULT_HELPER_TIMEOUT_MS, unpackEnv(e), {
         purpose: `Restore volume ${e.source}`,
       });
       if (code !== 0) throw new Error(`Restoring volume ${e.source} failed (exit ${code}).`);
@@ -751,15 +835,15 @@ export function formatBytes(bytes: number): string {
  * original location. Used by Restore → "Restore to Another Folder".
  */
 export async function extractArchiveTo(entry: DataArchiveEntry, destHostDir: string): Promise<void> {
-  if (!fs.existsSync(entry.archiveFile)) throw new Error(`The backup file for ${entry.source} is missing.`);
-  const code = await runHelper(`mkdir -p /dst && ${untarScript(entry.archiveFile)}`, [`${destHostDir}:/dst`], DEFAULT_HELPER_TIMEOUT_MS, [], {
+  if (!entryAvailable(entry)) throw new Error(`The backup of ${entry.source} is missing.`);
+  const code = await runHelper(`mkdir -p /dst && ${unpackScript(entry)}`, [`${destHostDir}:/dst`], DEFAULT_HELPER_TIMEOUT_MS, unpackEnv(entry), {
     purpose: `Restore ${entry.kind === 'volume' ? 'volume' : 'folder'} ${entry.source} into ${destHostDir}`,
   });
   if (code !== 0) throw new Error(`Copying ${entry.source} into ${destHostDir} failed (exit ${code}).`);
 }
 
 /** True when the host folder doesn't exist or is empty (safe to restore into). */
-export async function hostDirectoryIsFree(hostDir: string): Promise<boolean> {
+export async function hostDirectoryIsFree(hostDir: string, attempt = 1): Promise<boolean> {
   const parent = path.posix.dirname(hostDir);
   const name = path.posix.basename(hostDir);
   try {
@@ -772,6 +856,11 @@ export async function hostDirectoryIsFree(hostDir: string): Promise<boolean> {
     );
     return code === 0;
   } catch {
+    // The check itself couldn't run (Docker busy or just restarted): look once more before saying no
+    if (attempt < 2) {
+      await new Promise((r) => setTimeout(r, 1500));
+      return hostDirectoryIsFree(hostDir, attempt + 1);
+    }
     return false;
   }
 }

@@ -26,12 +26,15 @@ import type { MergeHistoryRecord } from './historyService';
 import {
   archiveStackData,
   archiveAppData,
+  appOwnData,
   runComposeInDir,
   runComposeCapture,
   composeErrorTail,
   formatBytes,
   provisionStackFolder,
 } from './dataBackupService';
+import { storeUsable } from './backupStore';
+import { discoverHostComposeStacks } from './stackService';
 
 const execAsync = util.promisify(exec);
 
@@ -458,8 +461,40 @@ export async function executeStreamingPipeline(
       log(`Moving ${movingContainers.length} app(s): ${movingContainers.map((c) => c.cleanName).join(', ')}.`, 1);
     });
 
+    // What belongs to the apps being moved (for a quick move's backup): worked out once, used by both passes
+    const appDataParams = {
+      apps: movingContainers.map((c) => ({ name: friendlyName(c), workingDir: c.compose?.workingDir, mounts: c.mounts || [] })),
+      // Every stack folder, including the move's own target and stacks that have no apps running right now: an
+      // app's own folder inside one of them is its data (a folder outside all of them is shared, like a media library)
+      stackDirs: Array.from(
+        new Set([
+          targetDir,
+          ...(containers.map((c) => c.compose?.workingDir).filter(Boolean) as string[]),
+          ...(await discoverHostComposeStacks(containers).catch(() => [])).map((s) => s.workingDir),
+        ].filter(Boolean) as string[])
+      ),
+      sharedDirs: containers
+        .filter((c) => !movingContainers.some((m) => m.id === c.id))
+        .flatMap((c) => (c.mounts || []).filter((m) => m.type === 'bind' && m.source).map((m) => m.source)),
+    };
+    let ownData: Awaited<ReturnType<typeof appOwnData>>['own'] | undefined;
+
     // 2. Stop only the apps being moved, then set their containers aside
     await run(2, async () => {
+      // First pass while the apps still run: copies the bulk of their data now, so the backup after stopping
+      // only has the last few changes to save and they're back up sooner (backup store only)
+      if (backupData && !isDemo && req.backupScope === 'app') {
+        try {
+          ownData = (await appOwnData(appDataParams)).own;
+          if (ownData.length && (await storeUsable())) {
+            log('Backing up while the apps keep running...', 2);
+            await archiveAppData({ ...appDataParams, own: ownData, archiveDir: resolveBackupDir(), pre: true });
+          }
+        } catch (e) {
+          // Only a head start: the real backup after stopping still happens
+          log(`Backing up ahead didn't work (${(e as Error).message}); the full backup runs after stopping.`, 2);
+        }
+      }
       for (const c of movingContainers) {
         const originalName = c.name.replace(/^\//, '');
         // A standalone (docker run) app has no compose file to go back to: keep its full definition
@@ -521,11 +556,8 @@ export async function executeStreamingPipeline(
       if (backupData && !isDemo && req.backupScope === 'app') {
         // A quick move: only what belongs to the apps being moved (their volumes and their own folders)
         const archives = await archiveAppData({
-          apps: movingContainers.map((c) => ({ name: friendlyName(c), workingDir: c.compose?.workingDir, mounts: c.mounts || [] })),
-          stackDirs: Array.from(new Set(containers.map((c) => c.compose?.workingDir).filter(Boolean) as string[])),
-          sharedDirs: containers
-            .filter((c) => !movingContainers.some((m) => m.id === c.id))
-            .flatMap((c) => (c.mounts || []).filter((m) => m.type === 'bind' && m.source).map((m) => m.source)),
+          ...appDataParams,
+          own: ownData,
           archiveDir: snapshot.backupArchiveDir,
           log: (m) => log(m, 3),
         });

@@ -78,6 +78,15 @@ async function readHostFileImpl(hostFilePath: string): Promise<string | null> {
     }
   }
 
+  // Manifexus sees this folder directly and the file isn't in it: it doesn't exist (no helper needed)
+  if (localCandidate) {
+    try {
+      if (fs.statSync(path.dirname(localCandidate)).isDirectory()) return null;
+    } catch {
+      // the folder isn't visible either: ask a helper
+    }
+  }
+
   // 2. Docker Engine helper execution (mounts target host folder read-only)
   try {
     // Mount the folder *above* the file's folder: binding a folder that doesn't exist makes Docker

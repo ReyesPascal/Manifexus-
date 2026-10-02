@@ -30,6 +30,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     libgomp1 \
     zstd \
+    bzip2 \
     curl \
     gnupg \
     && install -m 0755 -d /etc/apt/keyrings \
@@ -48,6 +49,26 @@ ENV HOST_ROOT=/host
 
 # Create persistent storage directories
 RUN mkdir -p /data /app/backups
+
+# The backup store engine (restic, https://restic.net): backups before every change store only what changed.
+# Downloaded from restic's GitHub release and checked against its published checksums. If that fails, the build
+# still succeeds without it: backups then use .tar.zst archives, which restore the same way.
+ARG TARGETARCH
+ARG RESTIC_VERSION=0.19.1
+RUN set -u; \
+    base="https://github.com/restic/restic/releases/download/v${RESTIC_VERSION}"; \
+    file="restic_${RESTIC_VERSION}_linux_${TARGETARCH}.bz2"; \
+    if curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 -o "/tmp/$file" "$base/$file" \
+       && curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 -o /tmp/restic.sha256 "$base/SHA256SUMS" \
+       && (cd /tmp && grep " $file\$" restic.sha256 | sha256sum -c -) \
+       && bunzip2 -c "/tmp/$file" > /usr/bin/restic && chmod 0755 /usr/bin/restic \
+       && /usr/bin/restic version; then \
+      echo "Backup store engine restic ${RESTIC_VERSION} included"; \
+    else \
+      echo "WARNING: restic could not be included in this build; backups will use archives"; \
+      rm -f /usr/bin/restic; \
+    fi; \
+    rm -f "/tmp/$file" /tmp/restic.sha256
 
 # Built-in AI engine (Ollama), CPU-only: graphics-card libraries are gigabytes, so they're skipped.
 # Downloaded from Ollama's GitHub release. If that fails for any reason, the build still succeeds

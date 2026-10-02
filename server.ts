@@ -45,7 +45,9 @@ import {
   executeStreamingPipeline,
   resolveHostPathToContainer,
 } from './server/automationService';
-import { readHostFile, createHostDirectory, writeHostFile, refreshSelfMounts } from './server/hostFsService';
+import { readHostFile, createHostDirectory, writeHostFile, refreshSelfMounts, findComposeFile } from './server/hostFsService';
+import { scheduleBackupUpgrade, upgradeStatus } from './server/backupUpgrade';
+import { scheduleGarbageCollection } from './server/backupStore';
 import { globalLogService } from './server/globalLogService';
 import {
   record,
@@ -860,23 +862,11 @@ async function startServer() {
         path.posix.join(getDefaultHostStacksBaseDir((await getContainersList()).containers), targetStackName || 'combined-stack');
       let existingComposeContent: string | undefined;
 
-      // Directive 5: Check if target directory has existing docker-compose.yml for AST mutation
-      const candidatePaths = [
-        path.join(targetDir, 'docker-compose.yml'),
-        path.join(targetDir, 'docker-compose.yaml'),
-        path.join(targetDir, 'compose.yaml'),
-      ];
-
-      for (const cp of candidatePaths) {
-        try {
-          const content = await readHostFile(cp);
-          if (content && content.trim().length > 0) {
-            existingComposeContent = content;
-            break;
-          }
-        } catch {
-          // ignore
-        }
+      // The target's compose file, whatever it's called (compose.yaml, docker-compose.yml…): one look
+      try {
+        existingComposeContent = (await findComposeFile(targetDir))?.content || undefined;
+      } catch {
+        // none
       }
 
       const sourceComposes = await collectSourceComposes(selectedContainers);
@@ -963,6 +953,11 @@ async function startServer() {
       recorder.finish();
       res.end();
     }
+  });
+
+  // Older backups being moved into the backup store (shown live in the header)
+  app.get('/api/backups/upgrade', (req, res) => {
+    res.json(upgradeStatus());
   });
 
   // Restore: every change keeps a backup and can be restored (with newer changes to the same stacks)
@@ -1062,8 +1057,13 @@ async function startServer() {
     if (!ok) res.status(404).json({ error: 'That file isn’t in the backup.' });
   });
 
-  app.get('/api/restore/:id/download', (req, res) => {
-    if (!streamBackupArchive(req.params.id, res)) res.status(404).json({ error: 'The backup for this change is no longer available.' });
+  app.get('/api/restore/:id/download', async (req, res) => {
+    try {
+      if (!(await streamBackupArchive(req.params.id, res))) res.status(404).json({ error: 'The backup for this change is no longer available.' });
+    } catch (e) {
+      if (!res.headersSent) res.status(500).json({ error: `The backup couldn’t be prepared for download: ${(e as Error).message}` });
+      else res.end();
+    }
   });
 
   app.post('/api/restore/:id/copy', async (req, res) => {
@@ -1456,6 +1456,10 @@ async function startServer() {
   process.on('exit', () => stopEngine());
   enforceBackupRetention();
   setInterval(() => enforceBackupRetention(), 60 * 60 * 1000);
+  // The backup store: older backups move into it in the background, and unused backups are cleaned up
+  scheduleBackupUpgrade();
+  scheduleGarbageCollection(5 * 60 * 1000);
+  setInterval(() => scheduleGarbageCollection(0), 6 * 60 * 60 * 1000);
 
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`[Manifexus Core Engine] Server and Web Terminal running on http://0.0.0.0:${PORT}`);

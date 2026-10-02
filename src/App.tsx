@@ -208,6 +208,53 @@ export default function App() {
     return () => clearInterval(t);
   }, [refreshSoftwareUpdate]);
 
+  // Older backups moving into the backup store: shown live in the header while it runs, and for a few
+  // seconds after it finishes. Checked every 2 seconds while it runs, otherwise every 10 (a tiny request).
+  type BackupUpgrade = { running: boolean; total: number; done: number; failed: number; savedBytes: number; finishedAt?: string };
+  const [backupUpgrade, setBackupUpgrade] = useState<BackupUpgrade | null>(null);
+  const [upgradeDoneShown, setUpgradeDoneShown] = useState<string | null>(null);
+  useEffect(() => {
+    let stop = false;
+    let timer: ReturnType<typeof setTimeout>;
+    let sawRunning = false;
+    let shownFor: string | undefined;
+    const tick = async () => {
+      let next = 10 * 1000;
+      try {
+        const r = await fetch('/api/backups/upgrade', { cache: 'no-store' });
+        if (r.ok) {
+          const s: BackupUpgrade = await r.json();
+          if (s.running) {
+            sawRunning = true;
+            next = 2000;
+            setBackupUpgrade(s);
+          } else if (s.finishedAt && s.total > 0 && (sawRunning || Date.now() - new Date(s.finishedAt).getTime() < 20 * 1000) && s.finishedAt !== shownFor) {
+            // Just finished (while you watched, or moments ago): show how it went, then let it go
+            sawRunning = false;
+            shownFor = s.finishedAt;
+            setBackupUpgrade(s);
+            setUpgradeDoneShown(s.finishedAt);
+          } else if (!s.running) {
+            setBackupUpgrade((cur) => (cur && !cur.running ? cur : null));
+          }
+        }
+      } catch {
+        // offline or restarting: try again later
+      }
+      if (!stop) timer = setTimeout(tick, next);
+    };
+    void tick();
+    return () => {
+      stop = true;
+      clearTimeout(timer);
+    };
+  }, []);
+  useEffect(() => {
+    if (!upgradeDoneShown) return;
+    const t = setTimeout(() => setBackupUpgrade((cur) => (cur && !cur.running ? null : cur)), 8000);
+    return () => clearTimeout(t);
+  }, [upgradeDoneShown]);
+
   // Activity: the record of everything Manifexus did. Any screen can open it on a specific
   // activity with window.dispatchEvent(new CustomEvent('manifexus:open-activity', { detail: { id } })).
   const [activity, setActivity] = useState<{ open: boolean; id?: string; filter?: string }>({ open: false });
@@ -1078,6 +1125,7 @@ export default function App() {
           }}
           activityAlert={unseenFailure}
           onOpenRestore={() => setIsRestoreOpen(true)}
+          backupUpgrade={backupUpgrade}
           onOpenCleanup={() => setIsCleanupOpen(true)}
           onOpenSettings={() => setIsSettingsOpen(true)}
           onRefresh={() => {

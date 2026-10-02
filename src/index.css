@@ -193,7 +193,7 @@ body {
 /* Work in progress (React Bits' ShinyText): a soft light sweeps across "Moving…", "Starting…" */
 @keyframes mfx-shimmer { from { background-position: 150% 0; } to { background-position: -50% 0; } }
 .mfx-shimmer {
-  background: linear-gradient(100deg, currentColor 35%, rgba(255, 255, 255, 0.95) 50%, currentColor 65%) 0 0 / 250% 100% no-repeat;
+  background: linear-gradient(100deg, currentColor 35%, rgba(255, 255, 255, 0.95) 50%, currentColor 65%) 0 0 / 250% 100% repeat-x;
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
