@@ -18,7 +18,13 @@ Bring that standard to every change:
   the rest of the app (the iOS-style glass hero, capsules, quiet labels, clear main actions).
 - Don't settle for what was literally asked when a better experience is within reach. Find it, build it,
   and explain the reasoning in a sentence.
-- Check your work visually (desktop and phone) before calling it done.
+- Check your work visually on desktop before calling it done. Don't spend time testing on a phone (see Phone).
+
+## Phone
+
+- On a phone, Manifexus is only a simple list: stacks, their apps and ports, and Open for each app.
+  Everything else (moving, practice, settings screens and so on) is designed for desktop.
+- Don't test or tune features for the phone beyond that list.
 
 ## Working with the owner
 

@@ -224,7 +224,7 @@ export const GettingStartedSheet: React.FC<SetupProps> = ({ open, config, onSave
         </span>
         <h3 className="mt-4 text-[24px] font-semibold text-white">You’re All Set</h3>
         <p className="mt-1.5 text-[15px] leading-[21px] max-w-[420px]" style={{ color: ios.secondary }}>
-          Take a one-minute tour of your dashboard. You’ll try a few things as you go. You can take it again anytime from Settings.
+          Next, practice on a pretend server that’s gotten messy: tidy it up and undo a change, safely. Then a quick look around your real dashboard. You can do this again anytime from Settings.
         </p>
       </div>
     );
@@ -234,7 +234,7 @@ export const GettingStartedSheet: React.FC<SetupProps> = ({ open, config, onSave
           Done
         </Button>
         <Button onClick={() => void finish(true)} className="flex-1 sm:flex-none sm:min-w-[170px]">
-          Take the Tour
+          Start Practice
         </Button>
       </div>
     );
@@ -286,14 +286,14 @@ const TOUR: TourStep[] = [
   { target: '[role="group"][aria-label="Your apps"]', title: 'Running, Stopped and Ports', text: 'Tap Running or Stopped to show only those apps. Tap it again to show everything. Ports shows which app uses each port.', tryIt: { hint: 'Tap Running or Stopped', on: 'click' } },
   { target: 'section[aria-label]:not([aria-label="Not in a Stack"])', title: 'Stacks', text: 'A stack is a folder of apps that belong together. Tap its name to fold it away, + to add an app, and ⓘ for its details: rename it, start or stop all its apps, edit its compose file, or delete it.' },
   { target: '[data-flip^="app:"]', title: 'Your apps', text: 'Open, Restart and Stop are right on each card. Tap a card for its details: health, logs, storage and more.' },
-  { target: '[data-flip^="app:"]', title: 'Move apps by dragging', text: 'Drag an app onto another stack. It moves right away, and the real move happens in the background, backed up so you can undo it.' },
+  { target: '[data-flip^="app:"]', title: 'Move apps by dragging', text: 'Just like in practice: drag an app onto another stack (or use ⇄ on the card). It moves right away; the real move runs in the background, backed up first.' },
   { target: 'button', title: 'New Stack', text: 'Make a stack in one click: type its name and press Return. Then drag apps onto it.' },
   { target: 'button[aria-label^="Activity"]', title: 'Activity', text: 'A record of everything Manifexus does, with the reason when something goes wrong.' },
-  { target: 'button[aria-label="Restore"]', title: 'Restore', text: 'Every change is backed up. Go back to before any of them here.' },
+  { target: 'button[aria-label="Restore"]', title: 'Restore', text: 'Every move, delete and fix is listed here, newest first, each with its backup. Restore one to go back to before it, like you did in practice. Pin the ones you want to keep for good.' },
   { target: 'button[aria-label="Clean Up"]', title: 'Clean Up', text: 'Finds folders no app uses anymore, and deletes the ones you pick (backed up first).' },
   { target: 'button[aria-label="Diagnostics"]', title: 'Diagnostics', text: 'Health checks in plain words, with a fix for anything that’s wrong.' },
   { target: 'button[aria-label^="Updat"]', title: 'Updates', text: 'New versions with what’s new in each. You can always go back to an earlier one.' },
-  { target: 'button[aria-label="Settings"]', title: 'Settings', text: 'Everything from setup lives here, including Server Changes, and you can take this tour again.' },
+  { target: 'button[aria-label="Settings"]', title: 'Settings', text: 'Everything from setup: your server’s address, where new stacks go, Server Changes (whether Manifexus may change your server), Simple or Advanced, and Getting Started to practice and take this tour again.' },
 ];
 
 /** Finds a step's target; New Stack is matched by its words, as it has no label of its own */

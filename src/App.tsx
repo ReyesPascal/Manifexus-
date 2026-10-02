@@ -43,6 +43,7 @@ import { DeleteStackDialog, DeleteStackTarget } from './components/DeleteStackDi
 import { DeleteAppDialog, DeleteAppTarget } from './components/DeleteAppDialog';
 import { HostAutomationModal } from './components/HostAutomationModal';
 import { GettingStartedSheet, Tour } from './components/GettingStarted';
+import { Practice } from './components/Practice';
 import { ManifexusHeroHeader } from './components/ManifexusHeroHeader';
 import { LibraryBar, Shelf, ShelfGrid, shelfSpan, FolderIcon, Health, TileGrid, ShelfNote, panelStyle, displayFont } from './components/Shelf';
 import type { MenuItem } from './components/ui/ios';
@@ -99,6 +100,7 @@ export default function App() {
   // Getting Started: setup on a brand-new install (and from Settings), then the tour
   const [gettingStarted, setGettingStarted] = useState(false);
   const [touring, setTouring] = useState(false);
+  const [practicing, setPracticing] = useState(false);
   const offeredSetup = useRef(false);
   useEffect(() => {
     if (config && config.onboardingDone === false && !offeredSetup.current) {
@@ -987,7 +989,7 @@ export default function App() {
       </div>
 
       {/* Main Dashboard Canvas */}
-      <main data-dashboard className="flex-1 max-w-7xl w-full mx-auto px-4 lg:px-6 py-6">
+      <main data-dashboard inert={practicing} className="flex-1 max-w-7xl w-full mx-auto px-4 lg:px-6 py-6">
         {/* Directive 1: Hero Layout & Structural Protection for Manifexus */}
         <ManifexusHeroHeader
           container={manifexusHeroContainer}
@@ -1421,8 +1423,17 @@ export default function App() {
         detectedStacksDir={defaultStacksDir}
         onClose={(tour) => {
           setGettingStarted(false);
-          if (tour) {
+          // Practice first (a pretend messy server), then the tour of the real dashboard
+          if (tour) setTimeout(() => setPracticing(true), 250);
+        }}
+      />
+      <Practice
+        open={practicing}
+        onClose={(thenTour) => {
+          setPracticing(false);
+          if (thenTour) {
             setViewMode('compose');
+            window.scrollTo({ top: 0 });
             setTimeout(() => setTouring(true), 350);
           }
         }}

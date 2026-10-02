@@ -2,6 +2,17 @@
   "_about": "What's new in each version of Manifexus, newest first. Shown in Updates. Write for people, not developers: short, plain sentences about what they can now do. The newest entry's version is what gets built and tagged; older entries can give the \"commit\" they were released from.",
   "releases": [
     {
+      "version": "2.9",
+      "date": "2026-10-02",
+      "headline": "Practice on a messy server before touching yours.",
+      "new": [
+        "Practice: Getting Started now lets you tidy up a pretend server that's gotten messy. Make a stack, drag apps where they belong, rename and delete stacks, then undo a change with Restore. Nothing you do there touches your server.",
+        "After practice, the tour of your real dashboard explains Restore and Settings in more depth."
+      ],
+      "improved": [],
+      "fixed": []
+    },
+    {
       "version": "2.8",
       "date": "2026-10-02",
       "headline": "The dashboard is back to how it was in 2.3.",
