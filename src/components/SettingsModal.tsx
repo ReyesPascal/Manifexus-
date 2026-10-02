@@ -22,7 +22,7 @@ interface SettingsModalProps {
   onBack?: () => void;
 }
 
-type Field = 'host' | 'dir' | 'refresh' | 'mode' | 'commands' | 'size';
+type Field = 'host' | 'dir' | 'refresh' | 'mode' | 'commands';
 
 /** Small green check shown in a row for a moment after it saves */
 const SavedCheck: React.FC = () => (
@@ -251,24 +251,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <SectionFooter>
             Simple keeps screens clean. Advanced is for people who like to see how things work: every step shows its command, explained. Either
             way, Show Commands in any activity reveals them, and Activity → Commands lists them all.
-          </SectionFooter>
-        </section>
-
-        <section>
-          <SectionHeader>Text Size</SectionHeader>
-          <Segmented
-            label="Text size"
-            value={config?.textSize || 'default'}
-            onChange={(v) => void save('size', { textSize: v as 'default' | 'large' | 'larger' })}
-            options={[
-              { value: 'default', label: 'Default' },
-              { value: 'large', label: 'Large' },
-              { value: 'larger', label: 'Larger' },
-            ]}
-          />
-          <SectionFooter>
-            The dashboard sizes itself to show your stacks, and never goes smaller than this. Ctrl + and Ctrl − change it from the
-            dashboard too (⌘ on a Mac).
           </SectionFooter>
         </section>
 

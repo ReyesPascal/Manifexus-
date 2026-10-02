@@ -1,5 +1,5 @@
 import { tipProps } from './ui/Tooltip';
-import React, { useContext, useEffect, useRef, useState } from 'react';
+import React from 'react';
 import { Activity, History, Stethoscope, Settings, RefreshCw, Sparkles, Eraser } from 'lucide-react';
 import { DeepContainerMetadata, SystemStatus } from '../types';
 import { ManifexusAppIcon, UpdateGlyph } from './SoftwareUpdateSheet';
@@ -40,9 +40,6 @@ const SearchGlyph = () => (
   </svg>
 );
 
-/** The slim bar shows the same toolbar, icons only */
-const Slim = React.createContext(false);
-
 /** A button inside the glass toolbar. The label hides on narrower screens; the tooltip always explains it. */
 const ToolButton: React.FC<{
   icon: React.ReactNode;
@@ -51,9 +48,7 @@ const ToolButton: React.FC<{
   onClick: () => void;
   tone?: 'default' | 'blue' | 'red';
   align?: 'center' | 'end';
-}> = ({ icon, label, tip, onClick, tone = 'default' }) => {
-  const slim = useContext(Slim);
-  return (
+}> = ({ icon, label, tip, onClick, tone = 'default' }) => (
   <button
     type="button"
     onClick={onClick}
@@ -66,10 +61,9 @@ const ToolButton: React.FC<{
     }}
   >
     {icon}
-    {!slim && <span className="hidden xl:inline">{label}</span>}
+    <span className="hidden xl:inline">{label}</span>
   </button>
-  );
-};
+);
 
 const Divider = () => <span className="w-px h-4 mx-0.5" style={{ background: 'rgba(255,255,255,0.12)' }} aria-hidden="true" />;
 
@@ -99,148 +93,6 @@ export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
   const isVersion = Boolean(versionLabel?.startsWith('Version '));
   const build = !versionLabel ? undefined : isVersion ? versionLabel!.slice(8) : versionLabel.startsWith('Build ') ? versionLabel.slice(6) : 'dev';
   const iconCls = 'w-[15px] h-[15px]';
-
-  const toolbar = (
-  <nav
-    aria-label="Manifexus"
-    className="flex items-center justify-between sm:justify-start gap-0.5 p-1 rounded-full"
-    style={{
-      background: 'rgba(255,255,255,0.075)',
-      boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.16), inset 0 0 0 1px rgba(255,255,255,0.07)',
-      backdropFilter: 'blur(24px) saturate(170%)',
-    }}
-  >
-    {onOpenAssistant && (
-      <>
-        <ToolButton icon={<Sparkles className={iconCls} />} label="Ask" tip="Ask Manifexus: the built-in AI can look at your apps and fix things with your OK." onClick={onOpenAssistant} />
-        <Divider />
-      </>
-    )}
-    <ToolButton
-      icon={
-        <span className="relative flex">
-          <Activity className={iconCls} />
-          {activityAlert && (
-            <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full" style={{ background: ios.red, boxShadow: '0 0 0 2px #26262a' }} />
-          )}
-        </span>
-      }
-      label="Activity"
-      tip={activityAlert ? 'Something failed. Open Activity to see exactly what happened.' : 'Everything Manifexus has done, with full details.'}
-      tone={activityAlert ? 'red' : 'default'}
-      onClick={onOpenActivity}
-    />
-    {onOpenRestore && (
-      <ToolButton
-        icon={<History className={iconCls} />}
-        label="Restore"
-        tip="Go back to before a move or delete. Every change keeps a backup."
-        onClick={onOpenRestore}
-      />
-    )}
-    {onOpenCleanup && (
-      <ToolButton
-        icon={<Eraser className={iconCls} />}
-        label="Clean Up"
-        tip="Find folders on your server that no app uses anymore, and delete the ones you pick."
-        onClick={onOpenCleanup}
-      />
-    )}
-    <Divider />
-    {container && onInspectContainer && (
-      <ToolButton
-        icon={<Stethoscope className={iconCls} />}
-        label="Diagnostics"
-        tip="Health checks, resources and details for Manifexus."
-        onClick={() => onInspectContainer(container)}
-      />
-    )}
-    {onOpenUpdates && (
-      <ToolButton
-        icon={updating ? <RefreshCw className={`${iconCls} animate-spin`} /> : <UpdateGlyph className="w-4 h-4" />}
-        label={updating ? 'Updating…' : updateAvailable ? 'Update' : 'Updates'}
-        tip={
-          updating
-            ? 'Manifexus is installing an update.'
-            : updateAvailable
-              ? 'A new version of Manifexus is ready to install.'
-              : 'Check for and install new versions of Manifexus.'
-        }
-        tone={updateAvailable || updating ? 'blue' : 'default'}
-        onClick={onOpenUpdates}
-        align="end"
-      />
-    )}
-    <ToolButton
-      icon={<Settings className={iconCls} />}
-      label="Settings"
-      tip="Stacks folder, refresh rate, Server Changes and more."
-      onClick={onOpenSettings}
-      align="end"
-    />
-  </nav>
-  );
-  const searchRow = (
-    <>
-          {(onSearch || onNewStack) && (
-            <div className="flex items-center gap-2">
-              {onSearch && (
-                <label
-                  className="flex-1 min-w-0 flex items-center gap-2 h-9 pl-3.5 pr-2 rounded-full transition-shadow focus-within:ring-2 focus-within:ring-[#0A84FF]"
-                  style={{ background: 'rgba(255,255,255,0.075)', boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.16), inset 0 0 0 1px rgba(255,255,255,0.07)', backdropFilter: 'blur(24px) saturate(170%)', color: ios.secondary }}
-                >
-                  <SearchGlyph />
-                  <input
-                    type="search"
-                    value={search}
-                    onChange={(e) => onSearch(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Escape' && onSearch('')}
-                    placeholder="Search apps"
-                    aria-label="Search apps"
-                    className="flex-1 min-w-0 bg-transparent outline-none text-[14px] text-white placeholder:text-[rgba(235,235,245,0.4)] [&::-webkit-search-cancel-button]:hidden"
-                  />
-                  {search && (
-                    <button type="button" onClick={() => onSearch('')} aria-label="Clear search" className="w-5 h-5 rounded-full flex items-center justify-center text-[11px] text-black" style={{ background: 'rgba(235,235,245,0.45)' }}>
-                      ✕
-                    </button>
-                  )}
-                </label>
-              )}
-              {onNewStack && (
-                <button
-                  type="button"
-                  onClick={onNewStack}
-                  className="flex-shrink-0 inline-flex items-center gap-1.5 h-9 pl-3 pr-4 rounded-full text-[14px] font-semibold transition-all hover:brightness-125 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0A84FF]"
-                  // Blue-tinted glass: the main action, in the same material as everything around it
-                  style={{
-                    background: 'rgba(10,132,255,0.22)',
-                    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.18), inset 0 0 0 1px rgba(10,132,255,0.35)',
-                    backdropFilter: 'blur(24px) saturate(170%)',
-                    color: '#64B5FF',
-                  }}
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.8" strokeLinecap="round" aria-hidden>
-                    <path d="M12 5v14M5 12h14" />
-                  </svg>
-                  New Stack
-                </button>
-              )}
-            </div>
-          )}
-    </>
-  );
-
-  // Scrolled down to the stacks: the big header has gone up off the screen, and a slim bar with the same
-  // search, New Stack and toolbar takes its place at the top (like a title collapsing into the bar on iOS)
-  const sentinel = useRef<HTMLDivElement>(null);
-  const [slim, setSlim] = useState(false);
-  useEffect(() => {
-    const el = sentinel.current;
-    if (!el || typeof IntersectionObserver === 'undefined') return;
-    const io = new IntersectionObserver(([e]) => setSlim(!e.isIntersecting && e.boundingClientRect.top < 0));
-    io.observe(el);
-    return () => io.disconnect();
-  }, []);
 
   return (
     <section
@@ -334,47 +186,132 @@ export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
 
           {/* Toolbar (records, then system), and under it search and New Stack */}
           <div className="w-full sm:w-auto sm:self-start lg:self-auto flex-shrink-0 flex flex-col gap-2.5">
-          {toolbar}
-          {searchRow}
-          </div>
-        </div>
-
-      </div>
-      <div ref={sentinel} aria-hidden className="absolute bottom-12 left-0 h-px w-px" />
-
-      <div
-        aria-hidden={!slim}
-        inert={!slim}
-        className="fixed top-0 inset-x-0 z-40 transition-all duration-200 ease-out"
-        style={{
-          opacity: slim ? 1 : 0,
-          transform: slim ? 'none' : 'translateY(-8px)',
-          pointerEvents: slim ? 'auto' : 'none',
-          background: 'rgba(12,18,34,0.72)',
-          backdropFilter: 'blur(28px) saturate(170%)',
-          WebkitBackdropFilter: 'blur(28px) saturate(170%)',
-          boxShadow: 'inset 0 -0.5px 0 rgba(255,255,255,0.1), 0 10px 30px -18px rgba(0,0,0,0.8)',
-        }}
-      >
-        <div className="max-w-7xl mx-auto px-4 lg:px-6 h-14 flex items-center gap-3">
-          <button
-            type="button"
-            onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
-            data-tip="Back to the top"
-            className="flex items-center gap-2 flex-shrink-0 rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0A84FF]"
+          <nav
+            aria-label="Manifexus"
+            className="flex items-center justify-between sm:justify-start gap-0.5 p-1 rounded-full"
+            style={{
+              background: 'rgba(255,255,255,0.075)',
+              boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.16), inset 0 0 0 1px rgba(255,255,255,0.07)',
+              backdropFilter: 'blur(24px) saturate(170%)',
+            }}
           >
-            <span className="block w-7 h-7 [&>svg]:w-full [&>svg]:h-full">
-              <ManifexusAppIcon size={28} />
-            </span>
-            <span className="hidden md:inline text-[16px] font-semibold text-white" style={{ letterSpacing: '-0.02em' }}>
-              Manifexus
-            </span>
-          </button>
-          <div className="hidden sm:flex flex-1 min-w-0 max-w-[460px] items-center gap-2">{searchRow}</div>
-          <div className="ml-auto">
-            <Slim.Provider value>{toolbar}</Slim.Provider>
+            {onOpenAssistant && (
+              <>
+                <ToolButton icon={<Sparkles className={iconCls} />} label="Ask" tip="Ask Manifexus: the built-in AI can look at your apps and fix things with your OK." onClick={onOpenAssistant} />
+                <Divider />
+              </>
+            )}
+            <ToolButton
+              icon={
+                <span className="relative flex">
+                  <Activity className={iconCls} />
+                  {activityAlert && (
+                    <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full" style={{ background: ios.red, boxShadow: '0 0 0 2px #26262a' }} />
+                  )}
+                </span>
+              }
+              label="Activity"
+              tip={activityAlert ? 'Something failed. Open Activity to see exactly what happened.' : 'Everything Manifexus has done, with full details.'}
+              tone={activityAlert ? 'red' : 'default'}
+              onClick={onOpenActivity}
+            />
+            {onOpenRestore && (
+              <ToolButton
+                icon={<History className={iconCls} />}
+                label="Restore"
+                tip="Go back to before a move or delete. Every change keeps a backup."
+                onClick={onOpenRestore}
+              />
+            )}
+            {onOpenCleanup && (
+              <ToolButton
+                icon={<Eraser className={iconCls} />}
+                label="Clean Up"
+                tip="Find folders on your server that no app uses anymore, and delete the ones you pick."
+                onClick={onOpenCleanup}
+              />
+            )}
+            <Divider />
+            {container && onInspectContainer && (
+              <ToolButton
+                icon={<Stethoscope className={iconCls} />}
+                label="Diagnostics"
+                tip="Health checks, resources and details for Manifexus."
+                onClick={() => onInspectContainer(container)}
+              />
+            )}
+            {onOpenUpdates && (
+              <ToolButton
+                icon={updating ? <RefreshCw className={`${iconCls} animate-spin`} /> : <UpdateGlyph className="w-4 h-4" />}
+                label={updating ? 'Updating…' : updateAvailable ? 'Update' : 'Updates'}
+                tip={
+                  updating
+                    ? 'Manifexus is installing an update.'
+                    : updateAvailable
+                      ? 'A new version of Manifexus is ready to install.'
+                      : 'Check for and install new versions of Manifexus.'
+                }
+                tone={updateAvailable || updating ? 'blue' : 'default'}
+                onClick={onOpenUpdates}
+                align="end"
+              />
+            )}
+            <ToolButton
+              icon={<Settings className={iconCls} />}
+              label="Settings"
+              tip="Stacks folder, refresh rate, Server Changes and more."
+              onClick={onOpenSettings}
+              align="end"
+            />
+          </nav>
+          {(onSearch || onNewStack) && (
+            <div className="flex items-center gap-2">
+              {onSearch && (
+                <label
+                  className="flex-1 min-w-0 flex items-center gap-2 h-9 pl-3.5 pr-2 rounded-full transition-shadow focus-within:ring-2 focus-within:ring-[#0A84FF]"
+                  style={{ background: 'rgba(255,255,255,0.075)', boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.16), inset 0 0 0 1px rgba(255,255,255,0.07)', backdropFilter: 'blur(24px) saturate(170%)', color: ios.secondary }}
+                >
+                  <SearchGlyph />
+                  <input
+                    type="search"
+                    value={search}
+                    onChange={(e) => onSearch(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Escape' && onSearch('')}
+                    placeholder="Search apps"
+                    aria-label="Search apps"
+                    className="flex-1 min-w-0 bg-transparent outline-none text-[14px] text-white placeholder:text-[rgba(235,235,245,0.4)] [&::-webkit-search-cancel-button]:hidden"
+                  />
+                  {search && (
+                    <button type="button" onClick={() => onSearch('')} aria-label="Clear search" className="w-5 h-5 rounded-full flex items-center justify-center text-[11px] text-black" style={{ background: 'rgba(235,235,245,0.45)' }}>
+                      ✕
+                    </button>
+                  )}
+                </label>
+              )}
+              {onNewStack && (
+                <button
+                  type="button"
+                  onClick={onNewStack}
+                  className="flex-shrink-0 inline-flex items-center gap-1.5 h-9 pl-3 pr-4 rounded-full text-[14px] font-semibold transition-all hover:brightness-125 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0A84FF]"
+                  // Blue-tinted glass: the main action, in the same material as everything around it
+                  style={{
+                    background: 'rgba(10,132,255,0.22)',
+                    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.18), inset 0 0 0 1px rgba(10,132,255,0.35)',
+                    backdropFilter: 'blur(24px) saturate(170%)',
+                    color: '#64B5FF',
+                  }}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.8" strokeLinecap="round" aria-hidden>
+                    <path d="M12 5v14M5 12h14" />
+                  </svg>
+                  New Stack
+                </button>
+              )}
+            </div>
+          )}
           </div>
         </div>
+
       </div>
     </section>
   );

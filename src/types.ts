@@ -106,8 +106,6 @@ export interface ManifexusConfig {
   experienceMode?: 'simple' | 'advanced';
   /** Show the command behind each step. Unset = follow the mode (on in Advanced) */
   showCommands?: boolean;
-  /** Text Size: the smallest the dashboard is drawn (it grows to fit when there's room) */
-  textSize?: 'default' | 'large' | 'larger';
   /** Server Changes: off until turned on. Off, Manifexus only looks (and starts, stops or restarts apps) */
   allowServerChanges?: boolean;
   /** Getting Started (setup and tour) was finished or skipped; false only on a brand-new install */

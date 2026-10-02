@@ -1,5 +1,4 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import { DeepContainerMetadata } from '../types';
 import { AppIcon } from './AppCard';
 import { MenuButton, MenuItem, ios } from './ui/ios';
@@ -557,21 +556,16 @@ function placeStacks(apps: number[], C: number, ids: string[]): Place[] {
  * a status update or a small window drag doesn't animate. Off for people who ask for reduced motion.
  */
 const lastSeen = new Map<string, { x: number; y: number; at: number }>();
-function useGlide(container: React.RefObject<HTMLElement | null>, signature: string, zoom = 1, paused = false, liftScale = 1) {
+function useGlide(container: React.RefObject<HTMLElement | null>, signature: string, zoom = 1) {
   const prevSig = useRef<string | null>(null);
   useLayoutEffect(() => {
     const root = container.current;
-    // While the size is being worked out (before anything is shown), wait: the glide then goes from
-    // where things were to where they end up, not through the sizes tried along the way
-    if (!root || paused) return;
+    if (!root) return;
     const reduce = typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     const animate = prevSig.current !== null && prevSig.current !== signature && !reduce;
     prevSig.current = signature;
     const now = Date.now();
     const nodes = Array.from(root.querySelectorAll<HTMLElement>('[data-flip]'));
-    // Positions are kept relative to the dashboard and without the drag zoom-out, so they still compare
-    // when the dashboard is zoomed out while an app is dragged (and the page is scrolled)
-    const base = root.getBoundingClientRect();
     // A name shown twice (two stacks with the same service name) can't be followed: leave those be
     const count = new Map<string, number>();
     for (const n of nodes) count.set(n.dataset.flip!, (count.get(n.dataset.flip!) || 0) + 1);
@@ -589,11 +583,11 @@ function useGlide(container: React.RefObject<HTMLElement | null>, signature: str
         const sc = cs.scale && cs.scale !== 'none' ? parseFloat(cs.scale) : 1;
         if (sc && sc !== 1) {
           const [ox, oy] = cs.transformOrigin.split(' ').map((v) => parseFloat(v) || 0);
-          left -= ox * zoom * liftScale * (1 - sc);
-          top -= oy * zoom * liftScale * (1 - sc);
+          left -= ox * zoom * (1 - sc);
+          top -= oy * zoom * (1 - sc);
         }
       }
-      const pos = { x: (left - base.left) / liftScale, y: (top - base.top) / liftScale, at: now };
+      const pos = { x: left + window.scrollX, y: top + window.scrollY, at: now };
       const before = lastSeen.get(id);
       lastSeen.set(id, pos);
       if (!animate || !before || now - before.at > 5 * 60 * 1000) continue;
@@ -619,40 +613,11 @@ function useGlide(container: React.RefObject<HTMLElement | null>, signature: str
   });
 }
 
-/** Height of the slim bar at the top once the header has scrolled away */
-const SLIM_BAR = 56;
-
-const reduceMotion = (): boolean => typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-
-/** Text Size in Settings (and Ctrl + / Ctrl −): the smallest the dashboard is ever drawn */
-// Default is a touch larger than the cards were designed at, so the smallest text stays easy to read
-export const TEXT_SIZES = { default: 1.05, large: 1.2, larger: 1.35 } as const;
-export type TextSize = keyof typeof TEXT_SIZES;
-
-/** With room to spare (a few stacks), the dashboard grows up to this much above the text size */
-const ROOM_TO_GROW = 1.2;
-
-/** Many stacks: app cards show just their icon, name and status (set by ShelfGrid) */
-export const CompactCards = React.createContext(false);
-
-/** What a stack offers the drop tiles: its name, icon and how to take an app */
-type StackProps = { span?: number; id?: string; title?: string; icon?: React.ReactNode; status?: React.ReactNode; onDropApp?: (appId: string) => void };
-
-/**
- * The dashboard's stacks. On a computer it sizes itself: as big as fits every stack on screen (a little
- * bigger than the text size when there's room), never smaller than the text size. When even that can't
- * show everything, app cards get simpler instead of smaller; past that, it scrolls.
- *
- * Dragging an app: if every stack is on screen, drop it straight onto one. If not, the stacks are offered as
- * big, readable name tiles that always fit. Either way, once it's dropped, the stack it went to is brought
- * into view and lights up, so you see it land.
- */
-export const ShelfGrid: React.FC<{ children: React.ReactNode; textScale?: number; auto?: boolean; dragTiles?: boolean }> = ({ children, textScale = 1, auto = false, dragTiles = false }) => {
+export const ShelfGrid: React.FC<{ children: React.ReactNode; zoom?: number }> = ({ children, zoom = 1 }) => {
   const ref = useRef<HTMLDivElement>(null);
   // The room on screen, measured outside the zoom; zoomed out, the dashboard gets 1/zoom times as much
   const outer = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(() => (typeof window !== 'undefined' ? Math.min(window.innerWidth - 32, 1232) : 1232));
-  const [vh, setVh] = useState(() => (typeof window !== 'undefined' ? window.innerHeight : 900));
   useEffect(() => {
     const el = outer.current;
     if (!el) return;
@@ -661,43 +626,17 @@ export const ShelfGrid: React.FC<{ children: React.ReactNode; textScale?: number
       setWidth((cur) => (cur === w ? cur : w));
     });
     ro.observe(el);
-    const onResize = () => setVh(window.innerHeight);
-    window.addEventListener('resize', onResize);
-    return () => {
-      ro.disconnect();
-      window.removeEventListener('resize', onResize);
-    };
+    return () => ro.disconnect();
   }, []);
-
-  // Sizing: try the largest size first, step down to the text size, then simpler cards, then scroll.
-  // It's all worked out before the screen is drawn, so nothing flickers.
-  const top = Math.round(textScale * ROOM_TO_GROW * 100) / 100;
-  const [fitState, setFitState] = useState<{ zoom: number; compact: boolean }>({ zoom: textScale, compact: false });
-  const searching = useRef(false);
-  const [, settle] = useState(0);
-  const contentKey = React.Children.toArray(children)
-    .map((c) => (React.isValidElement(c) ? `${c.key}:${(c.props as { span?: number }).span ?? ''}` : ''))
-    .join(',');
-  const fitKey = `${textScale}|${width}|${vh}|${contentKey}`;
-  const lastKey = useRef<string | null>(null);
-  if (auto && lastKey.current !== fitKey) {
-    lastKey.current = fitKey;
-    searching.current = true;
-    if (fitState.zoom !== top || fitState.compact) setFitState({ zoom: top, compact: false });
-  }
-  if (!auto && lastKey.current !== null) lastKey.current = null;
-  const zoom = auto ? fitState.zoom : textScale;
-  const compact = auto && fitState.compact;
-
-  const items = React.Children.toArray(children).filter(React.isValidElement) as React.ReactElement<StackProps>[];
+  const items = React.Children.toArray(children).filter(React.isValidElement) as React.ReactElement<{ span?: number; id?: string }>[];
   const C = Math.max(1, Math.floor((width / zoom + GAP) / (MIN_COL + GAP)));
   // "Not in a Stack" isn't a stack: it sits on its own at the bottom, full width, and never changes how the stacks fit
   // Stacks by name (numbers in order), so they stay put; a stack still being named comes first
   const stacks = items
     .filter((c) => c.props.id !== 'stack:none')
     .sort((a, b) => {
-      const ta = a.props.id === 'stack:__new' ? '' : String(a.props.title || '');
-      const tb = b.props.id === 'stack:__new' ? '' : String(b.props.title || '');
+      const ta = a.props.id === 'stack:__new' ? '' : String((a.props as { title?: string }).title || '');
+      const tb = b.props.id === 'stack:__new' ? '' : String((b.props as { title?: string }).title || '');
       return ta.localeCompare(tb, undefined, { numeric: true, sensitivity: 'base' });
     });
   const loose = items.filter((c) => c.props.id === 'stack:none');
@@ -708,101 +647,23 @@ export const ShelfGrid: React.FC<{ children: React.ReactNode; textScale?: number
   );
   // What the arrangement is: columns, and each stack's place, size and apps (not their status)
   const signature = C + '|' + places.map((p) => `${stacks[p.i].key}@${p.col},${p.row},${p.w}x${p.h}:${stacks[p.i].props.span}`).join(';') + '|' + loose.map((c) => c.props.span).join(',');
-  useGlide(ref, signature, zoom, auto && searching.current);
-  useLayoutEffect(() => {
-    if (!auto || !searching.current || !ref.current) return;
-    const r = ref.current.getBoundingClientRect();
-    // Fits = every stack in view once you scroll down to them (under the slim bar that takes the header's place)
-    const room = window.innerHeight - SLIM_BAR - 24;
-    if (r.height <= room) {
-      searching.current = false;
-      settle((n) => n + 1);
-    } else if (fitState.zoom > textScale + 0.001) {
-      setFitState((f) => ({ ...f, zoom: Math.max(textScale, Math.round((f.zoom - 0.05) * 100) / 100) }));
-    } else if (!fitState.compact) {
-      setFitState({ zoom: top, compact: true });
-    } else {
-      searching.current = false;
-      settle((n) => n + 1);
-    }
-  });
-
-  // Dragging an app
-  const [tiles, setTiles] = useState(false);
-  const [over, setOver] = useState<string | null>(null);
-  const [landed, setLanded] = useState<string | null>(null);
-  const land = (id: string) => {
-    setLanded(id);
-    // Bring the stack into view (after the tiles fade) and light it up, so you see the app arrive
-    setTimeout(() => {
-      const el = ref.current?.querySelector<HTMLElement>(`[data-flip="stack:${CSS.escape(id)}"]`);
-      if (el) {
-        const r = el.getBoundingClientRect();
-        if (r.top < SLIM_BAR + 8 || r.bottom > window.innerHeight - 20) el.scrollIntoView({ behavior: reduceMotion() ? 'auto' : 'smooth', block: 'center' });
-      }
-    }, 180);
-    setTimeout(() => setLanded((cur) => (cur === id ? null : cur)), 1800);
-  };
-  useEffect(() => {
-    if (!dragTiles) return;
-    const root = outer.current;
-    if (!root) return;
-    let t: ReturnType<typeof setTimeout> | undefined;
-    const start = (e: DragEvent) => {
-      // An app card (the card's own handler runs after this one, so look at what's being dragged)
-      if (!(e.target as HTMLElement)?.closest?.('[data-lift][draggable="true"]')) return;
-      // Every stack already on screen: just drop it on one
-      const shelves = Array.from(ref.current?.querySelectorAll<HTMLElement>('[data-flip^="stack:"]') || []);
-      const hidden = shelves.some((el) => {
-        const r = el.getBoundingClientRect();
-        return r.top < SLIM_BAR || r.bottom > window.innerHeight;
-      });
-      // Changing the page during dragstart can cancel the drag in some browsers: a moment later
-      if (hidden) t = setTimeout(() => setTiles(true), 0);
-    };
-    const end = () => {
-      clearTimeout(t);
-      setTiles(false);
-      setOver(null);
-    };
-    // Dropped straight onto a stack on the dashboard
-    const onDrop = (e: DragEvent) => {
-      if (!e.dataTransfer?.types.includes(DRAG_TYPE)) return;
-      const host = (e.target as HTMLElement)?.closest?.<HTMLElement>('[data-flip^="stack:"]');
-      if (host?.dataset.flip) land(host.dataset.flip.slice(6));
-    };
-    root.addEventListener('dragstart', start);
-    document.addEventListener('drop', onDrop, true);
-    document.addEventListener('dragend', end, true);
-    document.addEventListener('drop', end);
-    return () => {
-      clearTimeout(t);
-      root.removeEventListener('dragstart', start);
-      document.removeEventListener('drop', onDrop, true);
-      document.removeEventListener('dragend', end, true);
-      document.removeEventListener('drop', end);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dragTiles]);
-
-  const targets = stacks.filter((c) => c.props.onDropApp && c.props.id !== 'stack:__new');
+  useGlide(ref, signature, zoom);
   return (
     // Zoomed out, the dashboard is drawn smaller, so more columns fit and the stacks re-fit (and glide) to them
     <div ref={outer}>
-    <CompactCards.Provider value={compact}>
     <div
       ref={ref}
       data-zoom={zoom}
       className="flex flex-col gap-3 sm:gap-4"
-      // How much an app card grows when you point at it: a gentle lift (a simpler card grows a bit more)
-      style={{ ...(zoom !== 1 ? { zoom } : null), ['--mfx-lift' as string]: compact ? '1.08' : '1.04' } as React.CSSProperties}
+      // How much an app card grows when you point at it: to about full size when zoomed out, a gentle lift otherwise
+      style={{ ...(zoom !== 1 ? { zoom } : null), ['--mfx-lift' as string]: zoom < 1 ? String(Math.min(1.5, 0.95 / zoom)) : '1.05' } as React.CSSProperties}
     >
       <div className="grid gap-3 sm:gap-4" style={{ gridTemplateColumns: `repeat(${C}, minmax(0, 1fr))` }}>
         {places.map(({ i, col, row, w, h, cols }) => (
           <div
             key={stacks[i].key ?? i}
             data-flip={`stack:${stacks[i].props.id ?? stacks[i].key}`}
-            className={`mfx-lift-host flex flex-col min-w-0 rounded-[22px] ${landed === String(stacks[i].props.id ?? stacks[i].key) ? 'mfx-landed' : ''}`}
+            className="mfx-lift-host flex flex-col min-w-0"
             style={{ gridColumn: `${col + 1} / span ${w}`, gridRow: `${row + 1} / span ${h}` }}
           >
             <CellCols.Provider value={cols}>{stacks[i]}</CellCols.Provider>
@@ -815,74 +676,6 @@ export const ShelfGrid: React.FC<{ children: React.ReactNode; textScale?: number
         </div>
       ))}
     </div>
-    </CompactCards.Provider>
-
-    {/* Dragging with stacks off screen: every stack as a big tile to drop on, always all in view */}
-    {tiles &&
-      createPortal(
-        <div
-          className="fixed inset-0 z-[40] flex flex-col items-center justify-center p-6 sm:p-10 mfx-tiles-in"
-          style={{ background: 'rgba(8,12,24,0.72)', backdropFilter: 'blur(18px) saturate(140%)', WebkitBackdropFilter: 'blur(18px) saturate(140%)', fontFamily: ios.font }}
-          onDragOver={(e) => e.preventDefault()}
-          onDrop={(e) => e.preventDefault()}
-        >
-          <p className="mb-5 text-[17px] font-semibold text-white">Drop it on a stack</p>
-          <div
-            className="w-full max-w-[1100px] grid gap-3 overflow-y-auto"
-            style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${targets.length > 24 ? 190 : 230}px, 1fr))` }}
-          >
-            {targets.map((c) => {
-              const id = String(c.props.id ?? c.key);
-              const on = over === id;
-              return (
-                <div
-                  key={id}
-                  onDragEnter={(e) => {
-                    e.preventDefault();
-                    setOver(id);
-                  }}
-                  onDragOver={(e) => {
-                    e.preventDefault();
-                    e.dataTransfer.dropEffect = 'move';
-                    if (over !== id) setOver(id);
-                  }}
-                  onDragLeave={(e) => !e.currentTarget.contains(e.relatedTarget as Node) && setOver((o) => (o === id ? null : o))}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    const appId = e.dataTransfer.getData(DRAG_TYPE);
-                    setTiles(false);
-                    setOver(null);
-                    if (appId) {
-                      c.props.onDropApp?.(appId);
-                      land(id);
-                    }
-                  }}
-                  className="flex items-center gap-3 px-4 py-3.5 rounded-[18px] transition-all duration-150"
-                  style={{
-                    ...panelStyle,
-                    ...(on ? { boxShadow: `${panelStyle.boxShadow}, inset 0 0 0 2px rgba(100,181,255,0.9), 0 0 30px rgba(10,132,255,0.35)`, transform: 'scale(1.03)' } : null),
-                  }}
-                >
-                  <span className="flex-shrink-0 pointer-events-none">{c.props.icon}</span>
-                  <span className="min-w-0 pointer-events-none">
-                    <span className="block text-[17px] leading-[22px] font-semibold text-white truncate" style={{ fontFamily: displayFont, letterSpacing: '-0.01em' }}>
-                      {c.props.title}
-                    </span>
-                    <span className="block mt-0.5 text-[13px] leading-[18px] truncate" style={{ color: ios.secondary }}>
-                      {c.props.status}
-                    </span>
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-          <p className="mt-5 text-[13px]" style={{ color: ios.secondary }}>
-            Let go anywhere else to cancel.
-          </p>
-        </div>,
-        document.body
-      )}
     </div>
   );
 };
