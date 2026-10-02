@@ -2,6 +2,19 @@
   "_about": "What's new in each version of Manifexus, newest first. Shown in Updates. Write for people, not developers: short, plain sentences about what they can now do. The newest entry's version is what gets built and tagged; older entries can give the \"commit\" they were released from.",
   "releases": [
     {
+      "version": "2.4",
+      "date": "2026-10-02",
+      "headline": "Easier to read, and every stack in view when you need it.",
+      "new": [
+        "Choose how big your stacks and apps are: Small, Default, Large or Larger, in Settings → Size. Ctrl + and Ctrl − (⌘ on a Mac) change it right from the dashboard.",
+        "Fit All Stacks on Screen: shrinks the dashboard to show every stack at once, but never so small it's hard to read. Past that, it scrolls."
+      ],
+      "improved": [
+        "The dashboard now shows at a comfortable, readable size. When you drag an app, it zooms out to show every stack you can drop it on, lets you watch it land and the stacks settle, then zooms back in."
+      ],
+      "fixed": []
+    },
+    {
       "version": "2.3",
       "date": "2026-09-30",
       "headline": "Delete an app you no longer need, safely, with everything backed up first.",

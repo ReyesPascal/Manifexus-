@@ -44,7 +44,7 @@ import { DeleteAppDialog, DeleteAppTarget } from './components/DeleteAppDialog';
 import { HostAutomationModal } from './components/HostAutomationModal';
 import { GettingStartedSheet, Tour } from './components/GettingStarted';
 import { ManifexusHeroHeader } from './components/ManifexusHeroHeader';
-import { LibraryBar, Shelf, ShelfGrid, shelfSpan, FolderIcon, Health, TileGrid, ShelfNote, panelStyle, displayFont } from './components/Shelf';
+import { CARD_SIZES, CardSize, LibraryBar, Shelf, ShelfGrid, shelfSpan, FolderIcon, Health, TileGrid, ShelfNote, panelStyle, displayFont } from './components/Shelf';
 import type { MenuItem } from './components/ui/ios';
 import { ios } from './components/ui/ios';
 import { RestoreSheet } from './components/RestoreSheet';
@@ -115,11 +115,11 @@ export default function App() {
   }, [notice]);
   // New Stack: a new stack appears right away with its name ready to type; Enter creates it
   const [draftStack, setDraftStack] = useState(false);
-  // The dashboard is always shown zoomed out (every stack at once, apps dragged between them), except on a
-  // phone, where cards stay full size to stay readable and easy to tap
-  const [zoomedOut, setZoomedOut] = useState(() => typeof window === 'undefined' || window.innerWidth >= 768);
+  // Desktop (a mouse and room): apps can be dragged between stacks, and the dashboard zooms out to show
+  // every stack while one is dragged. On a phone, cards stay full size, easy to read and tap.
+  const [desktop, setDesktop] = useState(() => typeof window === 'undefined' || window.innerWidth >= 768);
   useEffect(() => {
-    const on = () => setZoomedOut(window.innerWidth >= 768);
+    const on = () => setDesktop(window.innerWidth >= 768);
     window.addEventListener('resize', on);
     return () => window.removeEventListener('resize', on);
   }, []);
@@ -666,6 +666,29 @@ export default function App() {
     void fetchData(false);
   };
 
+  // How big the dashboard is drawn. Ctrl + / Ctrl − (⌘ on a Mac) step through the sizes, Ctrl 0 goes back
+  // to Default; it shows straight away and is saved like any setting.
+  const cardSize: CardSize = config?.cardSize && config.cardSize in CARD_SIZES ? config.cardSize : 'default';
+  const sizeRef = useRef(cardSize);
+  sizeRef.current = cardSize;
+  useEffect(() => {
+    const order = Object.keys(CARD_SIZES) as CardSize[];
+    const names: Record<CardSize, string> = { small: 'Small', default: 'Default', large: 'Large', larger: 'Larger' };
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+      if (document.documentElement.classList.contains('sheet-open') || (e.target as HTMLElement)?.closest?.('input, textarea, [contenteditable="true"]')) return;
+      const i = order.indexOf(sizeRef.current);
+      const next = e.key === '=' || e.key === '+' ? order[Math.min(order.length - 1, i + 1)] : e.key === '-' || e.key === '_' ? order[Math.max(0, i - 1)] : e.key === '0' ? 'default' : null;
+      if (!next) return;
+      e.preventDefault();
+      setConfig((c) => (c ? { ...c, cardSize: next } : c));
+      setNotice({ text: `Size: ${names[next]}${next === sizeRef.current ? (next === 'larger' ? ' (the largest)' : next === 'small' ? ' (the smallest)' : '') : ''}` });
+      void fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cardSize: next }) });
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   // Add / Edit Group
   const handleSaveGroup = async (group: Partial<UserGroup> & { id: string; name: string }) => {
     try {
@@ -906,7 +929,7 @@ export default function App() {
         return m ? { busy: `Moving to ${stackLabel(m.to)}…`, moveProgress: m.progress } : {};
       })()}
       inStack={inStack}
-      canDrag={zoomedOut}
+      canDrag={desktop}
       stackName={c.compose?.project ? stackLabel(c.compose.project) : undefined}
       onRename={handleRenameApp}
       container={c}
@@ -1154,7 +1177,7 @@ export default function App() {
 
         {/* BY STACK */}
         {!isLoading && viewMode === 'compose' && (
-          <ShelfGrid zoom={zoomedOut ? 0.62 : 1}>
+          <ShelfGrid scale={CARD_SIZES[cardSize]} fit={desktop && Boolean(config?.fitAllStacks)} dragZoom={desktop}>
             {draftStack && (
               <Shelf
                 key="__new"
@@ -1180,7 +1203,7 @@ export default function App() {
                   <Shelf
                     key={projectName}
                     span={span}
-                    onDropApp={own || !zoomedOut ? undefined : (appId) => moveInBackground(appId, projectName)}
+                    onDropApp={own || !desktop ? undefined : (appId) => moveInBackground(appId, projectName)}
                     id={`stack:${projectName}`}
                     title={stackLabel(projectName)}
                     rename={{ original: projectName, onSave: (n) => void handleRenameStack(projectName, n) }}

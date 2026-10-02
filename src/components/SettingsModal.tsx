@@ -22,7 +22,7 @@ interface SettingsModalProps {
   onBack?: () => void;
 }
 
-type Field = 'host' | 'dir' | 'refresh' | 'mode' | 'commands';
+type Field = 'host' | 'dir' | 'refresh' | 'mode' | 'commands' | 'size' | 'fit';
 
 /** Small green check shown in a row for a moment after it saves */
 const SavedCheck: React.FC = () => (
@@ -251,6 +251,39 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <SectionFooter>
             Simple keeps screens clean. Advanced is for people who like to see how things work: every step shows its command, explained. Either
             way, Show Commands in any activity reveals them, and Activity → Commands lists them all.
+          </SectionFooter>
+        </section>
+
+        <section>
+          <SectionHeader>Size</SectionHeader>
+          <Segmented
+            label="Card size"
+            value={config?.cardSize || 'default'}
+            onChange={(v) => void save('size', { cardSize: v as 'small' | 'default' | 'large' | 'larger' })}
+            options={[
+              { value: 'small', label: 'Small' },
+              { value: 'default', label: 'Default' },
+              { value: 'large', label: 'Large' },
+              { value: 'larger', label: 'Larger' },
+            ]}
+          />
+          <div className="mt-3">
+            <Group>
+              <Row
+                title="Fit All Stacks on Screen"
+                subtitle="Shrinks to show every stack at once, but never too small to read"
+                trailing={
+                  <span className="flex items-center gap-2">
+                    {savedIn('fit')}
+                    <Switch checked={Boolean(config?.fitAllStacks)} onChange={(v) => void save('fit', { fitAllStacks: v })} label="Fit all stacks on screen" />
+                  </span>
+                }
+              />
+            </Group>
+          </div>
+          <SectionFooter>
+            Ctrl + and Ctrl − change the size from the dashboard too (⌘ on a Mac). When you drag an app, the dashboard zooms out to show
+            every stack, and comes back once it lands.
           </SectionFooter>
         </section>
 

@@ -556,16 +556,21 @@ function placeStacks(apps: number[], C: number, ids: string[]): Place[] {
  * a status update or a small window drag doesn't animate. Off for people who ask for reduced motion.
  */
 const lastSeen = new Map<string, { x: number; y: number; at: number }>();
-function useGlide(container: React.RefObject<HTMLElement | null>, signature: string, zoom = 1) {
+function useGlide(container: React.RefObject<HTMLElement | null>, signature: string, zoom = 1, paused = false, liftScale = 1) {
   const prevSig = useRef<string | null>(null);
   useLayoutEffect(() => {
     const root = container.current;
-    if (!root) return;
+    // While the size is being worked out (before anything is shown), wait: the glide then goes from
+    // where things were to where they end up, not through the sizes tried along the way
+    if (!root || paused) return;
     const reduce = typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     const animate = prevSig.current !== null && prevSig.current !== signature && !reduce;
     prevSig.current = signature;
     const now = Date.now();
     const nodes = Array.from(root.querySelectorAll<HTMLElement>('[data-flip]'));
+    // Positions are kept relative to the dashboard and without the drag zoom-out, so they still compare
+    // when the dashboard is zoomed out while an app is dragged (and the page is scrolled)
+    const base = root.getBoundingClientRect();
     // A name shown twice (two stacks with the same service name) can't be followed: leave those be
     const count = new Map<string, number>();
     for (const n of nodes) count.set(n.dataset.flip!, (count.get(n.dataset.flip!) || 0) + 1);
@@ -583,11 +588,11 @@ function useGlide(container: React.RefObject<HTMLElement | null>, signature: str
         const sc = cs.scale && cs.scale !== 'none' ? parseFloat(cs.scale) : 1;
         if (sc && sc !== 1) {
           const [ox, oy] = cs.transformOrigin.split(' ').map((v) => parseFloat(v) || 0);
-          left -= ox * zoom * (1 - sc);
-          top -= oy * zoom * (1 - sc);
+          left -= ox * zoom * liftScale * (1 - sc);
+          top -= oy * zoom * liftScale * (1 - sc);
         }
       }
-      const pos = { x: left + window.scrollX, y: top + window.scrollY, at: now };
+      const pos = { x: (left - base.left) / liftScale, y: (top - base.top) / liftScale, at: now };
       const before = lastSeen.get(id);
       lastSeen.set(id, pos);
       if (!animate || !before || now - before.at > 5 * 60 * 1000) continue;
@@ -613,11 +618,26 @@ function useGlide(container: React.RefObject<HTMLElement | null>, signature: str
   });
 }
 
-export const ShelfGrid: React.FC<{ children: React.ReactNode; zoom?: number }> = ({ children, zoom = 1 }) => {
+/** Sizes people can pick in Settings (and with Ctrl + / Ctrl −) */
+export const CARD_SIZES = { small: 0.85, default: 1, large: 1.15, larger: 1.3 } as const;
+export type CardSize = keyof typeof CARD_SIZES;
+
+const reduceMotion = () => typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/** Fit-to-screen never draws smaller than this share of the chosen size, so text stays readable */
+const FIT_FLOOR = 0.8;
+
+/**
+ * The dashboard's stacks. Drawn at the size picked in Settings; with `fit`, shrunk just enough to show every
+ * stack on screen, but never below a readable size (past that it scrolls). While an app is dragged, it
+ * zooms out to show every stack to drop it on, and back when it's let go.
+ */
+export const ShelfGrid: React.FC<{ children: React.ReactNode; scale?: number; fit?: boolean; dragZoom?: boolean }> = ({ children, scale = 1, fit = false, dragZoom = false }) => {
   const ref = useRef<HTMLDivElement>(null);
   // The room on screen, measured outside the zoom; zoomed out, the dashboard gets 1/zoom times as much
   const outer = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(() => (typeof window !== 'undefined' ? Math.min(window.innerWidth - 32, 1232) : 1232));
+  const [vh, setVh] = useState(() => (typeof window !== 'undefined' ? window.innerHeight : 900));
   useEffect(() => {
     const el = outer.current;
     if (!el) return;
@@ -626,8 +646,82 @@ export const ShelfGrid: React.FC<{ children: React.ReactNode; zoom?: number }> =
       setWidth((cur) => (cur === w ? cur : w));
     });
     ro.observe(el);
-    return () => ro.disconnect();
+    const onResize = () => setVh(window.innerHeight);
+    window.addEventListener('resize', onResize);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', onResize);
+    };
   }, []);
+
+  // Fit: start at the chosen size and step down until everything is on screen (or the floor is reached).
+  // It all happens before the screen is drawn, so nothing flickers.
+  const [fitZoom, setFitZoom] = useState(scale);
+  const searching = useRef(false);
+  const [, settle] = useState(0);
+  const floor = Math.round(scale * FIT_FLOOR * 100) / 100;
+  const contentKey = React.Children.toArray(children)
+    .map((c) => (React.isValidElement(c) ? `${c.key}:${(c.props as { span?: number }).span ?? ''}` : ''))
+    .join(',');
+  // Something changed (apps, window, size): start again from the chosen size, before anything is drawn
+  const fitKey = `${scale}|${width}|${vh}|${contentKey}`;
+  const lastKey = useRef<string | null>(null);
+  if (fit && lastKey.current !== fitKey) {
+    lastKey.current = fitKey;
+    searching.current = true;
+    if (fitZoom !== scale) setFitZoom(scale);
+  }
+  if (!fit && lastKey.current !== null) lastKey.current = null;
+  const zoom = fit ? fitZoom : scale;
+
+  // Dragging an app: zoom out (a smooth scale of the whole dashboard, so nothing moves around under the pointer)
+  const [lift, setLift] = useState<{ s: number; ox: number; oy: number } | null>(null);
+  useEffect(() => {
+    if (!dragZoom) return;
+    const root = outer.current;
+    if (!root) return;
+    let t: ReturnType<typeof setTimeout> | undefined;
+    let dropped = false;
+    const start = (e: DragEvent) => {
+      // An app card (the card's own handler runs after this one, so look at what's being dragged)
+      if (!(e.target as HTMLElement)?.closest?.('[data-lift][draggable="true"]')) return;
+      dropped = false;
+      const r = root.getBoundingClientRect();
+      const h = window.innerHeight;
+      // Small enough to show every stack below where they start (but not tiny), never bigger than a gentle step back
+      const top = Math.max(16, r.top);
+      const s = Math.min(0.94, Math.max(0.5, (h - top - 24) / r.height));
+      // Shrink toward the top of the stacks when they start on screen (so the most fits); scrolled down,
+      // toward the middle of the screen, so what you were looking at stays put
+      const oy = r.top >= 0 ? 0 : h / 2 - r.top;
+      // Changing the page during dragstart can cancel the drag in some browsers: do it a moment later
+      t = setTimeout(() => setLift({ s, ox: r.width / 2, oy }), 0);
+    };
+    // Dropped on a stack: stay zoomed out a moment, so you see the app land and the stacks settle into
+    // their new arrangement, then zoom back in. Let go anywhere else: zoom back in straight away.
+    const back = (delay: number) => {
+      clearTimeout(t);
+      t = setTimeout(() => setLift(null), delay);
+    };
+    const onDrop = (e: DragEvent) => {
+      if (!e.dataTransfer?.types.includes(DRAG_TYPE)) return;
+      dropped = true;
+      back(reduceMotion() ? 0 : 1100);
+    };
+    const onEnd = () => {
+      if (!dropped) back(0);
+      dropped = false;
+    };
+    root.addEventListener('dragstart', start);
+    document.addEventListener('drop', onDrop, true);
+    document.addEventListener('dragend', onEnd, true);
+    return () => {
+      clearTimeout(t);
+      root.removeEventListener('dragstart', start);
+      document.removeEventListener('drop', onDrop, true);
+      document.removeEventListener('dragend', onEnd, true);
+    };
+  }, [dragZoom]);
   const items = React.Children.toArray(children).filter(React.isValidElement) as React.ReactElement<{ span?: number; id?: string }>[];
   const C = Math.max(1, Math.floor((width / zoom + GAP) / (MIN_COL + GAP)));
   // "Not in a Stack" isn't a stack: it sits on its own at the bottom, full width, and never changes how the stacks fit
@@ -647,10 +741,29 @@ export const ShelfGrid: React.FC<{ children: React.ReactNode; zoom?: number }> =
   );
   // What the arrangement is: columns, and each stack's place, size and apps (not their status)
   const signature = C + '|' + places.map((p) => `${stacks[p.i].key}@${p.col},${p.row},${p.w}x${p.h}:${stacks[p.i].props.span}`).join(';') + '|' + loose.map((c) => c.props.span).join(',');
-  useGlide(ref, signature, zoom);
+  useGlide(ref, signature, zoom, fit && searching.current, lift?.s ?? 1);
+  useLayoutEffect(() => {
+    if (!fit || !searching.current || !ref.current) return;
+    const r = ref.current.getBoundingClientRect();
+    // Room below the header (once it's scrolled away, a little more)
+    const top = Math.min(r.top + window.scrollY, 220);
+    const room = window.innerHeight - top - 24;
+    if (r.height > room && fitZoom > floor + 0.001) setFitZoom((z) => Math.max(floor, Math.round((z - 0.04) * 100) / 100));
+    else {
+      searching.current = false;
+      settle((n) => n + 1);
+    }
+  });
   return (
     // Zoomed out, the dashboard is drawn smaller, so more columns fit and the stacks re-fit (and glide) to them
-    <div ref={outer}>
+    <div
+      ref={outer}
+      style={{
+        transform: lift ? `scale(${lift.s})` : undefined,
+        transformOrigin: lift ? `${lift.ox}px ${lift.oy}px` : undefined,
+        transition: 'transform 340ms cubic-bezier(0.2, 0.8, 0.2, 1)',
+      }}
+    >
     <div
       ref={ref}
       data-zoom={zoom}
