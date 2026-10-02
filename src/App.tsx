@@ -44,7 +44,7 @@ import { DeleteAppDialog, DeleteAppTarget } from './components/DeleteAppDialog';
 import { HostAutomationModal } from './components/HostAutomationModal';
 import { GettingStartedSheet, Tour } from './components/GettingStarted';
 import { ManifexusHeroHeader } from './components/ManifexusHeroHeader';
-import { LibraryBar, Shelf, ShelfGrid, shelfSpan, FolderIcon, Health, TileGrid, ShelfNote, panelStyle, displayFont } from './components/Shelf';
+import { type DashboardView, LibraryBar, Shelf, ShelfGrid, shelfSpan, FolderIcon, Health, TileGrid, ShelfNote, panelStyle, displayFont } from './components/Shelf';
 import type { MenuItem } from './components/ui/ios';
 import { ios } from './components/ui/ios';
 import { RestoreSheet } from './components/RestoreSheet';
@@ -115,13 +115,47 @@ export default function App() {
   }, [notice]);
   // New Stack: a new stack appears right away with its name ready to type; Enter creates it
   const [draftStack, setDraftStack] = useState(false);
-  // The dashboard is always shown zoomed out (every stack at once, apps dragged between them), except on a
-  // phone, where cards stay full size to stay readable and easy to tap
-  const [zoomedOut, setZoomedOut] = useState(() => typeof window === 'undefined' || window.innerWidth >= 768);
+  // A computer (mouse, room): the dashboard sizes itself and apps can be dragged between stacks.
+  // On a phone, cards stay full size, easy to read and tap.
+  const [desktop, setDesktop] = useState(() => typeof window === 'undefined' || window.innerWidth >= 768);
   useEffect(() => {
-    const on = () => setZoomedOut(window.innerWidth >= 768);
+    const on = () => setDesktop(window.innerWidth >= 768);
     window.addEventListener('resize', on);
     return () => window.removeEventListener('resize', on);
+  }, []);
+  // Comfortable (full cards, the default) or Overview (every stack at once, simple cards); remembered in this browser
+  const [dashView, setDashView] = useState<DashboardView>(() => {
+    try {
+      return localStorage.getItem('manifexus.view') === 'overview' ? 'overview' : 'comfortable';
+    } catch {
+      return 'comfortable';
+    }
+  });
+  const chooseView = useCallback((v: DashboardView) => {
+    setDashView(v);
+    try {
+      localStorage.setItem('manifexus.view', v);
+    } catch {
+      // private window: just for now
+    }
+  }, []);
+  // O switches between them (not while typing, or with a screen open on top)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key.toLowerCase() !== 'o' || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (document.documentElement.classList.contains('sheet-open') || (e.target as HTMLElement)?.closest?.('input, textarea, select, [contenteditable="true"]')) return;
+      setDashView((v) => {
+        const next = v === 'overview' ? 'comfortable' : 'overview';
+        try {
+          localStorage.setItem('manifexus.view', next);
+        } catch {
+          // fine
+        }
+        return next;
+      });
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
   }, []);
   const openMoveForApp = (c: DeepContainerMetadata) => {
     setMoveInitialDestination(undefined);
@@ -906,7 +940,7 @@ export default function App() {
         return m ? { busy: `Moving to ${stackLabel(m.to)}…`, moveProgress: m.progress } : {};
       })()}
       inStack={inStack}
-      canDrag={zoomedOut}
+      canDrag={desktop}
       stackName={c.compose?.project ? stackLabel(c.compose.project) : undefined}
       onRename={handleRenameApp}
       container={c}
@@ -1062,6 +1096,8 @@ export default function App() {
           stopped={isLoading ? undefined : stats.stopped}
           ports={isLoading ? undefined : stats.ports}
           onShowPorts={() => setIsPortsOpen(true)}
+          dashboardView={viewMode === 'compose' ? dashView : undefined}
+          onDashboardView={chooseView}
           groupItems={[
             { key: 'group', label: 'New Group…', onSelect: () => setIsGroupManagerOpen(true) },
             ...(viewMode === 'groups' ? [{ key: 'edit', label: 'Edit Groups…', divider: true, onSelect: () => setIsGroupManagerOpen(true) }] : []),
@@ -1154,7 +1190,7 @@ export default function App() {
 
         {/* BY STACK */}
         {!isLoading && viewMode === 'compose' && (
-          <ShelfGrid zoom={zoomedOut ? 0.62 : 1}>
+          <ShelfGrid view={dashView} fit={desktop} dragOverview={desktop && dashView === 'comfortable'}>
             {draftStack && (
               <Shelf
                 key="__new"
@@ -1180,7 +1216,7 @@ export default function App() {
                   <Shelf
                     key={projectName}
                     span={span}
-                    onDropApp={own || !zoomedOut ? undefined : (appId) => moveInBackground(appId, projectName)}
+                    onDropApp={own || !desktop ? undefined : (appId) => moveInBackground(appId, projectName)}
                     id={`stack:${projectName}`}
                     title={stackLabel(projectName)}
                     rename={{ original: projectName, onSave: (n) => void handleRenameStack(projectName, n) }}

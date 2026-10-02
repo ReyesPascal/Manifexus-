@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { DeepContainerMetadata, UserGroup } from '../types';
 import { MenuButton, MenuItem } from './ui/ios';
-import { DRAG_TYPE, InlineName, RenameButton } from './Shelf';
+import { CompactCards, DRAG_TYPE, InlineName, RenameButton } from './Shelf';
 import { helperKind } from '../appHelpers';
 
 /** Where a move is: the server's step (1–6; 0 while it's prepared, 7 when done), since when, and whether it waits its turn */
@@ -212,6 +212,8 @@ const InfoGlyph = () => (
  * Start it) with Restart and Stop beside it. Tapping the card also opens Details.
  */
 export const AppCard: React.FC<AppCardProps> = ({ container, inStack, stackName, helpers = [], hostAddress, groups, onInspect, onAction, onSetPrimaryPort, onMoveApp, onRename, busy, canDrag, moveProgress }) => {
+  // Many stacks: cards show just the icon, name and status, so everything fits at a readable size
+  const compact = React.useContext(CompactCards);
   const [acting, setActing] = useState<'start' | 'stop' | 'restart'>();
   const [renaming, setRenaming] = useState(false);
   // A new name shows straight away, before the refresh brings it back from the server
@@ -313,14 +315,14 @@ export const AppCard: React.FC<AppCardProps> = ({ container, inStack, stackName,
         el.classList.add('mfx-dragging');
       }}
       onDragEnd={(e) => e.currentTarget.classList.remove('mfx-dragging')}
-      className={`group/card relative flex flex-col gap-4 rounded-[18px] p-4 cursor-pointer text-left ${busyLabel || container.state === 'restarting' ? 'mfx-busy' : ''} focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0A84FF] ${
+      className={`group/card relative flex flex-col gap-4 rounded-[18px] ${compact ? 'px-3.5 py-3' : 'p-4'} cursor-pointer text-left ${busyLabel || container.state === 'restarting' ? 'mfx-busy' : ''} focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0A84FF] ${
         running ? 'bg-white/[0.07] hover:bg-white/[0.10]' : 'bg-white/[0.045] hover:bg-white/[0.075]'
       }`}
       style={{ fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", Roboto, sans-serif' }}
     >
       <div className="relative flex items-center gap-3 min-w-0">
         <div className={running ? '' : 'opacity-60 grayscale-[35%]'}>
-          <AppIcon container={container} size={48} />
+          <AppIcon container={container} size={compact ? 38 : 48} />
         </div>
         <div className="flex-1 min-w-0">
           {renaming ? (
@@ -371,6 +373,8 @@ export const AppCard: React.FC<AppCardProps> = ({ container, inStack, stackName,
           </div>
           {moveProgress && <MoveBar progress={moveProgress} />}
         </div>
+        {!compact && (
+          <>
         {/* Managing the app: Move and Details, in the same capsule as Restart and Stop */}
         <div className="flex items-stretch h-[32px] rounded-[10px] overflow-hidden flex-shrink-0" style={{ background: 'rgba(255,255,255,0.06)' }}>
           {onMoveApp && (
@@ -400,8 +404,12 @@ export const AppCard: React.FC<AppCardProps> = ({ container, inStack, stackName,
             <InfoGlyph />
           </button>
         </div>
+          </>
+        )}
       </div>
 
+      {!compact && (
+        <>
       {/* The main action, with Restart and Stop beside it */}
       <div className="flex items-stretch gap-2">
         <div className="flex-1 min-w-0">
@@ -487,6 +495,8 @@ export const AppCard: React.FC<AppCardProps> = ({ container, inStack, stackName,
           </div>
         )}
       </div>
+        </>
+      )}
     </div>
   );
 };

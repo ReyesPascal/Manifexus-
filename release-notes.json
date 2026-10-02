@@ -2,6 +2,19 @@
   "_about": "What's new in each version of Manifexus, newest first. Shown in Updates. Write for people, not developers: short, plain sentences about what they can now do. The newest entry's version is what gets built and tagged; older entries can give the \"commit\" they were released from.",
   "releases": [
     {
+      "version": "2.7",
+      "date": "2026-10-02",
+      "headline": "Easy to read by default, with an Overview of everything.",
+      "new": [
+        "Overview: see every stack at once, with simple app cards (icon, name and status) so the text stays easy to read. Switch with Comfortable / Overview next to Running and Stopped, or press O. Manifexus remembers which you like."
+      ],
+      "improved": [
+        "The dashboard now opens at a comfortable, readable size, a little bigger when there's room, and never smaller than easy to read. Past that it scrolls.",
+        "Dragging an app when some stacks are off screen switches to Overview so every stack is in reach, then back a moment after it lands, so you see it arrive."
+      ],
+      "fixed": []
+    },
+    {
       "version": "2.6",
       "date": "2026-10-02",
       "headline": "The dashboard is back to how it was in 2.3.",

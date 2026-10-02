@@ -556,11 +556,13 @@ function placeStacks(apps: number[], C: number, ids: string[]): Place[] {
  * a status update or a small window drag doesn't animate. Off for people who ask for reduced motion.
  */
 const lastSeen = new Map<string, { x: number; y: number; at: number }>();
-function useGlide(container: React.RefObject<HTMLElement | null>, signature: string, zoom = 1) {
+function useGlide(container: React.RefObject<HTMLElement | null>, signature: string, zoom = 1, paused = false) {
   const prevSig = useRef<string | null>(null);
   useLayoutEffect(() => {
     const root = container.current;
-    if (!root) return;
+    // While the size is worked out (before anything is drawn), wait: then glide from where things were
+    // to where they end up, not through the sizes tried on the way
+    if (!root || paused) return;
     const reduce = typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     const animate = prevSig.current !== null && prevSig.current !== signature && !reduce;
     prevSig.current = signature;
@@ -613,11 +615,32 @@ function useGlide(container: React.RefObject<HTMLElement | null>, signature: str
   });
 }
 
-export const ShelfGrid: React.FC<{ children: React.ReactNode; zoom?: number }> = ({ children, zoom = 1 }) => {
+/** Overview: app cards show just their icon, name and status (set by ShelfGrid) */
+export const CompactCards = React.createContext(false);
+
+/** Comfortable: designed size, a little bigger when there's room. Overview: simple cards, a little smaller to fit. */
+const SIZES = { comfortable: { max: 1.12, min: 1 }, overview: { max: 1, min: 0.85 } } as const;
+export type DashboardView = keyof typeof SIZES;
+
+/**
+ * The dashboard's stacks, in one of two views:
+ *  - Comfortable (the default): full cards at an easy-to-read size, a little bigger when there's room and
+ *    never smaller than the size they were designed at; past that, it scrolls.
+ *  - Overview: every stack at once, with simple cards (icon, name, status) so the text stays readable.
+ * On a computer, dragging an app while some stacks are off screen switches to Overview for the drag, and
+ * back a moment after it lands, so you see it arrive.
+ */
+export const ShelfGrid: React.FC<{ children: React.ReactNode; view?: DashboardView; fit?: boolean; dragOverview?: boolean }> = ({
+  children,
+  view = 'comfortable',
+  fit = false,
+  dragOverview = false,
+}) => {
   const ref = useRef<HTMLDivElement>(null);
   // The room on screen, measured outside the zoom; zoomed out, the dashboard gets 1/zoom times as much
   const outer = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(() => (typeof window !== 'undefined' ? Math.min(window.innerWidth - 32, 1232) : 1232));
+  const [vh, setVh] = useState(() => (typeof window !== 'undefined' ? window.innerHeight : 900));
   useEffect(() => {
     const el = outer.current;
     if (!el) return;
@@ -626,8 +649,79 @@ export const ShelfGrid: React.FC<{ children: React.ReactNode; zoom?: number }> =
       setWidth((cur) => (cur === w ? cur : w));
     });
     ro.observe(el);
-    return () => ro.disconnect();
+    const onResize = () => setVh(window.innerHeight);
+    window.addEventListener('resize', onResize);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', onResize);
+    };
   }, []);
+
+  // Dragging an app with stacks off screen: Overview until it has landed
+  const [dragging, setDragging] = useState(false);
+  useEffect(() => {
+    if (!dragOverview) return;
+    const root = outer.current;
+    if (!root) return;
+    let t: ReturnType<typeof setTimeout> | undefined;
+    let dropped = false;
+    const start = (e: DragEvent) => {
+      // An app card (its own handler runs after this one, so look at what's being dragged)
+      if (!(e.target as HTMLElement)?.closest?.('[data-lift][draggable="true"]')) return;
+      dropped = false;
+      clearTimeout(t);
+      const hidden = Array.from(ref.current?.querySelectorAll<HTMLElement>('[data-flip^="stack:"]') || []).some((el) => {
+        const r = el.getBoundingClientRect();
+        return r.top < 0 || r.bottom > window.innerHeight;
+      });
+      // Changing the page during dragstart can cancel the drag in some browsers: a moment later
+      if (hidden) t = setTimeout(() => setDragging(true), 0);
+    };
+    const back = (delay: number) => {
+      clearTimeout(t);
+      t = setTimeout(() => setDragging(false), delay);
+    };
+    const onDrop = (e: DragEvent) => {
+      if (!e.dataTransfer?.types.includes(DRAG_TYPE)) return;
+      dropped = true;
+      // Stay a moment: the app lands and the stacks settle into place, then back
+      back(1400);
+    };
+    const onEnd = () => {
+      if (!dropped) back(0);
+      dropped = false;
+    };
+    root.addEventListener('dragstart', start);
+    document.addEventListener('drop', onDrop, true);
+    document.addEventListener('dragend', onEnd, true);
+    return () => {
+      clearTimeout(t);
+      root.removeEventListener('dragstart', start);
+      document.removeEventListener('drop', onDrop, true);
+      document.removeEventListener('dragend', onEnd, true);
+    };
+  }, [dragOverview]);
+  const shown: DashboardView = dragging ? 'overview' : view;
+  const compact = shown === 'overview';
+  const size = SIZES[shown];
+
+  // Sizing: try the biggest first and step down until every stack is on screen, or the smallest readable size
+  // is reached (then it scrolls). Worked out before the screen is drawn, so nothing flickers.
+  const [zoom, setZoom] = useState<number>(size.min);
+  const searching = useRef(false);
+  const [, settle] = useState(0);
+  const contentKey = React.Children.toArray(children)
+    .map((c) => (React.isValidElement(c) ? `${c.key}:${(c.props as { span?: number }).span ?? ''}` : ''))
+    .join(',');
+  const fitKey = `${shown}|${fit}|${width}|${vh}|${contentKey}`;
+  const lastKey = useRef<string | null>(null);
+  if (lastKey.current !== fitKey) {
+    lastKey.current = fitKey;
+    // A phone: the designed size in both views (the simple cards are what make Overview shorter there)
+    const startAt = fit ? size.max : 1;
+    searching.current = fit;
+    if (zoom !== startAt) setZoom(startAt);
+  }
   const items = React.Children.toArray(children).filter(React.isValidElement) as React.ReactElement<{ span?: number; id?: string }>[];
   const C = Math.max(1, Math.floor((width / zoom + GAP) / (MIN_COL + GAP)));
   // "Not in a Stack" isn't a stack: it sits on its own at the bottom, full width, and never changes how the stacks fit
@@ -647,16 +741,27 @@ export const ShelfGrid: React.FC<{ children: React.ReactNode; zoom?: number }> =
   );
   // What the arrangement is: columns, and each stack's place, size and apps (not their status)
   const signature = C + '|' + places.map((p) => `${stacks[p.i].key}@${p.col},${p.row},${p.w}x${p.h}:${stacks[p.i].props.span}`).join(';') + '|' + loose.map((c) => c.props.span).join(',');
-  useGlide(ref, signature, zoom);
+  useGlide(ref, signature, zoom, searching.current);
+  useLayoutEffect(() => {
+    if (!searching.current || !ref.current) return;
+    const r = ref.current.getBoundingClientRect();
+    // Fits: every stack in view once you've scrolled down to them
+    if (r.height > window.innerHeight - 32 && zoom > size.min + 0.001) setZoom((z) => Math.max(size.min, Math.round((z - 0.04) * 100) / 100));
+    else {
+      searching.current = false;
+      settle((n) => n + 1);
+    }
+  });
   return (
-    // Zoomed out, the dashboard is drawn smaller, so more columns fit and the stacks re-fit (and glide) to them
+    // Drawn a little smaller, more columns fit and the stacks re-fit (and glide) to them
     <div ref={outer}>
+    <CompactCards.Provider value={compact}>
     <div
       ref={ref}
       data-zoom={zoom}
       className="flex flex-col gap-3 sm:gap-4"
-      // How much an app card grows when you point at it: to about full size when zoomed out, a gentle lift otherwise
-      style={{ ...(zoom !== 1 ? { zoom } : null), ['--mfx-lift' as string]: zoom < 1 ? String(Math.min(1.5, 0.95 / zoom)) : '1.05' } as React.CSSProperties}
+      // How much an app card grows when you point at it: a gentle lift (a simple card grows a little more)
+      style={{ ...(zoom !== 1 ? { zoom } : null), ['--mfx-lift' as string]: compact ? '1.08' : '1.04' } as React.CSSProperties}
     >
       <div className="grid gap-3 sm:gap-4" style={{ gridTemplateColumns: `repeat(${C}, minmax(0, 1fr))` }}>
         {places.map(({ i, col, row, w, h, cols }) => (
@@ -676,6 +781,7 @@ export const ShelfGrid: React.FC<{ children: React.ReactNode; zoom?: number }> =
         </div>
       ))}
     </div>
+    </CompactCards.Provider>
     </div>
   );
 };
@@ -766,10 +872,10 @@ export const LibraryBar: React.FC<{
   onShowPorts?: () => void;
   /** Group actions (New Group, Edit Groups), while groups are shown */
   groupItems?: MenuItem[];
-  /** Zoomed out: every stack at once, smaller, for moving things around */
-  zoomedOut?: boolean;
-  onZoom?: () => void;
-}> = ({ showGroups = false, view, onView, count, filter, onFilter, running, stopped, ports, onShowPorts, groupItems = [], zoomedOut, onZoom }) => {
+  /** Comfortable (full cards) or Overview (every stack at once, simple cards) */
+  dashboardView?: DashboardView;
+  onDashboardView?: (v: DashboardView) => void;
+}> = ({ showGroups = false, view, onView, count, filter, onFilter, running, stopped, ports, onShowPorts, groupItems = [], dashboardView, onDashboardView }) => {
   const label = 'text-[12px] font-semibold uppercase tracking-[0.08em]';
   const toggle = (f: Filter) => onFilter(filter === f ? 'all' : f);
   const tab = (v: 'compose' | 'groups', text: string) => (
@@ -821,24 +927,38 @@ export const LibraryBar: React.FC<{
         />
         <span className="w-px h-3.5 mx-1" style={{ background: 'rgba(255,255,255,0.12)' }} aria-hidden />
         <Stat value={ports} word={ports === 1 ? 'Port' : 'Ports'} tip="Ports in use on your server. Click to see which app uses each one." onClick={onShowPorts} />
-        {onZoom && (
+        {onDashboardView && dashboardView && (
           <>
             <span className="w-px h-3.5 mx-1" style={{ background: 'rgba(255,255,255,0.12)' }} aria-hidden />
-            <button
-              type="button"
-              onClick={onZoom}
-              aria-pressed={Boolean(zoomedOut)}
-              title={zoomedOut ? 'Back to the normal size' : 'See every stack at once. Zoomed out, drag an app onto another stack to move it.'}
-              className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full text-[13px] transition-colors hover:bg-white/[0.06] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0A84FF]"
-              style={{ color: zoomedOut ? '#64B5FF' : 'rgba(235,235,245,0.75)', background: zoomedOut ? 'rgba(10,132,255,0.16)' : undefined }}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden>
-                <circle cx="11" cy="11" r="7" />
-                <path d="m20 20-3.5-3.5" />
-                {zoomedOut ? <path d="M8 11h6M11 8v6" /> : <path d="M8 11h6" />}
-              </svg>
-              {zoomedOut ? 'Zoom In' : 'Zoom Out'}
-            </button>
+            {/* Two views, one capsule: full cards, or every stack at once (O switches too) */}
+            <div role="radiogroup" aria-label="View" className="flex items-center p-0.5 rounded-full" style={{ background: 'rgba(118,118,128,0.16)' }}>
+              {(
+                [
+                  ['comfortable', 'Comfortable', 'Full cards at an easy-to-read size', <path key="c" d="M4 5h7v6H4zM13 5h7v6h-7zM4 13h7v6H4zM13 13h7v6h-7z" />],
+                  ['overview', 'Overview', 'Every stack at once, with simple cards. Press O to switch.', <path key="o" d="M4 5h4v3H4zM10 5h4v3h-4zM16 5h4v3h-4zM4 10.5h4v3H4zM10 10.5h4v3h-4zM16 10.5h4v3h-4zM4 16h4v3H4zM10 16h4v3h-4zM16 16h4v3h-4z" />],
+                ] as const
+              ).map(([v, word, tip, glyph]) => {
+                const on = dashboardView === v;
+                return (
+                  <button
+                    key={v}
+                    type="button"
+                    role="radio"
+                    aria-checked={on}
+                    aria-label={word}
+                    onClick={() => onDashboardView(v)}
+                    data-tip={tip}
+                    className="inline-flex items-center gap-1.5 h-6 px-2.5 rounded-full text-[12.5px] font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0A84FF]"
+                    style={{ color: on ? '#fff' : 'rgba(235,235,245,0.6)', background: on ? 'rgba(255,255,255,0.14)' : undefined, boxShadow: on ? 'inset 0 0.5px 0 rgba(255,255,255,0.2)' : undefined }}
+                  >
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" aria-hidden>
+                      {glyph}
+                    </svg>
+                    <span className="max-sm:hidden">{word}</span>
+                  </button>
+                );
+              })}
+            </div>
           </>
         )}
       </div>
