@@ -44,7 +44,7 @@ import { DeleteAppDialog, DeleteAppTarget } from './components/DeleteAppDialog';
 import { HostAutomationModal } from './components/HostAutomationModal';
 import { GettingStartedSheet, Tour } from './components/GettingStarted';
 import { ManifexusHeroHeader } from './components/ManifexusHeroHeader';
-import { CARD_SIZES, CardSize, LibraryBar, Shelf, ShelfGrid, shelfSpan, FolderIcon, Health, TileGrid, ShelfNote, panelStyle, displayFont } from './components/Shelf';
+import { TEXT_SIZES, TextSize, LibraryBar, Shelf, ShelfGrid, shelfSpan, FolderIcon, Health, TileGrid, ShelfNote, panelStyle, displayFont } from './components/Shelf';
 import type { MenuItem } from './components/ui/ios';
 import { ios } from './components/ui/ios';
 import { RestoreSheet } from './components/RestoreSheet';
@@ -666,14 +666,14 @@ export default function App() {
     void fetchData(false);
   };
 
-  // How big the dashboard is drawn. Ctrl + / Ctrl − (⌘ on a Mac) step through the sizes, Ctrl 0 goes back
-  // to Default; it shows straight away and is saved like any setting.
-  const cardSize: CardSize = config?.cardSize && config.cardSize in CARD_SIZES ? config.cardSize : 'default';
-  const sizeRef = useRef(cardSize);
-  sizeRef.current = cardSize;
+  // Text Size: the smallest the dashboard is ever drawn (it sizes itself above that to fit). Ctrl + / Ctrl −
+  // (⌘ on a Mac) step through the sizes, Ctrl 0 goes back to Default; it shows at once and is saved.
+  const textSize: TextSize = config?.textSize && config.textSize in TEXT_SIZES ? config.textSize : 'default';
+  const sizeRef = useRef(textSize);
+  sizeRef.current = textSize;
   useEffect(() => {
-    const order = Object.keys(CARD_SIZES) as CardSize[];
-    const names: Record<CardSize, string> = { small: 'Small', default: 'Default', large: 'Large', larger: 'Larger' };
+    const order = Object.keys(TEXT_SIZES) as TextSize[];
+    const names: Record<TextSize, string> = { default: 'Default', large: 'Large', larger: 'Larger' };
     const onKey = (e: KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
       if (document.documentElement.classList.contains('sheet-open') || (e.target as HTMLElement)?.closest?.('input, textarea, [contenteditable="true"]')) return;
@@ -681,9 +681,9 @@ export default function App() {
       const next = e.key === '=' || e.key === '+' ? order[Math.min(order.length - 1, i + 1)] : e.key === '-' || e.key === '_' ? order[Math.max(0, i - 1)] : e.key === '0' ? 'default' : null;
       if (!next) return;
       e.preventDefault();
-      setConfig((c) => (c ? { ...c, cardSize: next } : c));
-      setNotice({ text: `Size: ${names[next]}${next === sizeRef.current ? (next === 'larger' ? ' (the largest)' : next === 'small' ? ' (the smallest)' : '') : ''}` });
-      void fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cardSize: next }) });
+      setConfig((c) => (c ? { ...c, textSize: next } : c));
+      setNotice({ text: `Text Size: ${names[next]}${next === sizeRef.current ? (next === 'larger' ? ' (the largest)' : next === 'default' ? ' (the smallest)' : '') : ''}` });
+      void fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ textSize: next }) });
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -1177,7 +1177,7 @@ export default function App() {
 
         {/* BY STACK */}
         {!isLoading && viewMode === 'compose' && (
-          <ShelfGrid scale={CARD_SIZES[cardSize]} fit={desktop && Boolean(config?.fitAllStacks)} dragZoom={desktop}>
+          <ShelfGrid textScale={TEXT_SIZES[textSize]} auto={desktop} dragTiles={desktop}>
             {draftStack && (
               <Shelf
                 key="__new"

@@ -22,7 +22,7 @@ interface SettingsModalProps {
   onBack?: () => void;
 }
 
-type Field = 'host' | 'dir' | 'refresh' | 'mode' | 'commands' | 'size' | 'fit';
+type Field = 'host' | 'dir' | 'refresh' | 'mode' | 'commands' | 'size';
 
 /** Small green check shown in a row for a moment after it saves */
 const SavedCheck: React.FC = () => (
@@ -255,35 +255,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         </section>
 
         <section>
-          <SectionHeader>Size</SectionHeader>
+          <SectionHeader>Text Size</SectionHeader>
           <Segmented
-            label="Card size"
-            value={config?.cardSize || 'default'}
-            onChange={(v) => void save('size', { cardSize: v as 'small' | 'default' | 'large' | 'larger' })}
+            label="Text size"
+            value={config?.textSize || 'default'}
+            onChange={(v) => void save('size', { textSize: v as 'default' | 'large' | 'larger' })}
             options={[
-              { value: 'small', label: 'Small' },
               { value: 'default', label: 'Default' },
               { value: 'large', label: 'Large' },
               { value: 'larger', label: 'Larger' },
             ]}
           />
-          <div className="mt-3">
-            <Group>
-              <Row
-                title="Fit All Stacks on Screen"
-                subtitle="Shrinks to show every stack at once, but never too small to read"
-                trailing={
-                  <span className="flex items-center gap-2">
-                    {savedIn('fit')}
-                    <Switch checked={Boolean(config?.fitAllStacks)} onChange={(v) => void save('fit', { fitAllStacks: v })} label="Fit all stacks on screen" />
-                  </span>
-                }
-              />
-            </Group>
-          </div>
           <SectionFooter>
-            Ctrl + and Ctrl − change the size from the dashboard too (⌘ on a Mac). When you drag an app, the dashboard zooms out to show
-            every stack, and comes back once it lands.
+            The dashboard sizes itself to show your stacks, and never goes smaller than this. Ctrl + and Ctrl − change it from the
+            dashboard too (⌘ on a Mac).
           </SectionFooter>
         </section>
 

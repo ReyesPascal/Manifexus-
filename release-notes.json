@@ -2,6 +2,21 @@
   "_about": "What's new in each version of Manifexus, newest first. Shown in Updates. Write for people, not developers: short, plain sentences about what they can now do. The newest entry's version is what gets built and tagged; older entries can give the \"commit\" they were released from.",
   "releases": [
     {
+      "version": "2.5",
+      "date": "2026-10-02",
+      "headline": "A dashboard that sizes itself, and stays easy to read.",
+      "new": [
+        "Text Size in Settings (Default, Large or Larger) sets the smallest the dashboard is ever drawn. Ctrl + and Ctrl − (⌘ on a Mac) change it right from the dashboard.",
+        "Scroll down to your stacks and the header becomes a slim bar at the top, with search, New Stack and every button still one click away."
+      ],
+      "improved": [
+        "The dashboard sizes itself: big and comfortable with a few stacks, smaller as you add more, but never below your Text Size. With lots of stacks, app cards get simpler (icon, name and status) instead of smaller. Tap one for everything else.",
+        "Dragging an app when some stacks are off screen shows every stack as a big, readable tile to drop it on. Once you let go, the stack it went to comes into view and lights up, so you see it land.",
+        "With every stack already on screen, dragging just works in place, with no zooming."
+      ],
+      "fixed": []
+    },
+    {
       "version": "2.4",
       "date": "2026-10-02",
       "headline": "Easier to read, and every stack in view when you need it.",
