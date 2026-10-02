@@ -7,6 +7,11 @@ on:
   pull_request:
     branches: [ "main", "master" ]
   workflow_dispatch:
+    inputs:
+      refresh_base:
+        description: 'Use the newest Node base image now (otherwise it is kept for 30 days, so updates stay small)'
+        type: boolean
+        default: false
 
 env:
   REGISTRY: ghcr.io
@@ -51,6 +56,29 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Keep the same base image from release to release, so a normal update downloads only Manifexus's own
+      # code (a few MB). It's refreshed every 30 days (security fixes), or on demand with "refresh_base".
+      - name: Choose the base image
+        id: base
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          REFRESH: ${{ github.event.inputs.refresh_base }}
+        run: |
+          now=$(date +%s)
+          labels=$(docker buildx imagetools inspect "$IMAGE:latest" --format '{{ json .Image }}' 2>/dev/null \
+            | jq -c '(if has("linux/amd64") then .["linux/amd64"] else . end).config.Labels // {}' 2>/dev/null || echo '{}')
+          prev=$(echo "$labels" | jq -r '.["io.manifexus.base-image"] // empty')
+          at=$(echo "$labels" | jq -r '.["io.manifexus.base-pinned-at"] // empty')
+          if [ "$REFRESH" != "true" ] && [ -n "$prev" ] && echo "$prev" | grep -q '@sha256:' && [ -n "$at" ] && [ $((now - at)) -lt $((30 * 86400)) ]; then
+            echo "Keeping base $prev (pinned $(( (now - at) / 86400 )) days ago)"
+            echo "image=$prev" >> "$GITHUB_OUTPUT"; echo "at=$at" >> "$GITHUB_OUTPUT"
+          else
+            digest=$(docker buildx imagetools inspect node:22-bookworm-slim | awk '/^Digest:/ {print $2; exit}')
+            if echo "$digest" | grep -q '^sha256:'; then base="node:22-bookworm-slim@$digest"; else base="node:22-bookworm-slim"; fi
+            echo "New base $base"
+            echo "image=$base" >> "$GITHUB_OUTPUT"; echo "at=$now" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Extract Docker metadata (tags, labels)
         id: meta
         uses: docker/metadata-action@v6
@@ -72,8 +100,17 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          build-args: |
+            NODE_IMAGE=${{ steps.base.outputs.image }}
+            BASE_PINNED_AT=${{ steps.base.outputs.at }}
+          # The build cache also lives in the registry, so the unchanged parts are reused (byte for byte) even
+          # when the workflow's own cache has been cleared, and servers don't download them again
+          cache-from: |
+            type=gha
+            type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
+          cache-to: |
+            type=gha,mode=max
+            ${{ github.event_name != 'pull_request' && format('type=registry,ref={0}/{1}:buildcache,mode=max', env.REGISTRY, env.IMAGE_NAME) || '' }}
           platforms: linux/amd64,linux/arm64
 
       # Git tags for every version, and numbered images for older versions that were

@@ -6,6 +6,7 @@
       "date": "2026-10-02",
       "headline": "Faster, and even safer with your stacks.",
       "new": [
+        "Smarter updates: an update now downloads only what changed, usually just Manifexus's own code (a few MB), instead of the whole app again. Updates shows the real download size before you start. (The first update to this version still downloads more, once.)",
         "Edits you make in the compose file editor are now saved in Restore, so you can put the file back the way it was."
       ],
       "improved": [

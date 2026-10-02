@@ -1,5 +1,12 @@
+# Updates download only what changed. An image is a stack of parts (layers), and a server that already has a
+# part never downloads it again. So the parts that rarely change come first (base system, Docker tools, the AI
+# engine) and Manifexus's own code comes last, as one small part: a normal update is a few MB, not the whole image.
+# The base image is pinned by the build (NODE_IMAGE, kept the same between releases and refreshed about monthly
+# for security fixes), so a new upstream Node build doesn't change every part after it.
+ARG NODE_IMAGE=node:22-bookworm-slim
+
 # Build stage runs natively on the builder host (zero QEMU emulation overhead for npm/vite)
-FROM --platform=$BUILDPLATFORM node:22-bookworm-slim AS builder
+FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS builder
 
 WORKDIR /app
 
@@ -14,7 +21,7 @@ COPY . .
 RUN npm run build
 
 # Production runtime stage (glibc Node 22 ensures total compatibility across amd64 and arm64)
-FROM node:22-bookworm-slim AS runner
+FROM ${NODE_IMAGE} AS runner
 
 WORKDIR /app
 
@@ -66,12 +73,15 @@ RUN set -u; \
     fi; \
     rm -rf /tmp/ollama /tmp/ollama.tar.zst /tmp/ollama.sha256
 
-# Copy production artifacts from builder
-COPY --from=builder /app/package.json ./
-# What's new in each version (shown in Updates; also tells Manifexus its own version)
-COPY --from=builder /app/release-notes.json ./
+# Manifexus itself, last: the only part a normal update downloads. The server is bundled into one file with
+# everything it uses, so no node_modules folder (the build tools stay in the build stage).
+COPY --from=builder /app/package.json /app/release-notes.json ./
 COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/node_modules ./node_modules
+
+# Which base image this build used, so the next release can keep it (see the build workflow)
+ARG NODE_IMAGE
+ARG BASE_PINNED_AT=""
+LABEL io.manifexus.base-image="${NODE_IMAGE}" io.manifexus.base-pinned-at="${BASE_PINNED_AT}"
 
 # Expose Manifexus central command port
 EXPOSE 3334

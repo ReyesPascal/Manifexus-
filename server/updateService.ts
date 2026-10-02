@@ -99,7 +99,7 @@ export interface SoftwareUpdateState {
   installMode?: 'compose' | 'standalone';
   current: BuildInfo & { imageId?: string };
   status: 'up_to_date' | 'available' | 'unknown';
-  latest?: BuildInfo & { digest: string; sizeBytes?: number; notes: ReleaseNote[]; totalCommits?: number; releases?: Release[] };
+  latest?: BuildInfo & { digest: string; sizeBytes?: number; downloadBytes?: number; notes: ReleaseNote[]; totalCommits?: number; releases?: Release[] };
   lastCheckedAt?: string;
   checkError?: string;
   checking: boolean;
@@ -255,11 +255,26 @@ async function registryGet(r: ParsedRef, pathPart: string, token: string | undef
 
 const DOCKER_ARCH: Record<string, string> = { x64: 'amd64', arm64: 'arm64', arm: 'arm' };
 
+/**
+ * What an update really downloads: only the parts this server doesn't have yet. Usually just the part with
+ * Manifexus's own code (a few MB), because the base system, Docker tools and AI engine stay the same.
+ * Undefined when it can't be worked out (then the full size is shown as the most it can be).
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function neededDownload(parts: { size: number; diffId?: string }[] | undefined, localImage: any): number | undefined {
+  const have: string[] | undefined = localImage?.RootFS?.Layers;
+  if (!parts?.length || !Array.isArray(have) || parts.some((p) => !p.diffId)) return undefined;
+  const local = new Set(have);
+  return parts.filter((p) => !local.has(p.diffId!)).reduce((t, p) => t + p.size, 0);
+}
+
 async function fetchRemote(ref: string): Promise<{
   digest: string;
   labels?: Record<string, string>;
   sizeBytes?: number;
   layerSizes: Record<string, number>;
+  /** Each part's size with its content id, to tell which parts this server already has */
+  parts?: { size: number; diffId?: string }[];
 }> {
   const r = parseRef(ref);
   if (!r) throw new Error('The running image has no tag to check against.');
@@ -292,15 +307,20 @@ async function fetchRemote(ref: string): Promise<{
   }
 
   let labels: Record<string, string> | undefined;
+  let diffIds: string[] | undefined;
   if (manifest.config?.digest) {
     const cfg = await registryGet(r, `blobs/${manifest.config.digest}`, token);
     if (cfg.ok) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const j: any = await cfg.json();
       labels = j.config?.Labels || undefined;
+      diffIds = Array.isArray(j.rootfs?.diff_ids) ? j.rootfs.diff_ids : undefined;
     }
   }
-  return { digest, labels, sizeBytes: sizeBytes || undefined, layerSizes };
+  // The image's parts in order; the config lists their content ids in the same order
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const parts = (manifest.layers || []).map((l: any, i: number) => ({ size: l.size || 0, diffId: diffIds?.[i] }));
+  return { digest, labels, sizeBytes: sizeBytes || undefined, layerSizes, parts };
 }
 
 /** "fix(stacks): one default location" -> "One default location" */
@@ -416,6 +436,7 @@ export async function checkForUpdate(): Promise<SoftwareUpdateState> {
         ...latestBuild,
         digest: remote.digest,
         sizeBytes: remote.sizeBytes,
+        downloadBytes: neededDownload(remote.parts, self.image),
         notes: notes.notes,
         totalCommits: notes.total,
         releases,

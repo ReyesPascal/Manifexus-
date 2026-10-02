@@ -24,7 +24,7 @@ export interface SoftwareUpdateState {
   installMode?: 'compose' | 'standalone';
   current: BuildInfo & { imageId?: string };
   status: 'up_to_date' | 'available' | 'unknown';
-  latest?: BuildInfo & { digest: string; sizeBytes?: number; notes: { sha: string; title: string; date?: string }[]; totalCommits?: number; releases?: Release[] };
+  latest?: BuildInfo & { digest: string; sizeBytes?: number; downloadBytes?: number; notes: { sha: string; title: string; date?: string }[]; totalCommits?: number; releases?: Release[] };
   lastCheckedAt?: string;
   checkError?: string;
   checking: boolean;
@@ -124,6 +124,15 @@ export const UpdateGlyph: React.FC<{ className?: string }> = ({ className }) => 
     <path d="M12 7.5v8M8.5 12.5 12 16l3.5-3.5" />
   </svg>
 );
+
+/**
+ * How much the update downloads: exactly what's new (usually just Manifexus's own code, a few MB, since the
+ * parts already on the server are reused), or the most it can be when that can't be worked out.
+ */
+function downloadText(l: { sizeBytes?: number; downloadBytes?: number }): string {
+  if (typeof l.downloadBytes === 'number') return l.downloadBytes > 0 ? `${formatBytes(l.downloadBytes)} download` : 'Nothing new to download';
+  return l.sizeBytes ? `Up to ${formatBytes(l.sizeBytes)} download` : '';
+}
 
 function formatBytes(b?: number): string {
   if (!b) return '';
@@ -403,8 +412,8 @@ export const SoftwareUpdateSheet: React.FC<SoftwareUpdateSheetProps> = ({ open, 
           ? progress?.bytesTotal
             ? `${formatBytes(progress.bytesDone)} of ${formatBytes(progress.bytesTotal)}`
             : 'Checking what’s needed…'
-          : s?.latest?.sizeBytes && phase === 'idle'
-            ? `Up to ${formatBytes(s.latest.sizeBytes)}`
+          : phase === 'idle' && s?.latest
+            ? downloadText(s.latest) || undefined
             : undefined,
     },
     { key: 'prepare', title: 'Prepare installation' },
@@ -542,7 +551,7 @@ export const SoftwareUpdateSheet: React.FC<SoftwareUpdateSheetProps> = ({ open, 
           ))}
           <SectionFooter>
             {[
-              s.latest!.sizeBytes ? `Up to ${formatBytes(s.latest!.sizeBytes)} to download (less if parts are already on your server).` : '',
+              downloadText(s.latest!) ? `${downloadText(s.latest!)}.` : '',
               'Manifexus restarts for a few seconds; your apps keep running. If the new version doesn’t start, the current one is restored automatically.',
             ]
               .filter(Boolean)
@@ -567,7 +576,7 @@ export const SoftwareUpdateSheet: React.FC<SoftwareUpdateSheetProps> = ({ open, 
           <SectionFooter>
             {[
               s.latest!.totalCommits && s.latest!.totalCommits > s.latest!.notes.length ? `${s.latest!.totalCommits} changes in total.` : '',
-              s.latest!.sizeBytes ? `Up to ${formatBytes(s.latest!.sizeBytes)} to download (less if parts are already on your server).` : '',
+              downloadText(s.latest!) ? `${downloadText(s.latest!)}.` : '',
               'Manifexus restarts for a few seconds; your apps keep running. If the new version doesn’t start, the current one is restored automatically.',
             ]
               .filter(Boolean)
