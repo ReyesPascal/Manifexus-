@@ -163,8 +163,13 @@ async function runHelperDetailed(
           outputError = out.error;
           return { code, output: captured };
         }
-      } catch {
-        // transient API hiccup: keep polling until the deadline
+      } catch (err) {
+        // The helper is gone (removed by someone else, or `docker container prune`): waiting won't bring it
+        // back, so stop now instead of holding everything up until the deadline
+        if (/status 404/.test((err as Error)?.message || '')) {
+          throw new Error(`${meta.purpose} stopped: its helper container was removed before it finished`);
+        }
+        // otherwise a passing hiccup: keep polling until the deadline
       }
     }
     timedOut = true;
@@ -293,9 +298,11 @@ export class StackFolderExistsError extends Error {}
 export async function provisionStackFolder(
   hostDir: string,
   composeText: string,
-  opts: { overwrite?: boolean } = {}
+  opts: { overwrite?: boolean; fileName?: string } = {}
 ): Promise<void> {
   const normalized = path.posix.normalize(hostDir.trim()).replace(/\/+$/, '');
+  // The stack's own compose file name (compose.yaml, docker-compose.yml…): never a second file beside it
+  const file = ['compose.yaml', 'compose.yml', 'docker-compose.yaml', 'docker-compose.yml'].includes(opts.fileName || '') ? opts.fileName! : 'docker-compose.yml';
   if (!normalized.startsWith('/') || normalized.split('/').filter(Boolean).length < 2) {
     throw new Error(`"${hostDir}" is not a valid folder for a stack.`);
   }
@@ -306,18 +313,18 @@ export async function provisionStackFolder(
     opts.overwrite
       ? ''
       : `for f in docker-compose.yml docker-compose.yaml compose.yml compose.yaml; do [ -e /parent/${name}/$f ] && exit 17; done`,
-    `printf '%s' "$COMPOSE_DATA" > /parent/${name}/docker-compose.yml || exit 21`,
+    `printf '%s' "$COMPOSE_DATA" > /parent/${name}/${file} || exit 21`,
     // Match the owner of the parent folder (e.g. your user rather than root)
-    `chown "$(stat -c %u:%g /parent)" /parent/${name} /parent/${name}/docker-compose.yml 2>/dev/null`,
-    `[ -s /parent/${name}/docker-compose.yml ] || exit 22`,
+    `chown "$(stat -c %u:%g /parent)" /parent/${name} /parent/${name}/${file} 2>/dev/null`,
+    `[ -s /parent/${name}/${file} ] || exit 22`,
   ]
     .filter(Boolean)
     .join('\n');
   const code = await runHelper(script, [`${parent}:/parent`], 2 * 60 * 1000, [`COMPOSE_DATA=${composeText}`], {
-    purpose: `Write ${normalized}/docker-compose.yml`,
+    purpose: `Write ${normalized}/${file}`,
   });
-  record(code === 0 ? 'info' : 'warn', 'file', code === 0 ? `Wrote ${normalized}/docker-compose.yml (${composeText.length} bytes)` : `Could not write ${normalized}/docker-compose.yml (exit ${code})`, {
-    path: `${normalized}/docker-compose.yml`,
+  record(code === 0 ? 'info' : 'warn', 'file', code === 0 ? `Wrote ${normalized}/${file} (${composeText.length} bytes)` : `Could not write ${normalized}/${file} (exit ${code})`, {
+    path: `${normalized}/${file}`,
     exitCode: code,
     overwrite: Boolean(opts.overwrite),
     content: composeText,
@@ -326,7 +333,7 @@ export async function provisionStackFolder(
     throw new StackFolderExistsError(`${normalized} already has a compose file. Pick another name or folder.`);
   }
   if (code !== 0) {
-    throw new Error(`Could not create ${normalized}/docker-compose.yml on the server (exit ${code}).`);
+    throw new Error(`Could not create ${normalized}/${file} on the server (exit ${code}).`);
   }
 }
 

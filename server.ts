@@ -11,6 +11,7 @@ import http from 'http';
 import path from 'path';
 import {
   getContainersList,
+  getContainersListShared,
   executeContainerAction,
   isDockerSocketAvailable,
   addDemoContainer,
@@ -95,6 +96,7 @@ import {
   restoreToFolder,
   freshStartOnce,
 } from './server/restoreService';
+import { getMergeHistory } from './server/historyService';
 import { systemDiagnostics, systemReport, appDiagnostics, appLogs } from './server/diagnosticsService';
 import { getSystemSpecs } from './server/systemSpecs';
 import { aiStatus, saveAiSettings, installModel, installBundle as installAiBundle, cancelDownload, removeModel, warmUpEngine, catalogModel, stopEngine, installEngineNow } from './server/aiService';
@@ -113,6 +115,7 @@ import {
   startUpdateScheduler,
   pendingUpdateActivityId,
   getSelf,
+  setUpdateBusyCheck,
 } from './server/updateService';
 import fs from 'fs';
 import { AppOverride, DeepContainerMetadata } from './src/types';
@@ -179,6 +182,8 @@ async function startServer() {
       for (const k of uniq) if (stackTails.get(k) === mine) stackTails.delete(k);
     };
   };
+  // An update waits until no move, restore or delete is running before it restarts Manifexus
+  setUpdateBusyCheck(() => (stackTails.size ? 'a change to your stacks' : null));
 
   // Server Changes: while it's off, nothing that changes the server runs (moves, restores, fixes,
   // new or deleted stacks, cleanup). Looking, and starting, stopping or restarting apps, always work.
@@ -331,7 +336,7 @@ async function startServer() {
     try {
       const socketPath = process.env.DOCKER_SOCKET_PATH || '/var/run/docker.sock';
       const available = isDockerSocketAvailable();
-      const { containers, isDemo, dockerVersion, os } = await getContainersList();
+      const { containers, isDemo, dockerVersion, os } = await getContainersListShared();
       const emptyStacks = await discoverHostComposeStacks(containers);
 
       // Count what the dashboard shows: not Manifexus itself, not apps hidden in Settings
@@ -410,14 +415,14 @@ async function startServer() {
 
   // A browser showed an app's own icon (from its web page): save it for every screen
   app.post('/api/apps/:id/icon/seen', async (req, res) => {
-    const { containers } = await getContainersList();
+    const { containers } = await getContainersListShared();
     const c = containers.find((x) => x.id === req.params.id || x.cleanName === req.params.id);
     if (!c || typeof req.body?.url !== 'string') return res.status(400).json({ error: 'No such app.' });
     res.json({ ok: await iconSeen(c, req.body.url) });
   });
   // Look for an app's icon again
   app.post('/api/apps/:id/icon/refresh', async (req, res) => {
-    const { containers } = await getContainersList();
+    const { containers } = await getContainersListShared();
     const c = containers.find((x) => x.id === req.params.id || x.cleanName === req.params.id);
     if (!c) return res.status(404).json({ error: 'No such app.' });
     forgetIcon(c);
@@ -428,7 +433,7 @@ async function startServer() {
   // Get containers list enriched with user customizations and discovered empty compose stacks
   app.get('/api/containers', async (req, res) => {
     try {
-      const { containers, isDemo, dockerVersion, os } = await getContainersList();
+      const { containers, isDemo, dockerVersion, os } = await getContainersListShared();
       const config = getConfig();
       const emptyStacks = await discoverHostComposeStacks(containers);
 
@@ -494,7 +499,7 @@ async function startServer() {
     }
 
     try {
-      const target = (await getContainersList()).containers.find((c) => c.id === id || c.cleanName === id);
+      const target = (await getContainersListShared()).containers.find((c) => c.id === id || c.cleanName === id);
       if (target) setActivityTitle(`${action.charAt(0).toUpperCase()}${action.slice(1)} ${target.customName || target.cleanName}`);
       const result = await executeContainerAction(id, action);
       // A failed action is an error for the caller and for Activity, not a 200 with success: false
@@ -752,8 +757,18 @@ async function startServer() {
         return res.status(400).json({ error: 'A valid projectName is required.' });
       }
 
-      const result = await deleteHostStack({ projectName, targetDirectory, skipDataBackup: skipDataBackup === true });
-      res.json(result);
+      // Waits for any move, restore or delete touching this stack to finish first
+      const { containers } = await getContainersList();
+      const dirs = [
+        String(targetDirectory || ''),
+        ...containers.filter((c) => (c.compose?.project || '').toLowerCase() === projectName.trim().toLowerCase()).map((c) => c.compose?.workingDir || ''),
+      ].map((d) => d.replace(/\/+$/, ''));
+      const release = await lockStacks(dirs, () => undefined);
+      try {
+        res.json(await deleteHostStack({ projectName, targetDirectory, skipDataBackup: skipDataBackup === true }));
+      } finally {
+        release();
+      }
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
     }
@@ -1001,7 +1016,26 @@ async function startServer() {
       res.write(`data: ${JSON.stringify(data)}\n\n`);
     };
     try {
-      await executeRestore(req.params.id, send, { filesOnly: req.body?.filesOnly === true });
+      // One restore at a time, and never alongside a move or delete in the same stacks: a second tap (or a
+      // second window) waits, then finds the change already restored instead of running it twice
+      const rec = getMergeHistory().find((r) => r.id === req.params.id);
+      const dirs = rec
+        ? [
+            rec.targetDirectory,
+            ...(rec.sourceConfigs || []).map((c) => c.workingDir),
+            rec.deletedStack?.workingDir,
+            rec.deletedApps?.workingDir,
+            ...(rec.movedServices || []).map((m) => m.workingDir),
+          ].map((d) => String(d || '').replace(/\/+$/, ''))
+        : [];
+      const release = await lockStacks(['__restore__', ...dirs], () =>
+        send({ type: 'log', log: 'Waiting for another change to the same stacks to finish…', timestamp: new Date().toISOString() })
+      );
+      try {
+        await executeRestore(req.params.id, send, { filesOnly: req.body?.filesOnly === true });
+      } finally {
+        release();
+      }
     } catch (err) {
       send({ type: 'failed', log: (err as Error).message });
     } finally {

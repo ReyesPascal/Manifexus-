@@ -255,7 +255,7 @@ const ROUTES: [string, RegExp, Describer][] = [
 
 /** Read-only POSTs and the log API itself: no activity, low-detail request event only. */
 // Background requests the person didn't ask for directly: logged, but not listed in Activity
-const QUIET = [/^\/api\/stacks\/data-footprint$/, /^\/api\/apps\/delete-plan$/, /^\/api\/logs(\/|$)/, /^\/api\/ai\/warm$/, /^\/api\/diagnostics\/autofix$/];
+const QUIET = [/^\/api\/apps\/[^/]+\/icon\/(seen|refresh)$/, /^\/api\/stacks\/data-footprint$/, /^\/api\/apps\/delete-plan$/, /^\/api\/logs(\/|$)/, /^\/api\/ai\/warm$/, /^\/api\/diagnostics\/autofix$/];
 
 export function requestTracker(req: Request, res: Response, next: NextFunction) {
   if (!req.path.startsWith('/api/')) return next();

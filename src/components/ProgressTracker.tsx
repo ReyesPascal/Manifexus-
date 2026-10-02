@@ -4,7 +4,7 @@ import { createPortal } from 'react-dom';
 import { usePrefs } from '../prefs';
 import { CommandItem, StepCommands, useLearn, useLearnSteps } from './Commands';
 import { BackButton, Button, Group, IconTile, LinkButton, Row, SectionFooter, Sheet, ios } from './ui/ios';
-import { copyText } from './ActivitySheet';
+import { copyText } from '../copyText';
 
 /**
  * The simple step tracker shown while Manifexus changes something (moving apps, restoring).

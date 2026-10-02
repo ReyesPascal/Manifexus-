@@ -37,6 +37,7 @@ import {
   withActivity,
 } from './activityLog';
 import { globalLogService } from './globalLogService';
+import { writeJsonAtomic } from './safeJson';
 
 const DOCKER_SOCKET_PATH = process.env.DOCKER_SOCKET_PATH || '/var/run/docker.sock';
 const DATA_DIR = fs.existsSync('/data') ? '/data' : path.join(process.cwd(), 'data');
@@ -145,7 +146,7 @@ function loadPersisted(): Persisted {
 function savePersisted(p: Persisted): void {
   try {
     fs.mkdirSync(DATA_DIR, { recursive: true });
-    fs.writeFileSync(STATE_FILE, JSON.stringify(p, null, 2));
+    writeJsonAtomic(STATE_FILE, p);
   } catch (err) {
     globalLogService.log({ level: 'WARN', source: 'update', message: 'Could not save update state', error: err });
   }
@@ -455,8 +456,26 @@ export function updateSettings(s: Partial<UpdateSettings>): UpdateSettings {
 
 let layerSizesCache: Record<string, number> = {};
 
+/**
+ * Something that mustn't be cut off by a restart is running (a move, restore or delete). Set by the server;
+ * an update waits for it before restarting Manifexus.
+ */
+let busyCheck: () => string | null = () => null;
+export function setUpdateBusyCheck(fn: () => string | null) {
+  busyCheck = fn;
+}
+
+let clearTimer: ReturnType<typeof setTimeout> | undefined;
 function emit(p: UpdateProgress) {
   installing = p;
+  // A finished or failed install is shown for a while, then forgotten, so the next one (or the nightly
+  // automatic install) can start again
+  clearTimeout(clearTimer);
+  if (p.stage === 'error' || p.stage === 'done') {
+    clearTimer = setTimeout(() => {
+      if (!installRun && installing === p) installing = undefined;
+    }, 2 * 60 * 1000);
+  }
   for (const l of installListeners) {
     try {
       l(p);
@@ -800,6 +819,15 @@ async function runInstall(): Promise<void> {
       return;
     }
 
+    // Never restart in the middle of a move, restore or delete: wait for it to finish (up to 2 hours)
+    for (const until = Date.now() + 2 * 60 * 60 * 1000; ; ) {
+      const busy = busyCheck();
+      if (!busy) break;
+      if (Date.now() > until) throw new Error(`Not installed: ${busy} is still running. Try again when it’s done.`);
+      emit({ stage: 'prepare', percent: 100, message: `Downloaded. Waiting for ${busy} to finish before restarting…`, toImageId: pulled.Id, fromImageId: self.imageId });
+      await new Promise((r) => setTimeout(r, 5000));
+    }
+
     // 2. Prepare + 3. Restart
     emit({ stage: 'prepare', percent: 100, message: 'Preparing to restart…', toImageId: pulled.Id, fromImageId: self.imageId });
     await startRestartHelper(self, pulled);
@@ -927,7 +955,8 @@ export async function startUpdateScheduler(): Promise<void> {
     }
     if (s.autoInstall && new Date().getHours() === AUTO_INSTALL_HOUR) {
       const st = await getSoftwareUpdateState();
-      if (st.supported && st.status === 'available' && !installing) {
+      // Not while another install runs, nor while a move, restore or delete is in progress (it tries again later)
+      if (st.supported && st.status === 'available' && !installRun && installing?.stage !== 'restart' && !busyCheck()) {
         const a = startActivity({ type: 'update', title: 'Automatic update install', actor: { kind: 'system' } });
         const rec = pipelineRecorder(a.id);
         void runInActivity(a.id, () => installUpdate(rec.onEvent)).finally(() => rec.finish());

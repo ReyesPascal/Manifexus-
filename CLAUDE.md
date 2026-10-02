@@ -114,6 +114,17 @@ Bring that standard to every change:
 - New stacks go in `/home/ryan` by default (never `/home/ubuntu/docker`), with the option to type another
   location.
 
+## Building it solid
+
+- Manifexus's own records (settings, the Restore history) are saved with `writeJsonAtomic` and read with
+  `readJsonSafe`/`cachedJsonReader` (`server/safeJson.ts`), never a plain `writeFileSync`, so they can't be lost mid-save.
+- A stack's compose file can be `compose.yaml`, `docker-compose.yml` and so on: find it with `findComposeFile`
+  (`server/hostFsService.ts`), never assume `docker-compose.yml`.
+- Anything that changes a stack (move, restore, delete) takes `lockStacks` for its folders first.
+- The dashboard's refresh uses `getContainersListShared` (one look at Docker shared by everything for a couple of
+  seconds); anything that changes things, or checks a change it just made, uses `getContainersList`.
+- Every request that can fail shows a plain message when it does; nothing fails silently.
+
 ## Releasing
 
 - Never push to GitHub until the owner says "push". Commit locally and wait.

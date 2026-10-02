@@ -19,7 +19,7 @@ import {
 import { DeepContainerMetadata, UserGroup, AppOverride, ContainerMount } from '../types';
 import { FEATURES } from '../features';
 import { ManifexusAppIcon } from './SoftwareUpdateSheet';
-import { copyText } from './ActivitySheet';
+import { copyText } from '../copyText';
 import { AppIcon } from './AppCard';
 import { helperKind, helperProduct } from '../appHelpers';
 import type { FixInfo, FixRequest } from './FixSheet';
@@ -313,6 +313,7 @@ export const AppDetailsSheet: React.FC<{
   const [iconLookup, setIconLookup] = useState(false);
   const [custom, setCustom] = useState({ name: '', group: '', port: '', url: '', icon: '', notes: '' });
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string>();
 
   const push = (v: View) => {
     setStack((s) => [...s, v]);
@@ -320,8 +321,12 @@ export const AppDetailsSheet: React.FC<{
   };
   const pop = () => setStack((s) => (s.length > 1 ? s.slice(0, -1) : s));
 
+  // Each load is numbered: switching to another app while one is still checking never shows the first
+  // app's results under the second
+  const loadSeq = useRef(0);
   const load = useCallback(async () => {
     if (!container) return;
+    const my = ++loadSeq.current;
     setLoading(true);
     setError(undefined);
     try {
@@ -329,19 +334,19 @@ export const AppDetailsSheet: React.FC<{
         const r = await fetch('/api/diagnostics', { cache: 'no-store' });
         const j = await r.json();
         if (!r.ok) throw new Error(j.error);
-        setSys(j);
+        if (my === loadSeq.current) setSys(j);
       } else {
         const r = await fetch(`/api/containers/${encodeURIComponent(container.id)}/diagnostics`, { cache: 'no-store' });
         const j = await r.json();
         if (!r.ok) throw new Error(j.error);
-        setDiag(j);
+        if (my === loadSeq.current) setDiag(j);
       }
     } catch (e) {
-      setError((e as Error).message || 'Couldn’t run the checks.');
+      if (my === loadSeq.current) setError((e as Error).message || 'Couldn’t run the checks.');
     } finally {
-      setLoading(false);
+      if (my === loadSeq.current) setLoading(false);
     }
-  }, [container, system]);
+  }, [container?.id, system]);
 
   useEffect(() => {
     if (!container) return;
@@ -377,7 +382,8 @@ export const AppDetailsSheet: React.FC<{
     const j = await r.json().catch(() => ({ text: '', error: 'Couldn’t read the logs.' }));
     setLogs(j.error && !j.text ? `⚠ ${j.error}` : j.text || '');
     requestAnimationFrame(() => bodyRef.current?.scrollTo({ top: bodyRef.current.scrollHeight }));
-  }, [container, logTail]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [container?.id, logTail]);
 
   useEffect(() => {
     if (view === 'logs') loadLogs();
@@ -785,7 +791,7 @@ export const AppDetailsSheet: React.FC<{
                                 customUrl: custom.url.trim() || undefined,
                                 customIcon: custom.icon.trim() || undefined,
                                 notes: custom.notes.trim() || undefined,
-                              });
+                              }).catch((e: Error) => setError(`Couldn’t save that: ${e.message}`));
                             }}
                           >
                             Use for Card
@@ -952,12 +958,18 @@ export const AppDetailsSheet: React.FC<{
       </div>
     );
     footer = (
-      <div className="flex justify-end">
+      <div className="flex items-center justify-end gap-4">
+        {saveError && (
+          <p role="alert" className="flex-1 text-[13px] leading-[18px]" style={{ color: ios.redText }}>
+            {saveError}
+          </p>
+        )}
         <Button
           disabled={saving}
           className="w-full sm:w-auto sm:min-w-[160px]"
           onClick={async () => {
             setSaving(true);
+            setSaveError(undefined);
             try {
               await onSaveOverride(container.id, {
                 customName: custom.name.trim() || undefined,
@@ -968,6 +980,9 @@ export const AppDetailsSheet: React.FC<{
                 notes: custom.notes.trim() || undefined,
               });
               pop();
+            } catch (e) {
+              // Stay on the screen with what was typed, and say why it wasn't saved
+              setSaveError(`Couldn’t save: ${(e as Error).message}`);
             } finally {
               setSaving(false);
             }

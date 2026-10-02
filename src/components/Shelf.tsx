@@ -704,13 +704,19 @@ function solveLayout(pieces: Piece[], C: number, colW: number, prev: ({ col: num
 }
 
 // The last arrangement for the same stacks, sizes and columns: re-renders (status updates) don't solve again
-let solved: { key: string; places: Place[] } | null = null;
+// (the last few, so switching a filter or clearing a search back and forth doesn't solve again)
+const solved = new Map<string, Place[]>();
 // Which column each stack was in last (by its id), so stacks stay put unless moving makes things fit better
 const lastSpot = new Map<string, { col: number }>();
 
 function placeStacks(apps: number[], C: number, colW: number, ids: string[]): Place[] {
   const key = `${C}|${Math.round(colW / 8)}|${modelGen}|` + ids.map((id, k) => `${id}:${apps[k]}`).join(',');
-  if (solved?.key === key) return solved.places;
+  const hit = solved.get(key);
+  if (hit) {
+    solved.delete(key);
+    solved.set(key, hit);
+    return hit;
+  }
   const pieces: Piece[] = ids.map((id, i) => ({
     i,
     id,
@@ -726,7 +732,8 @@ function placeStacks(apps: number[], C: number, colW: number, ids: string[]): Pl
   }));
   const places = solveLayout(pieces, C, colW, ids.map((id) => lastSpot.get(id + '@' + C)));
   for (const p of places) lastSpot.set(ids[p.i] + '@' + C, { col: p.col });
-  solved = { key, places };
+  solved.set(key, places);
+  if (solved.size > 8) solved.delete(solved.keys().next().value as string);
   return places;
 }
 
@@ -879,8 +886,19 @@ export const ShelfGrid: React.FC<{ children: React.ReactNode }> = ({ children })
       tries.current++;
       modelGen++;
       remeasure((x) => x + 1);
+    } else if (changed && !retryLater.current) {
+      // Still settling after a few tries (fonts or icons arriving): try again in a moment rather than
+      // leaving a stack drawn at the wrong height
+      retryLater.current = setTimeout(() => {
+        retryLater.current = undefined;
+        tries.current = 0;
+        modelGen++;
+        remeasure((x) => x + 1);
+      }, 800);
     } else if (!changed) tries.current = 0;
   });
+  const retryLater = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(retryLater.current), []);
   // A stack that changes size by itself (folded, an app's message got longer, the fonts arrived): measure again
   useEffect(() => {
     const root = ref.current;

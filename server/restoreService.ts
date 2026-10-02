@@ -24,7 +24,7 @@ import {
   resolveBackupDir,
   type MergeHistoryRecord,
 } from './historyService';
-import { readHostFile, writeHostFile, createHostDirectory, forceRemoveContainer } from './hostFsService';
+import { readHostFile, writeHostFile, createHostDirectory, forceRemoveContainer, findComposeFile, COMPOSE_FILE_PREFERENCE } from './hostFsService';
 import {
   hostDirectoryIsFree,
   extractArchiveTo,
@@ -39,6 +39,7 @@ import {
 } from './dataBackupService';
 import { queryDockerEngine } from './dockerService';
 import { record, currentActivityId } from './activityLog';
+import { writeJsonAtomic } from './safeJson';
 
 // ----------------------------------------------------------------------------
 // Settings
@@ -90,7 +91,7 @@ export function getRestoreSettings(): RestoreSettings {
 export function updateRestoreSettings(patch: Partial<RestoreSettings>): RestoreSettings {
   const next = getRestoreSettings();
   if (typeof patch.keepDays === 'number' && patch.keepDays >= 0 && patch.keepDays <= 3650) next.keepDays = Math.round(patch.keepDays);
-  fs.writeFileSync(settingsFile(), JSON.stringify(next, null, 2));
+  writeJsonAtomic(settingsFile(), next);
   record('info', 'backup', `Restore backups are now kept ${next.keepDays ? `for ${next.keepDays} days` : 'forever'}`, next);
   return next;
 }
@@ -471,18 +472,19 @@ export async function planRestore(id: string): Promise<RestorePlan | null> {
 
   if (!blocked && point.state === 'available') {
     // Expected current state = how the newest change touching each stack left it
+    // (by stack folder: a stack's compose file may be compose.yaml, docker-compose.yml…)
     const expected = new Map<string, { content: string | null; by: MergeHistoryRecord } | 'unknown'>();
     for (const r of [...chain].reverse()) {
-      if (isStackDelete(r)) expected.set(path.posix.join(norm(r.targetDirectory), 'docker-compose.yml'), { content: null, by: r });
-      else if (r.resultFiles?.length) for (const f of r.resultFiles) expected.set(norm(f.path), { content: f.content, by: r });
-      else for (const d of touchedDirs(r)) expected.set(path.posix.join(d, 'docker-compose.yml'), 'unknown');
+      if (isStackDelete(r)) expected.set(norm(r.targetDirectory), { content: null, by: r });
+      else if (r.resultFiles?.length) {
+        for (const f of r.resultFiles) if (COMPOSE_FILE_PREFERENCE.includes(path.posix.basename(f.path))) expected.set(norm(path.posix.dirname(f.path)), { content: f.content, by: r });
+      } else for (const d of touchedDirs(r)) expected.set(norm(d), 'unknown');
     }
 
     for (const t of targets) {
-      const file = path.posix.join(t.dir, 'docker-compose.yml');
       const free = await hostDirectoryIsFree(t.dir);
-      const current = free ? null : await readHostFile(file).catch(() => null);
-      const exp = expected.get(file);
+      const current = free ? null : ((await findComposeFile(t.dir).catch(() => null))?.content ?? null);
+      const exp = expected.get(norm(t.dir));
       if (exp === 'unknown') {
         checks.push({ level: 'warn', message: `A change to ${t.project} was made before Manifexus recorded results, so it can’t check whether ${t.project} changed since.` });
       } else if (exp) {
@@ -639,10 +641,12 @@ export async function executeRestore(id: string, emit: Emit, opts: { filesOnly?:
     }
     for (const t of targets) {
       await run(async (log) => {
-        const file = path.posix.join(t.dir, 'docker-compose.yml');
         const envFile = path.posix.join(t.dir, '.env');
         const free = await hostDirectoryIsFree(t.dir);
-        const current = free ? null : await readHostFile(file).catch(() => null);
+        // Put back into the compose file the stack really uses (compose.yaml, docker-compose.yml…), never a second one beside it
+        const found = free ? null : await findComposeFile(t.dir).catch(() => null);
+        const file = found?.path ?? path.posix.join(t.dir, 'docker-compose.yml');
+        const current = found?.content ?? null;
         const currentEnv = free ? null : await readHostFile(envFile).catch(() => null);
         snapshots.push({ dir: t.dir, project: t.project, existed: !free, compose: current, env: currentEnv });
         const safe = t.project.replace(/[^a-zA-Z0-9_.-]/g, '_');
@@ -973,6 +977,8 @@ export function streamBackupFile(id: string, archive: number, filePath: string, 
   const p = spawn('tar', ['-xzOf', a.archiveFile, '--', `./${filePath}`]);
   p.stdout.pipe(res);
   p.on('error', () => res.end());
+  // A download cancelled halfway stops the unpacking too (otherwise it waits forever on a full pipe)
+  res.on('close', () => p.exitCode === null && p.kill());
   return true;
 }
 
@@ -986,6 +992,7 @@ export function streamBackupArchive(id: string, res: Response): boolean {
   const p = spawn('tar', ['-czf', '-', '-C', path.dirname(r.backupArchiveDir), path.basename(r.backupArchiveDir)]);
   p.stdout.pipe(res);
   p.on('error', () => res.end());
+  res.on('close', () => p.exitCode === null && p.kill());
   record('info', 'backup', `Downloaded the backup of “${titleOf(r).title}”`, { id });
   return true;
 }

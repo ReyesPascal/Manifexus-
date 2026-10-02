@@ -131,9 +131,11 @@ export const WebTerminalModal: React.FC<WebTerminalModalProps> = ({
     };
 
     // Forward user keystrokes from xterm to WebSocket
+    // Always to the current connection, so typing still works after Reconnect
     const onDataDisposable = term.onData((data) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(data);
+      const live = wsRef.current;
+      if (live && live.readyState === WebSocket.OPEN) {
+        live.send(data);
       }
     });
 
@@ -160,13 +162,15 @@ export const WebTerminalModal: React.FC<WebTerminalModalProps> = ({
     return () => {
       window.removeEventListener('resize', handleResize);
       onDataDisposable.dispose();
-      try {
-        if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
-          ws.close();
+      // Close whichever connection is open now (the first one, or the one Reconnect made)
+      for (const sock of new Set([ws, wsRef.current])) {
+        try {
+          if (sock && (sock.readyState === WebSocket.OPEN || sock.readyState === WebSocket.CONNECTING)) sock.close();
+        } catch {
+          // ignore
         }
-      } catch {
-        // ignore
       }
+      wsRef.current = null;
       try {
         term.dispose();
       } catch {
@@ -228,9 +232,10 @@ export const WebTerminalModal: React.FC<WebTerminalModalProps> = ({
     };
 
     ws.onmessage = (event) => {
-      if (typeof event.data === 'string' && termRef.current) {
-        termRef.current.write(event.data);
-      }
+      const t = termRef.current;
+      if (!t) return;
+      if (typeof event.data === 'string') t.write(event.data);
+      else if (event.data instanceof Blob) event.data.arrayBuffer().then((buffer) => t.write(new Uint8Array(buffer)));
     };
 
     ws.onerror = () => {

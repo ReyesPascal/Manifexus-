@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef, useDeferredValue } from 'react';
 import { enter } from './motion';
 import {
   FolderKanban,
@@ -26,13 +26,11 @@ import {
 } from './types';
 import { PortsSheet } from './components/PortsSheet';
 import { SoftwareUpdateSheet, SoftwareUpdateState } from './components/SoftwareUpdateSheet';
-import { ActivitySheet } from './components/ActivitySheet';
 import { AppCard, AppIcon, MoveProgress, learnMoveSteps } from './components/AppCard';
 import { helperKind, helperParents, helpersByApp } from './appHelpers';
 import { StackIcon, StackIconChoice } from './stackIcons';
 import { AppDetailsSheet } from './components/AppDetailsSheet';
-import { AssistantSheet } from './components/AssistantSheet';
-import { FixSheet, FixRequest } from './components/FixSheet';
+import type { FixRequest } from './components/FixSheet';
 import type { AiAction } from './components/aiShared';
 import { setPrefsFromConfig } from './prefs';
 import { FEATURES } from './features';
@@ -44,18 +42,32 @@ import { DeleteStackDialog, DeleteStackTarget } from './components/DeleteStackDi
 import { DeleteAppDialog, DeleteAppTarget } from './components/DeleteAppDialog';
 import { HostAutomationModal } from './components/HostAutomationModal';
 import { GettingStartedSheet, Tour } from './components/GettingStarted';
-import { Practice } from './components/Practice';
 import { ManifexusHeroHeader } from './components/ManifexusHeroHeader';
 import { LibraryBar, Shelf, ShelfGrid, shelfSpan, FolderIcon, Health, TileGrid, ShelfNote, panelStyle, displayFont } from './components/Shelf';
 import type { MenuItem } from './components/ui/ios';
 import { ios } from './components/ui/ios';
 import { LiquidGlass } from './components/ui/LiquidGlass';
-import { RestoreSheet } from './components/RestoreSheet';
 import { StackDetailsSheet } from './components/StackDetailsSheet';
 import { CleanupSheet } from './components/CleanupSheet';
 import { CreateStackModal } from './components/CreateStackModal';
-import { WebTerminalModal } from './components/WebTerminalModal';
 import { AutomationPrivileges } from './types';
+
+// Screens most visits never open load only when first opened (the editor alone is a large download)
+const WebTerminalModal = React.lazy(() => import('./components/WebTerminalModal').then((m) => ({ default: m.WebTerminalModal })));
+const AssistantSheet = React.lazy(() => import('./components/AssistantSheet').then((m) => ({ default: m.AssistantSheet })));
+const FixSheet = React.lazy(() => import('./components/FixSheet').then((m) => ({ default: m.FixSheet })));
+const Practice = React.lazy(() => import('./components/Practice').then((m) => ({ default: m.Practice })));
+const ActivitySheet = React.lazy(() => import('./components/ActivitySheet').then((m) => ({ default: m.ActivitySheet })));
+const RestoreSheet = React.lazy(() => import('./components/RestoreSheet').then((m) => ({ default: m.RestoreSheet })));
+
+/** True from the first time `on` is true: a screen loaded once stays mounted, so it keeps its place (a running restore, say) */
+function useOpenedOnce(on: boolean): boolean {
+  const [seen, setSeen] = useState(on);
+  useEffect(() => {
+    if (on) setSeen(true);
+  }, [on]);
+  return seen || on;
+}
 
 
 /** Midnight: the deep blue the glass sits on */
@@ -75,6 +87,8 @@ export default function App() {
   // UX & View state
   const [viewMode, setViewMode] = useState<'groups' | 'compose'>('compose');
   const [searchQuery, setSearchQuery] = useState('');
+  // Typing stays instant: the dashboard (and the stack layout) follows the search a moment later
+  const deferredSearch = useDeferredValue(searchQuery);
   const [statusFilter, setStatusFilter] = useState<'all' | 'running' | 'stopped'>('all');
 
   // Modals state
@@ -266,34 +280,58 @@ export default function App() {
   }, [refreshActivityBadge, markFailuresSeen]);
 
   // Fetch Container Telemetry & System Status
-  const fetchData = useCallback(async (showRefreshingState = false) => {
+  // Each refresh is numbered: an older one that answers late never overwrites a newer one (for example the
+  // refresh right after Stop, which would otherwise flip the app back to Running for a moment). Answers that
+  // haven't changed since last time aren't applied, so a quiet dashboard doesn't redraw every 10 seconds.
+  const fetchSeq = useRef(0);
+  const lastAnswer = useRef<{ containers?: string; status?: string; config?: string }>({});
+  // fromPoll: the regular refresh, which skips answers that haven't changed. Any other call (after an
+  // action) always applies what the server says, so a hopeful local update is always corrected.
+  const fetchData = useCallback(async (showRefreshingState = false, fromPoll = false): Promise<boolean> => {
     if (showRefreshingState) setIsRefreshing(true);
+    const my = ++fetchSeq.current;
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 20000);
     try {
-      const [containersRes, statusRes, configRes] = await Promise.all([
-        fetch('/api/containers'),
-        fetch('/api/status'),
-        fetch('/api/config'),
-      ]);
-
-      if (!containersRes.ok || !statusRes.ok) {
-        throw new Error('Failed to communicate with Manifexus backend');
+      const get = async (url: string) => {
+        const r = await fetch(url, { signal: ctl.signal, cache: 'no-store' });
+        const text = await r.text();
+        if (!r.ok) {
+          let why = '';
+          try {
+            why = JSON.parse(text)?.error || '';
+          } catch {
+            /* not JSON (a proxy's error page, say) */
+          }
+          throw Object.assign(new Error(why || `the server answered ${r.status}`), { fromServer: true });
+        }
+        return text;
+      };
+      const [containersText, statusText, configText] = await Promise.all([get('/api/containers'), get('/api/status'), get('/api/config')]);
+      if (my !== fetchSeq.current) return true;
+      const prev = fromPoll ? lastAnswer.current : {};
+      if (containersText !== prev.containers) {
+        const containersData = JSON.parse(containersText);
+        setContainers(containersData.containers || []);
+        setEmptyStacks(containersData.emptyStacks || []);
+        if (containersData.defaultStacksDir) setDefaultStacksDir(containersData.defaultStacksDir);
       }
-
-      const containersData = await containersRes.json();
-      const statusData = await statusRes.json();
-      const configData = await configRes.json();
-
-      setContainers(containersData.containers || []);
-      setEmptyStacks(containersData.emptyStacks || []);
-      if (containersData.defaultStacksDir) setDefaultStacksDir(containersData.defaultStacksDir);
-      setSystemStatus(statusData);
-      setConfig(configData);
+      if (statusText !== prev.status) setSystemStatus(JSON.parse(statusText));
+      if (configText !== prev.config) setConfig(JSON.parse(configText));
+      lastAnswer.current = { containers: containersText, status: statusText, config: configText };
       setError(null);
+      return true;
     } catch (err) {
+      // A newer refresh took over (this one was cut short): not a failure
+      if (my !== fetchSeq.current) return true;
       console.error('[Manifexus] Polling error:', err);
-      setError((err as Error).message);
+      const e = err as Error & { fromServer?: boolean };
+      // Say who isn't answering, in plain words: Manifexus itself (restarting, offline) or Docker behind it
+      setError(e.fromServer ? `Can’t reach Docker right now. ${e.message}` : 'Manifexus isn’t answering right now. Trying again…');
+      return false;
     } finally {
-      setIsLoading(false);
+      clearTimeout(timer);
+      if (my === fetchSeq.current) setIsLoading(false);
       if (showRefreshingState) setIsRefreshing(false);
     }
   }, []);
@@ -332,18 +370,37 @@ export default function App() {
     };
   }, []);
 
-  // Initial fetch and auto-refresh interval
+  // Refreshing: the next refresh starts only after the last one finished (a slow Docker never gets a pile of
+  // requests), waits longer while Manifexus or Docker isn't answering, and pauses while the tab is hidden
+  const refreshEvery = useRef(10);
+  refreshEvery.current = config?.refreshIntervalSeconds || 10;
   useEffect(() => {
-    fetchData();
+    let stopped = false;
+    let running = false;
+    let failures = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const tick = async () => {
+      timer = undefined;
+      if (stopped || running || document.hidden) return;
+      running = true;
+      const ok = await fetchData(false, true);
+      running = false;
+      failures = ok ? 0 : failures + 1;
+      if (stopped) return;
+      timer = setTimeout(tick, refreshEvery.current * 1000 * Math.min(6, 2 ** failures));
+    };
+    const onVisible = () => {
+      if (!document.hidden && !timer && !running) void tick();
+    };
+    void tick();
     fetchPrivileges();
-
-    const intervalSeconds = config?.refreshIntervalSeconds || 10;
-    const timer = setInterval(() => {
-      fetchData(false);
-    }, intervalSeconds * 1000);
-
-    return () => clearInterval(timer);
-  }, [fetchData, fetchPrivileges, config?.refreshIntervalSeconds]);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [fetchData, fetchPrivileges]);
 
   // Execute container lifecycle action
   const handleContainerAction = async (
@@ -394,19 +451,23 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(override, (_k, v) => (v === undefined ? null : v)),
       });
-      if (res.ok) {
-        await fetchData(true);
-      }
+      if (!res.ok) throw new Error(((await res.json().catch(() => ({}))) as { error?: string }).error || 'Manifexus couldn’t save that.');
     } catch (err) {
       console.error('Failed to save override:', err);
+      // The screen that asked shows it (App Details); quick changes on a card show the short message
+      throw err instanceof TypeError ? new Error('Manifexus didn’t answer. Try again in a moment.') : err;
     }
+    await fetchData(true);
   };
+  // Quick changes from a card: a failure shows as the short message at the bottom
+  const saveQuietly = (containerId: string, override: AppOverride) =>
+    handleSaveOverride(containerId, override).catch((e: Error) => setNotice({ text: `Couldn’t save that: ${e.message}`, tone: 'error' }));
 
   // Quick set primary Web UI port from app card
-  const handleSetPrimaryPort = (containerId: string, port: number) => handleSaveOverride(containerId, { customPort: port });
+  const handleSetPrimaryPort = (containerId: string, port: number) => saveQuietly(containerId, { customPort: port });
 
   // Rename an app right on its card (empty goes back to its own name)
-  const handleRenameApp = (containerId: string, name: string) => handleSaveOverride(containerId, { customName: name.trim() || undefined });
+  const handleRenameApp = (containerId: string, name: string) => saveQuietly(containerId, { customName: name.trim() || undefined });
 
   // The name shown for a stack; its folder keeps the real one
   const stackLabel = (project: string) => config?.stackNames?.[project]?.trim() || project;
@@ -752,8 +813,8 @@ export default function App() {
       if (statusFilter === 'stopped' && c.state === 'running') return false;
 
       // Search query
-      if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase();
+      if (deferredSearch.trim()) {
+        const q = deferredSearch.toLowerCase();
         const matchName = [c.customName, c.friendlyName, c.cleanName].some((n) => (n || '').toLowerCase().includes(q));
         const matchImage = c.image.toLowerCase().includes(q);
         const matchProject = [c.compose.project, c.compose.project && config?.stackNames?.[c.compose.project]].some((n) => (n || '').toLowerCase().includes(q));
@@ -784,7 +845,7 @@ export default function App() {
       out.push(show);
     }
     return out;
-  }, [containers, statusFilter, searchQuery, userGroups, helperOf, config?.stackNames]);
+  }, [containers, statusFilter, deferredSearch, userGroups, helperOf, config?.stackNames]);
 
   // Summary numbers, computed from exactly what the dashboard shows as app cards
   // (not Manifexus itself, not apps hidden in Settings)
@@ -837,8 +898,8 @@ export default function App() {
 
     // Pre-populate with discovered or provisioned empty stacks
     for (const es of emptyStacks) {
-      if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase();
+      if (deferredSearch.trim()) {
+        const q = deferredSearch.toLowerCase();
         if (![es.project, config?.stackNames?.[es.project]].some((n) => (n || '').toLowerCase().includes(q))) {
           continue;
         }
@@ -881,7 +942,7 @@ export default function App() {
     for (const st of Object.values(stacksMap)) st.containers.sort(byName);
     standalone.sort((a, b) => label(a).localeCompare(label(b), undefined, { numeric: true, sensitivity: 'base' }));
     return { stacksMap, standalone };
-  }, [filteredContainers, emptyStacks, searchQuery, config?.stackNames, pendingMoves]);
+  }, [filteredContainers, emptyStacks, deferredSearch, config?.stackNames, pendingMoves]);
 
   // Simple / Advanced and Show Commands, for every screen
   useEffect(() => setPrefsFromConfig(config), [config]);
@@ -981,6 +1042,13 @@ export default function App() {
         }
       : { onClose: close };
 
+  const practiceLoaded = useOpenedOnce(practicing);
+  const fixLoaded = useOpenedOnce(Boolean(fixRequest));
+  const assistantLoaded = useOpenedOnce(assistant.open);
+  const restoreLoaded = useOpenedOnce(isRestoreOpen);
+  const termLoaded = useOpenedOnce(isTerminalModalOpen);
+  const activityLoaded = useOpenedOnce(activity.open);
+
   return (
     <div style={{ background: MIDNIGHT }} className="relative isolate min-h-screen text-slate-100 flex flex-col font-sans selection:bg-[#0A84FF]/40">
       {/* A soft glow behind everything, for the glass to catch */}
@@ -1076,7 +1144,7 @@ export default function App() {
         {error && (
           <div className="mb-5 px-4 py-3 rounded-[16px] flex items-center gap-3 text-[15px]" style={{ ...panelStyle, color: '#FF8A80' }}>
             <AlertCircle className="w-5 h-5 flex-shrink-0" />
-            <span>Can’t reach Docker right now: {error}</span>
+            <span>{error}</span>
           </div>
         )}
 
@@ -1360,7 +1428,8 @@ export default function App() {
       {/* App details, and Diagnostics for Manifexus itself */}
       <AppDetailsSheet
         covered={Boolean(overDetails)}
-        container={inspectContainer}
+        // The app as it is now (a rename or a new icon shows straight away), or as it was when opened if it's gone
+        container={inspectContainer ? containers.find((x) => x.id === inspectContainer.id) ?? inspectContainer : null}
         helpers={inspectContainer ? helpersOf.get(inspectContainer.id) : undefined}
         partOf={inspectContainer && helperOf.get(inspectContainer.id) ? containers.find((x) => x.id === helperOf.get(inspectContainer.id)) : undefined}
         onOpenApp={setInspectContainer}
@@ -1432,17 +1501,21 @@ export default function App() {
           if (tour) setTimeout(() => setPracticing(true), 250);
         }}
       />
-      <Practice
-        open={practicing}
-        onClose={(thenTour) => {
-          setPracticing(false);
-          if (thenTour) {
-            setViewMode('compose');
-            window.scrollTo({ top: 0 });
-            setTimeout(() => setTouring(true), 350);
-          }
-        }}
-      />
+      {practiceLoaded && (
+        <React.Suspense fallback={null}>
+        <Practice
+          open={practicing}
+          onClose={(thenTour) => {
+            setPracticing(false);
+            if (thenTour) {
+              setViewMode('compose');
+              window.scrollTo({ top: 0 });
+              setTimeout(() => setTouring(true), 350);
+            }
+          }}
+        />
+        </React.Suspense>
+      )}
       <Tour open={touring} onClose={() => setTouring(false)} onClearSearch={() => setSearchQuery('')} onShowAll={() => setStatusFilter('all')} />
 
       <SettingsModal
@@ -1460,40 +1533,48 @@ export default function App() {
         onOpenAssistant={() => setAssistant({ open: true, view: 'settings', from: 'settings' })}
       />
 
-      <FixSheet
-        request={fixRequest}
-        onClose={() => {
-          setFixRequest(null);
-          setOverDetails(null);
-        }}
-        onNeedsSetup={(r) => {
-          setFixRequest(null);
-          setAssistant({ open: true, question: r.question, focus: r.focus, fixAfter: r });
-        }}
-        onAction={handleAiAction}
-      />
+      {fixLoaded && (
+        <React.Suspense fallback={null}>
+        <FixSheet
+          request={fixRequest}
+          onClose={() => {
+            setFixRequest(null);
+            setOverDetails(null);
+          }}
+          onNeedsSetup={(r) => {
+            setFixRequest(null);
+            setAssistant({ open: true, question: r.question, focus: r.focus, fixAfter: r });
+          }}
+          onAction={handleAiAction}
+        />
+        </React.Suspense>
+      )}
 
-      <AssistantSheet
-        open={assistant.open}
-        initialView={assistant.view}
-        initialQuestion={assistant.fixAfter || assistant.seed ? undefined : assistant.question}
-        focus={assistant.focus}
-        seedChat={assistant.seed}
-        setupFor={assistant.fixAfter?.question}
-        onAction={handleAiAction}
-        afterSetup={
-          assistant.fixAfter
-            ? () => {
-                const r = assistant.fixAfter!;
-                setAssistant({ open: false });
-                setFixRequest(r);
-              }
-            : undefined
-        }
-        {...(assistant.from === 'settings'
-          ? { backLabel: 'Settings', onBack: () => setAssistant({ open: false }), onClose: () => { setAssistant({ open: false }); setIsSettingsOpen(false); } }
-          : backProps('assistant', () => setAssistant({ open: false })))}
-      />
+      {assistantLoaded && (
+        <React.Suspense fallback={null}>
+        <AssistantSheet
+          open={assistant.open}
+          initialView={assistant.view}
+          initialQuestion={assistant.fixAfter || assistant.seed ? undefined : assistant.question}
+          focus={assistant.focus}
+          seedChat={assistant.seed}
+          setupFor={assistant.fixAfter?.question}
+          onAction={handleAiAction}
+          afterSetup={
+            assistant.fixAfter
+              ? () => {
+                  const r = assistant.fixAfter!;
+                  setAssistant({ open: false });
+                  setFixRequest(r);
+                }
+              : undefined
+          }
+          {...(assistant.from === 'settings'
+            ? { backLabel: 'Settings', onBack: () => setAssistant({ open: false }), onClose: () => { setAssistant({ open: false }); setIsSettingsOpen(false); } }
+            : backProps('assistant', () => setAssistant({ open: false })))}
+        />
+        </React.Suspense>
+      )}
 
       {/* Simulate Container Modal */}
       <SimulateContainerModal
@@ -1531,7 +1612,11 @@ export default function App() {
       />
 
       {/* Restore: every change's backup, restorable */}
-      <RestoreSheet open={isRestoreOpen} {...backProps('restore', () => setIsRestoreOpen(false))} onChanged={() => fetchData(true)} />
+      {restoreLoaded && (
+        <React.Suspense fallback={null}>
+        <RestoreSheet open={isRestoreOpen} {...backProps('restore', () => setIsRestoreOpen(false))} onChanged={() => fetchData(true)} />
+        </React.Suspense>
+      )}
 
       {/* Directive 3: Create New Empty Stack Modal */}
       <CreateStackModal
@@ -1552,12 +1637,16 @@ export default function App() {
       />
 
       {/* Directive 2: Host Web Terminal Modal (nano) */}
-      <WebTerminalModal
-        isOpen={isTerminalModalOpen}
-        onClose={() => setIsTerminalModalOpen(false)}
-        filePath={terminalTargetFile}
-        stackName={terminalStackName}
-      />
+      {termLoaded && (
+        <React.Suspense fallback={null}>
+        <WebTerminalModal
+          isOpen={isTerminalModalOpen}
+          onClose={() => setIsTerminalModalOpen(false)}
+          filePath={terminalTargetFile}
+          stackName={terminalStackName}
+        />
+        </React.Suspense>
+      )}
 
       <SoftwareUpdateSheet
         open={isUpdatesOpen}
@@ -1566,16 +1655,20 @@ export default function App() {
         onStateChange={setSoftwareUpdate}
       />
 
-      <ActivitySheet
-        open={activity.open}
-        initialActivityId={activity.id}
-        initialFilter={activity.filter}
-        {...backProps('activity', () => {
-          setActivity({ open: false });
-          // Anything that failed while it was open was on screen
-          refreshActivityBadge(true);
-        })}
-      />
+      {activityLoaded && (
+        <React.Suspense fallback={null}>
+        <ActivitySheet
+          open={activity.open}
+          initialActivityId={activity.id}
+          initialFilter={activity.filter}
+          {...backProps('activity', () => {
+            setActivity({ open: false });
+            // Anything that failed while it was open was on screen
+            refreshActivityBadge(true);
+          })}
+        />
+        </React.Suspense>
+      )}
 
       <PortsSheet
         open={isPortsOpen}

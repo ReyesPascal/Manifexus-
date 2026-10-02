@@ -22,6 +22,7 @@ import { AsyncLocalStorage } from 'async_hooks';
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
+import { writeJsonAtomic } from './safeJson';
 
 // ----------------------------------------------------------------------------
 // Types
@@ -142,7 +143,7 @@ export function updateLogSettings(patch: Partial<LogSettings>): LogSettings {
   settings = next;
   ensureDir();
   try {
-    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
+    writeJsonAtomic(SETTINGS_FILE, settings);
   } catch {
     // ignore
   }
@@ -471,7 +472,7 @@ export function subscribe(l: Listener): () => void {
   return () => listeners.delete(l);
 }
 
-function shouldKeep(level: Level, inActivity: boolean): boolean {
+export function shouldKeep(level: Level, inActivity: boolean): boolean {
   if (inActivity) return true;
   const min: Level = settings.detail === 'everything' ? 'trace' : settings.detail === 'detailed' ? 'debug' : 'info';
   return RANK[level] >= RANK[min];

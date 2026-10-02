@@ -238,7 +238,10 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
   // ---------------------------------------------------------------------------
   const wasOpen = useRef(false);
   useEffect(() => {
-    if (isOpen && !wasOpen.current) {
+    // Closed while a move was running: opening it again goes straight back to that move's progress
+    if (isOpen && !wasOpen.current && move.state.status === 'running') {
+      setPage('progress');
+    } else if (isOpen && !wasOpen.current) {
       setQuery('');
       setPlan(null);
       setPlanError(null);
@@ -377,8 +380,12 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
 
   const toggleApp = (id: string) => setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
 
+  // The names of the apps being moved, kept from the moment the move starts: once it runs, the apps get new
+  // ids (and may leave the selection), but the progress page still says what's moving
+  const [movingSnapshot, setMovingSnapshot] = useState<string[] | null>(null);
   const startMove = () => {
     if (!plan) return;
+    setMovingSnapshot(selectedApps.map(appName));
     setPage('progress');
     void move.start('/api/stacks/execute-merge-stream', {
       sourceContainerIds: withLinked(selected),
@@ -871,7 +878,7 @@ export const MoveAppsModal: React.FC<MoveAppsModalProps> = ({
     </section>
   );
 
-  const movingNames = selectedApps.map(appName);
+  const movingNames = page === 'progress' && movingSnapshot ? movingSnapshot : selectedApps.map(appName);
   const movingLabel = movingNames.length <= 2 ? movingNames.join(' and ') : `${movingNames.length} apps`;
   const progressPage = (
     <ProgressView

@@ -167,31 +167,9 @@ function browserOf(ua?: string): string {
   return o ? `${b} on ${o}` : b;
 }
 
-/** Copies text; falls back to a hidden textarea when the Clipboard API isn't available (plain http). */
-export async function copyText(text: string): Promise<boolean> {
-  try {
-    if (navigator.clipboard && window.isSecureContext) {
-      await navigator.clipboard.writeText(text);
-      return true;
-    }
-  } catch {
-    // fall through
-  }
-  const ta = document.createElement('textarea');
-  ta.value = text;
-  ta.style.position = 'fixed';
-  ta.style.opacity = '0';
-  document.body.appendChild(ta);
-  ta.select();
-  let ok = false;
-  try {
-    ok = document.execCommand('copy');
-  } catch {
-    ok = false;
-  }
-  document.body.removeChild(ta);
-  return ok;
-}
+// Copying lives in its own small file, so screens that only need it don't load all of Activity
+export { copyText } from '../copyText';
+import { copyText } from '../copyText';
 
 function download(url: string) {
   const a = document.createElement('a');

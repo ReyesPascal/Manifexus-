@@ -121,6 +121,65 @@ async function readHostFileImpl(hostFilePath: string): Promise<string | null> {
   return null;
 }
 
+/** Compose file names, in the order Docker Compose itself picks them when a folder has more than one */
+export const COMPOSE_FILE_PREFERENCE = ['compose.yaml', 'compose.yml', 'docker-compose.yaml', 'docker-compose.yml'];
+
+/**
+ * The compose file a stack folder really uses (the one `docker compose` would pick), with its text; null if
+ * the folder has none. One read (or one short-lived helper), whichever name the stack uses.
+ */
+export async function findComposeFile(dir: string): Promise<{ path: string; name: string; content: string } | null> {
+  const base = path.posix.normalize(dir.trim()).replace(/\/+$/, '');
+  if (!base.startsWith('/') || base === '/') return null;
+  const local = resolveContainerPath(base);
+  if (local && fs.existsSync(local)) {
+    for (const name of COMPOSE_FILE_PREFERENCE) {
+      try {
+        const text = fs.readFileSync(path.join(local, name), 'utf8');
+        if (text.trim()) return { path: path.posix.join(base, name), name, content: text };
+      } catch {
+        /* not this one */
+      }
+    }
+    return null;
+  }
+  try {
+    const parent = path.posix.dirname(base);
+    const folder = path.posix.basename(base).replace(/'/g, `'\\''`);
+    const helperImage = await getBestAvailableImage();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const runner = await queryDockerEngine<any>('/containers/create', 'POST', {
+      Image: helperImage,
+      Entrypoint: [],
+      Cmd: ['sh', '-c', `cd '/target_root/${folder}' 2>/dev/null || exit 44; for f in ${COMPOSE_FILE_PREFERENCE.join(' ')}; do if [ -s "$f" ]; then printf '%s\\n' "$f"; cat "$f"; exit 0; fi; done; exit 44`],
+      HostConfig: { Binds: [`${parent}:/target_root:ro`] },
+    });
+    if (!runner?.Id) return null;
+    try {
+      await queryDockerEngine(`/containers/${runner.Id}/start`, 'POST');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const waitRes = await queryDockerEngine<any>(`/containers/${runner.Id}/wait`, 'POST');
+      if (!waitRes || waitRes.StatusCode !== 0) return null;
+      const out = cleanDockerLogs(await queryDockerEngine<string>(`/containers/${runner.Id}/logs?stdout=1`, 'GET'));
+      const nl = out.indexOf('\n');
+      const name = out.slice(0, nl).trim();
+      if (!COMPOSE_FILE_PREFERENCE.includes(name)) return null;
+      return { path: path.posix.join(base, name), name, content: out.slice(nl + 1) };
+    } finally {
+      await queryDockerEngine(`/containers/${runner.Id}?force=true`, 'DELETE').catch(() => undefined);
+    }
+  } catch (err) {
+    console.warn(`[HostFsService] Couldn't look for a compose file in ${base}:`, err);
+    return null;
+  }
+}
+
+/** The compose file to read or write in a stack folder: the one in use, or docker-compose.yml for a new one */
+export async function composeFilePathIn(dir: string): Promise<string> {
+  const base = path.posix.normalize(dir.trim()).replace(/\/+$/, '');
+  return (await findComposeFile(base))?.path ?? path.posix.join(base, 'docker-compose.yml');
+}
+
 /**
  * Writes a text file directly to the host filesystem.
  */
@@ -422,7 +481,7 @@ export interface HostComposeFile {
   content: string;
 }
 
-const COMPOSE_NAMES = ['docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml'];
+const COMPOSE_NAMES = COMPOSE_FILE_PREFERENCE;
 const MARK = '@@MFX-COMPOSE@@';
 
 /**
@@ -486,7 +545,13 @@ export async function scanHostComposeFolders(baseDir: string): Promise<HostCompo
 const FRESH_MS = 30_000;
 const scanCache = new Map<string, { at: number; files: HostComposeFile[]; running?: Promise<void> }>();
 
+let hostWrites = 0;
+/** Counts changes Manifexus made to files on the server (anything that remembers what's there starts over) */
+export function hostWriteCount(): number {
+  return hostWrites;
+}
 function forgetHostComposeFolders(): void {
+  hostWrites++;
   for (const v of scanCache.values()) v.at = 0;
 }
 

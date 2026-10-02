@@ -194,7 +194,8 @@ export const SoftwareUpdateSheet: React.FC<SoftwareUpdateSheetProps> = ({ open, 
   const target = useRef<{ from?: string; to?: string; startedAt?: number }>({});
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const busy = phase === 'download' || phase === 'prepare' || phase === 'restart' || phase === 'starting';
+  // While it only waits for a move or restore to finish, the screen can be closed (the update carries on)
+  const busy = phase === 'download' || (phase === 'prepare' && !/^Downloaded\. Waiting/.test(progress?.message || '')) || phase === 'restart' || phase === 'starting';
 
   useEffect(() => () => {
     if (pollTimer.current) clearTimeout(pollTimer.current);
@@ -276,12 +277,35 @@ export const SoftwareUpdateSheet: React.FC<SoftwareUpdateSheetProps> = ({ open, 
 
   /** Fallback when re-attaching mid-download: poll the server's progress snapshot. */
   const pollInstall = () => {
+    // Stops (with a way out) if the server has no install to report, or its progress stops moving
+    const started = Date.now();
+    let lastChange = Date.now();
+    let lastKey = '';
+    const giveUp = (why: string) => {
+      setError(why);
+      setPhase('error');
+    };
     const tick = async () => {
       try {
         const r = await fetch('/api/system/update', { cache: 'no-store' });
         const s: SoftwareUpdateState = await r.json();
         const p = s.installing;
+        if (!p && Date.now() - started > 20000) {
+          return giveUp('Manifexus isn’t installing an update anymore. Check for updates to see where things stand.');
+        }
         if (p) {
+          const key = `${p.stage}:${p.percent ?? ''}:${p.bytesDone ?? ''}:${p.message ?? ''}`;
+          if (key !== lastKey) {
+            lastKey = key;
+            lastChange = Date.now();
+          } else if (Date.now() - lastChange > 2 * 60 * 1000 && p.stage !== 'prepare') {
+            return giveUp('The update stopped making progress. Reload this page to see where it is, or try again.');
+          }
+          if (p.stage === 'done') {
+            setPhase('idle');
+            checkNow();
+            return;
+          }
           setProgress(p);
           if (p.stage === 'restart') {
             target.current = { from: p.fromImageId, to: p.toImageId };
@@ -310,6 +334,12 @@ export const SoftwareUpdateSheet: React.FC<SoftwareUpdateSheetProps> = ({ open, 
     setProgress({ stage: 'download', percent: 0, message: 'Downloading update…' });
     try {
       const res = await fetch('/api/system/update/install', { method: 'POST' });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        setError((j as { error?: string }).error || 'The update couldn’t start. Try again in a moment.');
+        setPhase('error');
+        return;
+      }
       if (!res.body) throw new Error('No progress stream');
       const reader = res.body.getReader();
       const dec = new TextDecoder();

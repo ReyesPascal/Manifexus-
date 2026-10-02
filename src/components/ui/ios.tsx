@@ -130,14 +130,15 @@ export const Row: React.FC<{
 };
 
 /** iOS-style switch. */
-export const Switch: React.FC<{ checked: boolean; onChange: (v: boolean) => void; label: string }> = ({ checked, onChange, label }) => (
+export const Switch: React.FC<{ checked: boolean; onChange: (v: boolean) => void; label: string; disabled?: boolean }> = ({ checked, onChange, label, disabled }) => (
   <button
     type="button"
     role="switch"
     aria-checked={checked}
     aria-label={label}
+    disabled={disabled}
     onClick={() => onChange(!checked)}
-    className="relative w-[51px] h-[31px] rounded-full transition-colors duration-200 flex-shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0A84FF]"
+    className="relative w-[51px] h-[31px] rounded-full transition-colors duration-200 flex-shrink-0 disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0A84FF]"
     style={{ background: checked ? ios.green : 'rgba(120,120,128,0.32)' }}
   >
     <span

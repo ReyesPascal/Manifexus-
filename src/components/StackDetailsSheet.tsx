@@ -4,7 +4,7 @@ import { AppIcon } from './AppCard';
 import { helperKind } from '../appHelpers';
 import { Health, InlineName, displayFont } from './Shelf';
 import { StackIcon, StackIconChoice, StackIconPicker } from '../stackIcons';
-import { copyText } from './ActivitySheet';
+import { copyText } from '../copyText';
 import { Button, Group, MenuItem, Row, SectionFooter, SectionHeader, Sheet, ios } from './ui/ios';
 
 const STATE: Record<string, string> = {

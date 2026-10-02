@@ -2,6 +2,36 @@
   "_about": "What's new in each version of Manifexus, newest first. Shown in Updates. Write for people, not developers: short, plain sentences about what they can now do. The newest entry's version is what gets built and tagged; older entries can give the \"commit\" they were released from.",
   "releases": [
     {
+      "version": "3.2",
+      "date": "2026-10-02",
+      "headline": "Faster, and even safer with your stacks.",
+      "new": [
+        "Edits you make in the compose file editor are now saved in Restore, so you can put the file back the way it was."
+      ],
+      "improved": [
+        "The dashboard refreshes about three times faster, asks your server for less, and pauses while its tab is in the background.",
+        "Manifexus opens faster: screens you rarely use, like the file editor, load only when you first open them.",
+        "Typing in search stays smooth, even with lots of stacks.",
+        "An update never restarts Manifexus in the middle of a move, restore or delete; it waits for it to finish first.",
+        "Choosing a shorter time in Keep Backups For now tells you how many backups would be removed, and asks before removing them.",
+        "If Manifexus can't measure an app's data before deleting it, the backup stays on, so nothing is lost by mistake.",
+        "When something doesn't go through (saving a custom name, pinning or deleting a backup), Manifexus now says so instead of looking like it worked.",
+        "If Manifexus itself isn't answering (for example while it restarts), the message says so, instead of blaming Docker."
+      ],
+      "fixed": [
+        "Stacks whose file is called compose.yaml can now be moved into, restored and deleted properly. Before, a second file could be written beside it and the move would fail.",
+        "Your settings and your Restore history can no longer be lost if Manifexus is stopped while saving them.",
+        "Two restores, or a restore and a move, can no longer change the same stack at the same time.",
+        "Closing Restore or Move during a restore or move and opening it again shows its progress again.",
+        "The Move screen keeps showing the names of the apps being moved until it's done.",
+        "A backup or move no longer waits for hours if its helper is removed partway through.",
+        "Updates no longer get stuck on \"Updating\" with no way to close the screen, and the nightly automatic update works again after a failed one.",
+        "App Details shows a new name or icon right away, and never shows another app's check results.",
+        "The file editor keeps working after Reconnect, and only Manifexus's own page can open it.",
+        "Cancelling a backup download now stops it on the server too."
+      ]
+    },
+    {
       "version": "3.1",
       "date": "2026-10-02",
       "headline": "Your stacks now fit together like puzzle pieces.",

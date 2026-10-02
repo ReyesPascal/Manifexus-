@@ -77,12 +77,12 @@ export const DeleteAppDialog: React.FC<{
     let cancelled = false;
     fetch('/api/apps/delete-plan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: target.ids }) })
       .then(async (r) => {
-        const d = await r.json();
+        const d = await r.json().catch(() => ({}));
         if (cancelled) return;
-        if (!r.ok) setError(d.error || null);
+        if (!r.ok) setError(d.error ? `Couldn’t measure its data: ${d.error}` : 'Couldn’t measure its data.');
         else setPlan(d);
       })
-      .catch(() => {})
+      .catch(() => !cancelled && setError('Couldn’t measure its data: Manifexus didn’t answer.'))
       .finally(() => !cancelled && setMeasured(true));
     return () => {
       cancelled = true;
@@ -101,6 +101,8 @@ export const DeleteAppDialog: React.FC<{
   if (!target) return null;
 
   const helpers = target.helpers || [];
+  // Measuring failed: Manifexus can't say what data it has, so the backup stays on to be safe
+  const unmeasured = measured && !plan;
   const own = plan?.own || [];
   const notEnoughSpace = backup && plan && plan.freeBytes !== null && plan.totalBytes > plan.freeBytes;
 
@@ -170,7 +172,8 @@ export const DeleteAppDialog: React.FC<{
             <SectionHeader>Its Data</SectionHeader>
             <Group>
               {!measured && <Row title={<span style={{ color: ios.secondary }}>Measuring…</span>} />}
-              {measured && own.length === 0 && <Row title={<span style={{ color: ios.secondary }}>No data of its own, just its settings</span>} />}
+              {unmeasured && <Row title={<span style={{ color: ios.orange }}>Couldn’t measure its data</span>} />}
+              {measured && plan && own.length === 0 && <Row title={<span style={{ color: ios.secondary }}>No data of its own, just its settings</span>} />}
               {own.map((d) => (
                 <Row
                   key={d.source}
@@ -202,10 +205,12 @@ export const DeleteAppDialog: React.FC<{
                 }
                 title={backup ? 'Back Up First' : 'Backup Off'}
                 titleColor={backup ? ios.label : ios.red}
-                trailing={<Switch checked={backup} onChange={(on) => (on ? setBackup(true) : setConfirmOff(true))} label="Back up first" />}
+                trailing={<Switch checked={backup} disabled={unmeasured} onChange={(on) => (on ? setBackup(true) : setConfirmOff(true))} label="Back up first" />}
               />
             </Group>
-            {backup ? (
+            {backup && unmeasured ? (
+              <SectionFooter>Manifexus couldn’t see what data it has, so everything it uses is backed up first. Bring it back anytime from Restore.</SectionFooter>
+            ) : backup ? (
               <SectionFooter>
                 {`Saves its settings${own.length ? ` and data${plan ? ` (${formatBytes(plan.totalBytes)})` : ''}` : ''}. Bring it back anytime from Restore, just as it was.`}
                 {notEnoughSpace && (

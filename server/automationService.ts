@@ -20,7 +20,7 @@ import {
   resolveBackupDir,
   saveMergeHistoryRecord,
 } from './historyService';
-import { readHostFile, writeHostFile, forceRemoveContainer } from './hostFsService';
+import { readHostFile, writeHostFile, forceRemoveContainer, findComposeFile } from './hostFsService';
 import { record, setActivityTitle, currentActivityId } from './activityLog';
 import type { MergeHistoryRecord } from './historyService';
 import {
@@ -394,6 +394,8 @@ export async function executeStreamingPipeline(
 
   const moved: MovedContainer[] = [];
   let preMergeTargetCompose: string | undefined;
+  // The target's compose file: the one it already uses (compose.yaml, docker-compose.yml…), or docker-compose.yml for a new stack
+  let targetComposePath = path.posix.join(targetDir, 'docker-compose.yml');
   let targetComposeWritten = false;
   const editedSources: SourceStackGroup[] = [];
   let moveRecord: MergeHistoryRecord | undefined;
@@ -405,13 +407,11 @@ export async function executeStreamingPipeline(
     await run(1, async () => {
       if (!req.yamlContent || !req.yamlContent.trim()) throw new Error('The new compose file is empty.');
       if (movingContainers.length === 0) throw new Error('None of the selected apps need moving — they are already in this stack.');
-      for (const cand of ['docker-compose.yml', 'docker-compose.yaml', 'compose.yaml', 'compose.yml']) {
-        const content = await readHostFile(path.posix.join(targetDir, cand));
-        if (content && content.trim()) {
-          preMergeTargetCompose = content;
-          log(`Found the existing compose file for ${req.targetStackName}.`, 1);
-          break;
-        }
+      const found = await findComposeFile(targetDir);
+      if (found) {
+        preMergeTargetCompose = found.content;
+        targetComposePath = found.path;
+        log(`Found the existing compose file for ${req.targetStackName} (${found.name}).`, 1);
       }
       // The plan was made from the stack as it was then. If apps were added to it since (another move
       // finished first), keep them: add anything in the stack now that the plan doesn't have
@@ -584,15 +584,15 @@ export async function executeStreamingPipeline(
       }
       // Creates the folder if needed and writes the compose file, verified on the host.
       // A brand-new stack must not overwrite someone else's compose file in that folder.
-      await provisionStackFolder(targetDir, req.yamlContent, { overwrite: Boolean(preMergeTargetCompose) });
+      await provisionStackFolder(targetDir, req.yamlContent, { overwrite: Boolean(preMergeTargetCompose), fileName: path.posix.basename(targetComposePath) });
       targetComposeWritten = true;
-      log(`Wrote ${targetDir}/docker-compose.yml.`, 5);
+      log(`Wrote ${targetComposePath}.`, 5);
       if (!preMergeTargetCompose) {
         const { registerCreatedStack } = await import('./stackService');
         registerCreatedStack({
           project: req.targetStackName,
           workingDir: targetDir,
-          configFiles: path.posix.join(targetDir, 'docker-compose.yml'),
+          configFiles: targetComposePath,
           serviceCount: movingContainers.length,
           source: 'provisioned',
         });
@@ -661,7 +661,7 @@ export async function executeStreamingPipeline(
 
     // The change is final: record how it left each file so a later restore can tell what changed since
     if (moveRecord) {
-      resultFiles.push({ path: path.posix.join(targetDir, 'docker-compose.yml'), content: req.yamlContent });
+      resultFiles.push({ path: targetComposePath, content: req.yamlContent });
       moveRecord.resultFiles = resultFiles;
       moveRecord.status = 'active';
       saveMergeHistoryRecord(moveRecord);
@@ -680,6 +680,7 @@ export async function executeStreamingPipeline(
     try {
       await rollbackFailedMove({
         targetDir,
+        targetComposePath,
         preMergeTargetCompose,
         targetComposeWritten,
         editedSources,
@@ -708,6 +709,8 @@ export async function executeStreamingPipeline(
 /** Undo a move that failed part-way: restore compose files, put set-aside containers back. */
 async function rollbackFailedMove(params: {
   targetDir: string;
+  /** The target's compose file (compose.yaml, docker-compose.yml…) */
+  targetComposePath?: string;
   preMergeTargetCompose?: string;
   targetComposeWritten: boolean;
   editedSources: SourceStackGroup[];
@@ -718,6 +721,7 @@ async function rollbackFailedMove(params: {
   newComposeText?: string;
 }): Promise<void> {
   const { targetDir, preMergeTargetCompose, targetComposeWritten, editedSources, moved, isDemo, log, newComposeText } = params;
+  const targetComposePath = params.targetComposePath || path.posix.join(targetDir, 'docker-compose.yml');
   if (isDemo) return;
 
   if (targetComposeWritten) {
@@ -743,12 +747,12 @@ async function rollbackFailedMove(params: {
         // fall through: compose below still restores the stack
       }
       // Its own apps were never stopped, so putting the file back is all that's needed
-      await writeHostFile(path.posix.join(targetDir, 'docker-compose.yml'), preMergeTargetCompose);
+      await writeHostFile(targetComposePath, preMergeTargetCompose);
       log('Restored the previous compose file for the target stack. Its own apps kept running.');
     } else {
       // A brand-new stack only contains the moved apps
       await runComposeInDir(targetDir, 'down --remove-orphans');
-      await writeHostFile(path.posix.join(targetDir, 'docker-compose.yml'), 'services: {}\n');
+      await writeHostFile(targetComposePath, 'services: {}\n');
       log('Reset the new stack to an empty compose file.');
     }
   }

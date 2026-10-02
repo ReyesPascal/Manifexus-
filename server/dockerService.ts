@@ -2,7 +2,7 @@ import http from 'http';
 import fs from 'fs';
 import { DeepContainerMetadata, ContainerPort, ContainerMount, ComposeMetadata } from '../src/types';
 import { globalLogService } from './globalLogService';
-import { record, type Level } from './activityLog';
+import { record, shouldKeep, currentActivityId, type Level } from './activityLog';
 
 const DOCKER_SOCKET_PATH = process.env.DOCKER_SOCKET_PATH || '/var/run/docker.sock';
 
@@ -42,8 +42,12 @@ export async function cleanupStoppedHelpers(): Promise<number> {
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const all = await queryDockerEngine<any[]>('/containers/json?all=1');
+    // Only helpers that finished a while ago: one that has just exited (or not started yet) may still be
+    // in use by a backup or move that's about to read its result
+    const recent = Date.now() / 1000 - 15 * 60;
     for (const c of all || []) {
       if (c.State === 'running' || !isManifexusHelper(c)) continue;
+      if (typeof c.Created === 'number' && c.Created > recent) continue;
       try {
         await queryDockerEngine(`/containers/${c.Id}?force=true`, 'DELETE');
         removed++;
@@ -91,6 +95,8 @@ function recordDockerCall(c: { method: string; path: string; status: number; dur
       : c.status === 404 || c.status === 304
         ? 'debug'
         : 'warn';
+  // Not kept (most reads outside an activity): skip the work of parsing what would be thrown away
+  if (!shouldKeep(level, Boolean(currentActivityId()))) return;
   let request: unknown;
   if (c.payload) {
     try {
@@ -138,6 +144,12 @@ export function queryDockerEngine<T>(
 ): Promise<T> {
   const startTime = Date.now();
   const timeout = timeoutMs ?? defaultTimeoutMs(path, method);
+  // A change to an app (start, stop, create, remove…) means the shared container list is out of date;
+  // Manifexus's own short-lived helpers (reading a file, a backup) don't count
+  if (method !== 'GET') {
+    const id = /^\/containers\/([0-9a-f]{12,64})/.exec(path)?.[1];
+    if (!(id && helperIds.has(id)) && !(path.startsWith('/containers/create') && !opts.keepLabels)) forgetContainersList();
+  }
 
   // Every container Manifexus creates itself is a short-lived helper (file access, backups,
   // compose runs, terminals). Tag them so they never show up or get counted as apps.
@@ -185,6 +197,13 @@ export function queryDockerEngine<T>(
 
         if (isSuccess) {
           recordDockerCall({ method, path, status: statusCode, durationMs, payload, response: data });
+          if (method === 'POST' && path.startsWith('/containers/create') && !opts.keepLabels) {
+            const m = /"Id"\s*:\s*"([0-9a-f]{64})"/.exec(data);
+            if (m) {
+              helperIds.add(m[1]);
+              if (helperIds.size > 500) helperIds.delete(helperIds.values().next().value as string);
+            }
+          }
           try {
             resolve(data ? JSON.parse(data) : ({} as T));
           } catch {
@@ -1250,12 +1269,63 @@ let demoContainers: DeepContainerMetadata[] = [
 ];
 
 // Main function to fetch containers from Docker Socket or fallback to demo
-export async function getContainersList(): Promise<{
-  containers: DeepContainerMetadata[];
-  isDemo: boolean;
-  dockerVersion?: string;
-  os?: string;
-}> {
+/** Runs `fn` over the items, at most `limit` at a time, keeping their order */
+async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
+
+type ContainersList = { containers: DeepContainerMetadata[]; isDemo: boolean; dockerVersion?: string; os?: string };
+
+/**
+ * One shared look at Docker: everything that asks within a couple of seconds (the dashboard's refresh asks
+ * twice, every open window asks too) gets the same answer instead of listing and inspecting every container
+ * again. Any change made through Docker (start, stop, a move…) starts a fresh look.
+ */
+const helperIds = new Set<string>();
+let listSnap: { gen: number; doneAt: number | null; value: Promise<ContainersList> } | null = null;
+let dockerGen = 0;
+const LIST_TTL_MS = 2500;
+export function forgetContainersList(): void {
+  dockerGen++;
+  listSnap = null;
+}
+
+/** Docker as it is right now (for anything that changes things, or checks a change it just made) */
+export async function getContainersList(): Promise<ContainersList> {
+  return loadContainersList();
+}
+
+/** For the dashboard's refresh and other quick looks: the shared answer, at most a couple of seconds old */
+export async function getContainersListShared(): Promise<ContainersList> {
+  const s = listSnap;
+  if (s && s.gen === dockerGen && (s.doneAt === null || Date.now() - s.doneAt < LIST_TTL_MS)) {
+    return structuredClone(await s.value);
+  }
+  const gen = dockerGen;
+  const value = loadContainersList();
+  const snap = { gen, doneAt: null as number | null, value };
+  listSnap = snap;
+  value.then(
+    () => {
+      snap.doneAt = Date.now();
+    },
+    () => {
+      if (listSnap === snap) listSnap = null;
+    }
+  );
+  return structuredClone(await value);
+}
+
+async function loadContainersList(): Promise<ContainersList> {
   if (isDockerSocketAvailable()) {
     try {
       // Query Docker Version
@@ -1267,9 +1337,11 @@ export async function getContainersList(): Promise<{
       const rawContainers = await queryDockerEngine<any[]>('/containers/json?all=1');
 
       if (Array.isArray(rawContainers)) {
-        // Deep inspect each container in parallel (up to 20 at a time); Manifexus's own helpers are not apps
-        const inspected = await Promise.all(
-          rawContainers.filter((c) => !isManifexusHelper(c)).map(async (c) => {
+        // Deep inspect each container, 8 at a time (a big server doesn't flood Docker); Manifexus's own helpers are not apps
+        const inspected = await mapLimit(
+          rawContainers.filter((c) => !isManifexusHelper(c)),
+          8,
+          async (c) => {
             try {
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               const deep = await queryDockerEngine<any>(`/containers/${c.Id}/json`);
@@ -1278,7 +1350,7 @@ export async function getContainersList(): Promise<{
               // Fallback to top-level listing data if deep inspection fails
               return parseRawContainer(c);
             }
-          })
+          }
         );
 
         return {

@@ -10,6 +10,9 @@ import {
 import { readHostFile, writeHostFile } from './hostFsService';
 import { globalLogService } from './globalLogService';
 import { serverChangesAllowed, CHANGES_OFF_MESSAGE } from './automationService';
+import fs from 'fs';
+import { resolveBackupDir, saveMergeHistoryRecord, type MergeHistoryRecord } from './historyService';
+import { currentActivityId } from './activityLog';
 
 const DOCKER_SOCKET_PATH = process.env.DOCKER_SOCKET_PATH || '/var/run/docker.sock';
 
@@ -25,6 +28,21 @@ export function setupTerminalWebSocket(server: http.Server): WebSocketServer {
   server.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url || '', `http://${req.headers.host || 'localhost'}`);
     if (url.pathname === '/ws/terminal') {
+      // Only Manifexus's own page may open an editor: another website open in the same browser can't
+      const origin = req.headers.origin;
+      if (origin) {
+        let sameHost = false;
+        try {
+          sameHost = new URL(origin).host === req.headers.host;
+        } catch {
+          sameHost = false;
+        }
+        if (!sameHost) {
+          socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+          socket.destroy();
+          return;
+        }
+      }
       wss.handleUpgrade(req, socket, head, (ws) => {
         // Editing files on the server needs Server Changes
         if (!serverChangesAllowed()) {
@@ -44,13 +62,20 @@ export function setupTerminalWebSocket(server: http.Server): WebSocketServer {
     let rows = parseInt(url.searchParams.get('rows') || '28', 10);
 
     let isInitialized = false;
+    let closed = false;
     let cleanupHandler: (() => Promise<void>) | null = null;
 
     const startSession = async (filePath: string, c: number, r: number) => {
       if (isInitialized) return;
       isInitialized = true;
 
-      const normalizedPath = filePath.trim();
+      const normalizedPath = path.posix.normalize(filePath.trim());
+      const base = path.posix.basename(normalizedPath);
+      if (!normalizedPath.startsWith('/') || normalizedPath.includes('\0') || !base || base === '.' || base === '..') {
+        ws.send('\r\nThat isn’t a file Manifexus can open.\r\n');
+        ws.close();
+        return;
+      }
       globalLogService.log({
         eventType: 'STACK_OP',
         level: 'INFO',
@@ -61,7 +86,14 @@ export function setupTerminalWebSocket(server: http.Server): WebSocketServer {
 
       if (isDockerSocketAvailable()) {
         try {
-          cleanupHandler = await startDockerSocketNanoSession(ws, normalizedPath, c, r);
+          const before = await readHostFile(normalizedPath).catch(() => null);
+          const endSession = await startDockerSocketNanoSession(ws, normalizedPath, c, r);
+          cleanupHandler = async () => {
+            await endSession();
+            await saveEditInRestore(normalizedPath, before);
+          };
+          // Closed while it was starting: end it now, so no editor is left running on the server
+          if (closed) await cleanupHandler();
           return;
         } catch (err) {
           console.warn('[TerminalService] Failed to start Docker nano session, falling back to interactive session:', err);
@@ -110,6 +142,7 @@ export function setupTerminalWebSocket(server: http.Server): WebSocketServer {
     });
 
     ws.on('close', async () => {
+      closed = true;
       if (cleanupHandler) {
         await cleanupHandler();
       }
@@ -124,6 +157,42 @@ export function setupTerminalWebSocket(server: http.Server): WebSocketServer {
   });
 
   return wss;
+}
+
+/**
+ * A file edited in the editor can be put back from Restore, like every other change: when the editor closes
+ * and the file changed, the copy from before is saved as a restore point.
+ */
+async function saveEditInRestore(file: string, before: string | null): Promise<void> {
+  try {
+    const after = await readHostFile(file).catch(() => null);
+    if (after === before) return;
+    const id = `edit_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+    const dir = path.join(resolveBackupDir(), `snapshot_${id}`);
+    fs.mkdirSync(dir, { recursive: true });
+    if (before !== null) fs.writeFileSync(path.join(dir, path.posix.basename(file)), before);
+    const rec: MergeHistoryRecord = {
+      id,
+      timestamp: new Date().toISOString(),
+      targetStackName: path.posix.basename(path.posix.dirname(file)),
+      targetDirectory: '',
+      backupArchiveDir: dir,
+      sourceStacks: [],
+      affectedServices: [],
+      sourceConfigs: [],
+      status: 'active',
+      archiveSizeBytes: 0,
+      summary: `Edited ${path.posix.basename(file)}`,
+      sourceUrl: 'in the editor',
+      type: 'FIX',
+      fileSnapshots: [{ path: file, content: before }],
+      resultFiles: [{ path: file, content: after }],
+      activityId: currentActivityId(),
+    };
+    saveMergeHistoryRecord(rec);
+  } catch (err) {
+    console.warn('[TerminalService] Couldn’t save the edit in Restore:', err);
+  }
 }
 
 /**
@@ -153,17 +222,19 @@ async function startDockerSocketNanoSession(
     Cmd: [
       'sh',
       '-c',
+      // The file name is passed as a variable, never pasted into the command, so no name can run anything
       `if command -v nano >/dev/null 2>&1; then ` +
-      `  nano "/target_dir/${fileName}"; ` +
+      `  nano "/target_dir/$MFX_FILE"; ` +
       `elif command -v apk >/dev/null 2>&1; then ` +
-      `  apk add --no-cache nano >/dev/null 2>&1 && nano "/target_dir/${fileName}"; ` +
+      `  apk add --no-cache nano >/dev/null 2>&1 && nano "/target_dir/$MFX_FILE"; ` +
       `elif command -v apt-get >/dev/null 2>&1; then ` +
-      `  apt-get update >/dev/null 2>&1 && apt-get install -y nano >/dev/null 2>&1 && nano "/target_dir/${fileName}"; ` +
+      `  apt-get update >/dev/null 2>&1 && apt-get install -y nano >/dev/null 2>&1 && nano "/target_dir/$MFX_FILE"; ` +
       `else ` +
-      `  vi "/target_dir/${fileName}"; ` +
+      `  vi "/target_dir/$MFX_FILE"; ` +
       `fi`,
     ],
     Env: [
+      `MFX_FILE=${fileName}`,
       'TERM=xterm-256color',
       'COLORTERM=truecolor',
       'LANG=en_US.UTF-8',

@@ -12,11 +12,14 @@ import {
   checkHostFileExists,
   resolveContainerPath,
   hostComposeFolders,
+  findComposeFile,
+  hostWriteCount,
 } from './hostFsService';
 import { createPreMergeSnapshot, saveMergeHistoryRecord } from './historyService';
 import { getContainersList, removeDemoContainersByProject } from './dockerService';
 import { globalLogService } from './globalLogService';
 import { getConfig } from './storageService';
+import { writeJsonAtomic } from './safeJson';
 import {
   archiveStackData,
   runComposeInDir,
@@ -325,7 +328,7 @@ export async function collectSourceComposes(selectedContainers: DeepContainerMet
       sourceComposes[dir] = resolved.output;
       continue;
     }
-    const candidates = files.length ? [files[0]] : ['docker-compose.yml', 'docker-compose.yaml', 'compose.yaml', 'compose.yml'].map((f) => path.posix.join(dir, f));
+    const candidates = files.length ? [files[0]] : ['compose.yaml', 'compose.yml', 'docker-compose.yaml', 'docker-compose.yml'].map((f) => path.posix.join(dir, f));
     for (const cand of candidates) {
       const text = await readHostFile(cand).catch(() => null);
       if (text && text.trim()) {
@@ -841,6 +844,7 @@ export function getRegisteredCreatedStacks(): EmptyComposeStack[] {
  * Persists a newly created empty stack in persistent storage.
  */
 export function registerCreatedStack(stack: EmptyComposeStack): void {
+  forgetDiscoveredStacks();
   try {
     const existing = getRegisteredCreatedStacks();
     const filtered = existing.filter(
@@ -851,7 +855,7 @@ export function registerCreatedStack(stack: EmptyComposeStack): void {
     if (!fs.existsSync(parentDir)) {
       fs.mkdirSync(parentDir, { recursive: true });
     }
-    fs.writeFileSync(CREATED_STACKS_FILE, JSON.stringify(filtered, null, 2), 'utf8');
+    writeJsonAtomic(CREATED_STACKS_FILE, filtered);
   } catch (err) {
     console.warn('[StackService] Error writing registered created stack:', err);
   }
@@ -861,10 +865,11 @@ export function registerCreatedStack(stack: EmptyComposeStack): void {
  * Removes a created stack from persistent storage if deleted or merged.
  */
 export function unregisterCreatedStack(projectName: string): void {
+  forgetDiscoveredStacks();
   try {
     const existing = getRegisteredCreatedStacks();
     const filtered = existing.filter((s) => s.project.toLowerCase() !== projectName.toLowerCase());
-    fs.writeFileSync(CREATED_STACKS_FILE, JSON.stringify(filtered, null, 2), 'utf8');
+    writeJsonAtomic(CREATED_STACKS_FILE, filtered);
   } catch {
     // ignore
   }
@@ -920,7 +925,27 @@ export function getDefaultHostStacksBaseDir(containers: DeepContainerMetadata[] 
  * Scans the base host directory and subdirectories for any valid docker-compose.yml files.
  * Injects empty stacks (0 running services) into the dashboard payload so the UI displays them.
  */
-export async function discoverHostComposeStacks(
+// The dashboard's refresh asks twice in a row (stack counts, then the stacks themselves): the same
+// containers within a couple of seconds give the same answer, without reading and parsing every file again
+let discoverMemo: { key: string; at: number; value: Promise<EmptyComposeStack[]> } | null = null;
+export async function discoverHostComposeStacks(activeContainers: DeepContainerMetadata[] = []): Promise<EmptyComposeStack[]> {
+  const key = activeContainers.map((c) => `${c.id}:${c.state}:${c.compose?.workingDir || ''}`).join('|') + '#' + (getConfig().stacksDir || '') + '#' + hostWriteCount();
+  if (discoverMemo && discoverMemo.key === key && Date.now() - discoverMemo.at < 2500) return structuredClone(await discoverMemo.value);
+  const value = discoverHostComposeStacksNow(activeContainers);
+  const memo = { key, at: Date.now(), value };
+  discoverMemo = memo;
+  value.catch(() => {
+    if (discoverMemo === memo) discoverMemo = null;
+  });
+  return structuredClone(await value);
+}
+
+/** Forget the answer above (after creating, deleting or moving a stack) */
+export function forgetDiscoveredStacks(): void {
+  discoverMemo = null;
+}
+
+async function discoverHostComposeStacksNow(
   activeContainers: DeepContainerMetadata[] = []
 ): Promise<EmptyComposeStack[]> {
   const discoveredMap = new Map<string, EmptyComposeStack>();
@@ -992,7 +1017,7 @@ export async function discoverHostComposeStacks(
         if (subDirName.startsWith('.') || subDirName === 'node_modules') continue;
         const hostSubDir = path.posix.join(baseDir, subDirName);
         const localSubDir = path.join(localBase, subDirName);
-        for (const fileName of ['docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml']) {
+        for (const fileName of ['compose.yaml', 'compose.yml', 'docker-compose.yaml', 'docker-compose.yml']) {
           const localComposeFile = path.join(localSubDir, fileName);
           if (fs.existsSync(localComposeFile)) {
             try {
@@ -1128,13 +1153,29 @@ export async function deleteHostStack(params: {
     (c) => (c.compose?.project || '').toLowerCase() === sanitizedName
   );
 
+  // Only ever this stack's own folder: where its apps run from, or where Manifexus found or made it.
+  // A folder sent with the request that isn't one of those is refused, never deleted.
+  const normDir = (d: string) => path.posix.normalize(d.trim()).replace(/\/+$/, '');
+  const known = new Set<string>(
+    [
+      ...stackContainers.map((c) => c.compose?.workingDir || ''),
+      ...(await discoverHostComposeStacks(containers)).filter((s) => s.project.toLowerCase() === sanitizedName).map((s) => s.workingDir),
+    ]
+      .filter(Boolean)
+      .map(normDir)
+  );
+  if (!isDemo && targetDirectory && targetDirectory.trim() && !known.has(normDir(targetDirectory))) {
+    throw new Error(`Nothing was deleted: ${targetDirectory} isn’t where ${projectName} lives.`);
+  }
   const resolvedTargetDir =
     targetDirectory && targetDirectory.trim().startsWith('/')
-      ? targetDirectory.trim()
-      : stackContainers[0]?.compose?.workingDir || path.posix.join(getDefaultHostStacksBaseDir(containers), sanitizedName);
+      ? normDir(targetDirectory)
+      : [...known][0] || path.posix.join(getDefaultHostStacksBaseDir(containers), sanitizedName);
 
-  const composeFilePath = path.posix.join(resolvedTargetDir, 'docker-compose.yml');
-  const existingComposeContent = (await readHostFile(composeFilePath)) || undefined;
+  // The compose file the stack really uses (compose.yaml, docker-compose.yml…)
+  const foundCompose = await findComposeFile(resolvedTargetDir);
+  const composeFilePath = foundCompose?.path || path.posix.join(resolvedTargetDir, 'docker-compose.yml');
+  const existingComposeContent = foundCompose?.content || undefined;
 
   // Step 1: ledger record with compose + .env
   const deleteRunId = `delete_${sanitizedName}_${Date.now()}`;

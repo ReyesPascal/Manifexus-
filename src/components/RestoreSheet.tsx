@@ -305,16 +305,33 @@ const Detail: React.FC<{
   // What a delete took away: one app, or a whole stack
   const gone = p.deletedApp ? p.apps[0] || 'this app' : p.stacks[0];
 
+  // A pin or delete that doesn't go through says so here, and the screen shows what's really saved
+  const [problem, setProblem] = useState<string>();
+  const why = async (r: Response) => ((await r.json().catch(() => ({}))) as { error?: string })?.error || 'Manifexus didn’t answer.';
   const pin = async (on: boolean) => {
+    setProblem(undefined);
     onChanged({ ...p, pinned: on });
-    const r = await fetch(`/api/restore/${encodeURIComponent(p.id)}/pin`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pinned: on }) });
-    if (r.ok) onChanged(await r.json());
+    try {
+      const r = await fetch(`/api/restore/${encodeURIComponent(p.id)}/pin`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pinned: on }) });
+      if (!r.ok) throw new Error(await why(r));
+      onChanged(await r.json());
+    } catch (e) {
+      onChanged({ ...p, pinned: !on });
+      setProblem(`Couldn’t ${on ? 'pin' : 'unpin'} it: ${(e as Error).message}`);
+    }
   };
   const removeChange = async () => {
     setBusy(true);
-    const r = await fetch('/api/restore/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: [p.id] }) });
-    setBusy(false);
-    if (r.ok) onDeleted();
+    setProblem(undefined);
+    try {
+      const r = await fetch('/api/restore/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: [p.id] }) });
+      if (!r.ok) throw new Error(await why(r));
+      onDeleted();
+    } catch (e) {
+      setProblem(`Couldn’t delete it: ${(e as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
   };
 
   const contents = [
@@ -334,10 +351,15 @@ const Detail: React.FC<{
         <div className="mt-3">
           <StatusPill p={p} />
         </div>
+        {problem && (
+          <p role="alert" className="mt-3 text-[13px] max-w-[380px]" style={{ color: ios.redText }}>
+            {problem}
+          </p>
+        )}
         {p.state === 'available' && (
           <div className="mt-5 flex flex-col items-center gap-1.5">
             <Button onClick={() => onRestore(false)} className="!h-[40px] !px-6 !text-[15px]">
-              {p.kind === 'restore' ? 'Undo This Restore…' : p.kind === 'fix' ? 'Undo This Fix…' : 'Restore…'}
+              {p.kind === 'restore' ? 'Undo This Restore…' : p.kind === 'fix' ? (p.title.startsWith('Edited ') ? 'Undo This Edit…' : 'Undo This Fix…') : 'Restore…'}
             </Button>
             {p.newer > 0 && (
               <p className="text-[12px] max-w-[380px]" style={{ color: ios.secondary }}>
@@ -754,6 +776,9 @@ export const RestoreSheet: React.FC<{
   const [planError, setPlanError] = useState<string>();
   const [confirmWarn, setConfirmWarn] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
+  // Something that didn't go through (a delete, a setting): shown above the screen until the next step
+  const [notice, setNotice] = useState<string>();
+  const [confirmKeep, setConfirmKeep] = useState<{ value: number; label: string; count: number; onlyCopies: number } | null>(null);
   const [copyBusy, setCopyBusy] = useState(false);
   const [copied, setCopied] = useState<string[] | null>(null);
   // Select mode: delete several changes at once
@@ -770,6 +795,20 @@ export const RestoreSheet: React.FC<{
     requestAnimationFrame(() => bodyRef.current?.scrollTo({ top: 0 }));
   };
   const pop = () => setStack((s) => (s.length > 1 ? s.slice(0, -1) : s));
+  useEffect(() => setNotice(undefined), [stack.length, open]);
+
+  const saveKeep = async (keepDays: number) => {
+    const before = storage.keepDays;
+    setStorage((s) => ({ ...s, keepDays }));
+    try {
+      const r = await fetch('/api/restore/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ keepDays }) });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({})))?.error || 'That couldn’t be saved.');
+    } catch (e) {
+      setStorage((s) => ({ ...s, keepDays: before }));
+      setNotice(`Couldn’t change how long backups are kept: ${(e as Error).message || 'try again in a moment.'}`);
+    }
+    load();
+  };
 
   const load = useCallback(async () => {
     try {
@@ -784,14 +823,20 @@ export const RestoreSheet: React.FC<{
     }
   }, []);
 
+  // The restore being shown, so closing the screen mid-restore and opening it again goes straight back to it
+  const runningView = useRef<Extract<View, { kind: 'progress' }> | null>(null);
   useEffect(() => {
     if (!open) return;
-    setStack([{ kind: 'list' }]);
     setFilter('all');
     setShowAll(false);
     setSelecting(false);
     setSelected([]);
-    run.reset();
+    if (run.state.status === 'running' && runningView.current) {
+      setStack([{ kind: 'list' }, runningView.current]);
+    } else {
+      setStack([{ kind: 'list' }]);
+      run.reset();
+    }
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -831,13 +876,20 @@ export const RestoreSheet: React.FC<{
     });
   };
   const deleteMany = async (ids: string[]) => {
-    await fetch('/api/restore/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids }) });
-    stopSelecting();
+    try {
+      const r = await fetch('/api/restore/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids }) });
+      if (!r.ok) throw new Error(((await r.json().catch(() => ({}))) as { error?: string })?.error || 'Manifexus didn’t answer.');
+      stopSelecting();
+    } catch (e) {
+      setNotice(`Couldn’t delete those changes: ${(e as Error).message}`);
+    }
     await load();
   };
 
   const startRestore = (id: string, filesOnly?: boolean) => {
-    push({ kind: 'progress', id, count: plan?.point.id === id ? plan.changes.length : 1, filesOnly });
+    const view = { kind: 'progress' as const, id, count: plan?.point.id === id ? plan.changes.length : 1, filesOnly };
+    runningView.current = view;
+    push(view);
     void run.start(`/api/restore/${encodeURIComponent(id)}/run`, { filesOnly: Boolean(filesOnly) });
   };
 
@@ -1102,10 +1154,13 @@ export const RestoreSheet: React.FC<{
                 key={o.value}
                 role="radio"
                 ariaChecked={storage.keepDays === o.value}
-                onClick={async () => {
-                  setStorage((s) => ({ ...s, keepDays: o.value }));
-                  await fetch('/api/restore/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ keepDays: o.value }) });
-                  load();
+                onClick={() => {
+                  if (storage.keepDays === o.value) return;
+                  // A shorter time removes older backups straight away: say how many first
+                  const cutoff = o.value ? new Date(Date.now() - o.value * 86400000).toISOString() : '';
+                  const going = cutoff ? (points || []).filter((p) => !p.pinned && !p.backup.deletedAt && p.at < cutoff && p.state !== 'archived') : [];
+                  if (going.length) setConfirmKeep({ value: o.value, label: o.label, count: going.length, onlyCopies: going.filter((p) => p.onlyCopy).length });
+                  else void saveKeep(o.value);
                 }}
                 title={o.label}
                 trailing={<span className="w-[15px] flex justify-center">{storage.keepDays === o.value && <Checkmark />}</span>}
@@ -1222,6 +1277,11 @@ export const RestoreSheet: React.FC<{
       bodyRef={bodyRef}
     >
       <div key={stack.length} ref={stack.length > 1 ? enter('push') : undefined}>
+        {notice && (
+          <p role="alert" className="mb-5 px-1 text-[13px] leading-[18px]" style={{ color: ios.redText }}>
+            {notice}
+          </p>
+        )}
         {body}
       </div>
 
@@ -1251,6 +1311,25 @@ export const RestoreSheet: React.FC<{
         }}
       />
       <Alert
+        open={Boolean(confirmKeep)}
+        title={`Remove ${confirmKeep?.count === 1 ? '1 backup' : `${confirmKeep?.count} backups`} now?`}
+        message={
+          confirmKeep
+            ? `Keeping backups for ${confirmKeep.label.toLowerCase()} removes ${confirmKeep.count === 1 ? 'the one that’s older' : `the ${confirmKeep.count} that are older`} right away, and ${confirmKeep.count === 1 ? 'its change moves' : 'their changes move'} to the Archive. ${
+                confirmKeep.onlyCopies ? `${confirmKeep.onlyCopies === 1 ? 'One is the only copy of a deleted stack' : `${confirmKeep.onlyCopies} are the only copies of deleted stacks`}. ` : ''
+              }Pinned backups are kept. This can’t be undone.`
+            : ''
+        }
+        confirmLabel="Remove Backups"
+        destructive
+        onCancel={() => setConfirmKeep(null)}
+        onConfirm={() => {
+          const v = confirmKeep?.value;
+          setConfirmKeep(null);
+          if (v !== undefined) void saveKeep(v);
+        }}
+      />
+      <Alert
         open={confirmClear}
         title="Delete all archived changes?"
         message="Only the list of older changes is removed. Their backups are already gone, and your stacks aren’t touched."
@@ -1259,9 +1338,10 @@ export const RestoreSheet: React.FC<{
         onCancel={() => setConfirmClear(false)}
         onConfirm={async () => {
           setConfirmClear(false);
-          await fetch('/api/restore/archive/clear', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+          const r = await fetch('/api/restore/archive/clear', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).catch(() => null);
+          if (!r?.ok) setNotice('Couldn’t clear the Archive. Try again in a moment.');
           await load();
-          pop();
+          if (r?.ok) pop();
         }}
       />
     </Sheet>

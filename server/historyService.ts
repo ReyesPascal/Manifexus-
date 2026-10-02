@@ -1,8 +1,9 @@
 import fs from 'fs';
 import path from 'path';
 import { DeepContainerMetadata } from '../src/types';
-import { readHostFile } from './hostFsService';
+import { readHostFile, findComposeFile } from './hostFsService';
 import type { DataArchiveEntry } from './dataBackupService';
+import { cachedJsonReader, writeJsonAtomic } from './safeJson';
 
 export interface MergeHistoryRecord {
   id: string; // unique merge run id, e.g. merge_20260921_123456_abc
@@ -108,12 +109,7 @@ export function getLedgerPath(): string {
  */
 export function getMergeHistory(): MergeHistoryRecord[] {
   try {
-    const ledgerPath = getLedgerPath();
-    if (!fs.existsSync(ledgerPath)) {
-      return [];
-    }
-    const raw = fs.readFileSync(ledgerPath, 'utf8');
-    const parsed = JSON.parse(raw);
+    const parsed = ledgerReader(getLedgerPath()).read();
     if (Array.isArray(parsed)) {
       return parsed.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
     }
@@ -122,6 +118,25 @@ export function getMergeHistory(): MergeHistoryRecord[] {
     console.error('[HistoryService] Error loading history:', err);
     return [];
   }
+}
+
+// The ledger is read often (every Restore list, every move) and only changes when something is saved:
+// keep the parsed copy until the file changes. Never read as empty when damaged (see safeJson).
+const ledgerReaders = new Map<string, ReturnType<typeof cachedJsonReader<MergeHistoryRecord[]>>>();
+function ledgerReader(file: string) {
+  let r = ledgerReaders.get(file);
+  if (!r) {
+    r = cachedJsonReader<MergeHistoryRecord[]>(file, () => []);
+    ledgerReaders.set(file, r);
+  }
+  return r;
+}
+
+/** Saves the whole ledger safely (never half-written; the previous copy kept as history.json.bak) */
+function writeLedger(history: MergeHistoryRecord[]): void {
+  const file = getLedgerPath();
+  writeJsonAtomic(file, history);
+  ledgerReader(file).forget();
 }
 
 /**
@@ -140,8 +155,7 @@ export function saveMergeHistoryRecord(record: MergeHistoryRecord): void {
     } else {
       history.unshift(record);
     }
-    const ledgerPath = getLedgerPath();
-    fs.writeFileSync(ledgerPath, JSON.stringify(history, null, 2), 'utf8');
+    writeLedger(history);
   } catch (err) {
     console.error('[HistoryService] Error saving history record:', err);
   }
@@ -199,11 +213,17 @@ export async function createPreMergeSnapshot(params: {
 
     if (!sourceConfigsMap[proj]) {
       let originalCompose: string | undefined;
+      let composePath: string | undefined;
       if (workingDir) {
-        const compPath = path.join(workingDir, 'docker-compose.yml');
+        // The file the stack really uses (its compose label, else whichever compose file the folder has)
+        const firstConfig = (c.compose?.configFiles || '').split(',')[0]?.trim();
         try {
-          const content = await readHostFile(compPath);
-          if (content && content.trim().length > 0) {
+          const found = firstConfig && firstConfig.startsWith('/')
+            ? { path: firstConfig, content: await readHostFile(firstConfig) }
+            : await findComposeFile(workingDir);
+          const content = found?.content;
+          if (found && content && content.trim().length > 0) {
+            composePath = found.path;
             originalCompose = content;
             const archiveCompPath = path.join(backupArchiveDir, `${proj}.docker-compose.pre-merge.yml`);
             fs.writeFileSync(archiveCompPath, originalCompose, 'utf8');
@@ -217,6 +237,7 @@ export async function createPreMergeSnapshot(params: {
         project: proj,
         workingDir,
         composeContent: originalCompose,
+        ...(composePath ? { composePath } : {}),
         containers: [],
       };
     }
@@ -394,7 +415,7 @@ export async function createComposeInstallSnapshot(params: {
 export function removeHistoryRecords(ids: string[]): void {
   const keep = getMergeHistory().filter((h) => !ids.includes(h.id));
   try {
-    fs.writeFileSync(getLedgerPath(), JSON.stringify(keep, null, 2), 'utf8');
+    writeLedger(keep);
   } catch (err) {
     console.error('[HistoryService] Error saving history:', err);
   }
