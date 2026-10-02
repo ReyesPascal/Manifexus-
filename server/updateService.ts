@@ -18,9 +18,17 @@
  *                   API-level clone for `docker run` installs
  *   4. verify     – the helper waits for the new container to be running/healthy; if it isn't,
  *                   it puts the previous version back and records a rollback
+ *
+ * A version chosen by the developer: `update-policy.json` in the repo (read from the build's own source on
+ * GitHub, so only whoever can push there can set it) names a version every Manifexus installs, back or forward,
+ * whatever its settings say. It's the same install, from that version's numbered image (3.4 -> :3.4.0), which
+ * the helper tags as the image Manifexus runs from. People can't choose a version themselves. Going back never
+ * goes before 3.4 (the first version that reads the policy, so servers can be brought forward again) nor before
+ * the newest version that changed how data is stored (see versionHistory); settings are saved first. While a
+ * version is set, ordinary updates wait, so servers stay on it until the policy is cleared.
  * The browser follows along and reloads once the new version answers.
  */
-import { localVersion, localReleases, remoteReleases, releasesSince, Release } from './releaseNotes';
+import { localVersion, localReleases, remoteReleases, releasesSince, Release, fullVersion, canGoBackTo, compareVersions } from './releaseNotes';
 import fs from 'fs';
 import http from 'http';
 import path from 'path';
@@ -108,6 +116,14 @@ export interface SoftwareUpdateState {
   settings: UpdateSettings;
   /** This version's own release notes */
   currentRelease?: Release;
+  /** The developer has set the version every Manifexus runs (update-policy.json); ordinary updates wait */
+  pinned?: UpdatePolicy;
+}
+
+/** update-policy.json: the version the developer wants every Manifexus on, and an optional note for people */
+export interface UpdatePolicy {
+  version: string;
+  message?: string;
 }
 
 export interface SelfInfo {
@@ -132,6 +148,8 @@ interface Persisted {
   latest?: SoftwareUpdateState['latest'];
   checkError?: string;
   lastOutcome?: UpdateOutcome;
+  /** The developer's last policy that could be read (kept when GitHub can't be reached) */
+  policy?: UpdatePolicy | null;
 }
 
 function loadPersisted(): Persisted {
@@ -400,6 +418,7 @@ export async function getSoftwareUpdateState(): Promise<SoftwareUpdateState> {
     latest: status === 'available' ? latest : undefined,
     lastCheckedAt: persisted.lastCheckedAt,
     currentRelease: localReleases()[0],
+    pinned: persisted.policy || undefined,
     checkError: persisted.checkError,
     checking,
     installing,
@@ -692,11 +711,13 @@ result() {
  * rolls back if it doesn't come up. After this returns, the helper will stop this process.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export async function startRestartHelper(self: SelfInfo, pulled: any): Promise<string> {
+export async function startRestartHelper(self: SelfInfo, pulled: any, toVersion?: string): Promise<string> {
   const job = `upd_${Date.now().toString(36)}`;
   const fromLabel = buildInfoFromLabels(self.image?.Config?.Labels, localVersion()).label;
   const toRevision = shortSha(pulled.Config?.Labels?.['org.opencontainers.image.revision']);
-  const toLabel = buildInfoFromLabels(pulled.Config?.Labels, persisted.latest?.revision === toRevision ? persisted.latest?.version : undefined).label;
+  const toLabel = buildInfoFromLabels(pulled.Config?.Labels, toVersion || (persisted.latest?.revision === toRevision ? persisted.latest?.version : undefined)).label;
+  const cur = localVersion();
+  const back = !!(toVersion && cur && compareVersions(toVersion, cur) < 0);
   fs.mkdirSync(DATA_DIR, { recursive: true });
   fs.writeFileSync(
     JOB_FILE,
@@ -721,7 +742,9 @@ export async function startRestartHelper(self: SelfInfo, pulled: any): Promise<s
   const binds = [`${socketSource}:/var/run/docker.sock`];
   if (dataSource) binds.push(`${dataSource}:/mfx-data`);
 
-  const env = [`CNAME=${self.name}`, `JOB=${job}`, `IMAGE_REF=${self.imageRef}`, `FROM_IMAGE=${self.imageId}`];
+  // TO_IMAGE becomes the image Manifexus runs from (for an update it already is; going back, it's the earlier
+  // version's image), and the new container must really be running it before the change counts as done
+  const env = [`CNAME=${self.name}`, `JOB=${job}`, `IMAGE_REF=${self.imageRef}`, `FROM_IMAGE=${self.imageId}`, `TO_IMAGE=${pulled.Id}`];
   let script: string;
   if (self.compose) {
     const dirs = new Set<string>([self.compose.workingDir, ...self.compose.configFiles.map((f) => path.posix.dirname(f))]);
@@ -731,17 +754,19 @@ export async function startRestartHelper(self: SelfInfo, pulled: any): Promise<s
     script = `${WAIT_HEALTHY}
 sleep 2
 cd ${sh(self.compose.workingDir)} || { result failed "Compose folder not found"; exit 1; }
-if ${up} && wait_healthy; then
-result success "Updated to ${toLabel}"
+docker tag "$TO_IMAGE" "$IMAGE_REF" || { result failed "The new version couldn't be prepared"; exit 1; }
+if ${up} && wait_healthy && [ "$(docker inspect -f '{{.Image}}' "$CNAME" 2>/dev/null)" = "$TO_IMAGE" ]; then
+result success "${back ? `Went back to ${toLabel}` : `Updated to ${toLabel}`}"
 else
 docker tag "$FROM_IMAGE" "$IMAGE_REF"
 ${up}
-result rolled_back "The new version didn't start, so ${fromLabel} was restored."
+result rolled_back "${back ? `${toLabel} didn't start, so you're still on ${fromLabel}.` : `The new version didn't start, so ${fromLabel} was restored.`}"
 fi`;
   } else {
     env.push(`CREATE_B64=${Buffer.from(JSON.stringify(cloneCreatePayload(self))).toString('base64')}`);
     script = `${WAIT_HEALTHY}
 sleep 2
+docker tag "$TO_IMAGE" "$IMAGE_REF" || { result failed "The new version couldn't be prepared"; exit 1; }
 echo "$CREATE_B64" | base64 -d > /tmp/create.json
 docker stop -t 20 "$CNAME" >/dev/null 2>&1
 docker rm -f "$CNAME-previous" >/dev/null 2>&1
@@ -749,13 +774,13 @@ docker rename "$CNAME" "$CNAME-previous"
 if curl -sf --unix-socket /var/run/docker.sock -H 'Content-Type: application/json' -d @/tmp/create.json "http://localhost/containers/create?name=$CNAME" >/dev/null \\
  && docker start "$CNAME" >/dev/null && wait_healthy; then
 docker rm -f "$CNAME-previous" >/dev/null 2>&1
-result success "Updated to ${toLabel}"
+result success "${back ? `Went back to ${toLabel}` : `Updated to ${toLabel}`}"
 else
 docker rm -f "$CNAME" >/dev/null 2>&1
 docker rename "$CNAME-previous" "$CNAME"
 docker start "$CNAME" >/dev/null
 docker tag "$FROM_IMAGE" "$IMAGE_REF"
-result rolled_back "The new version didn't start, so ${fromLabel} was restored."
+result rolled_back "${back ? `${toLabel} didn't start, so you're still on ${fromLabel}.` : `The new version didn't start, so ${fromLabel} was restored.`}"
 fi`;
   }
 
@@ -791,7 +816,18 @@ fi`;
  */
 let installRun: Promise<void> | null = null;
 
-export async function installUpdate(listener?: (p: UpdateProgress) => void): Promise<{ joined: boolean }> {
+/**
+ * Updates to the newest version; `version` (only ever from the developer's policy) installs that version
+ * instead. Throws before anything starts when that version can't be installed from here.
+ */
+export async function installUpdate(listener?: (p: UpdateProgress) => void, version?: string): Promise<{ joined: boolean }> {
+  if (version) {
+    const why = forcedVersionProblem(version);
+    if (why) throw new Error(why);
+    if (installRun || installing?.stage === 'restart') throw new Error('An update is installing right now. Try again once it’s done.');
+  } else if (persisted.policy) {
+    throw new Error(`Updates are paused: Manifexus’s developer is keeping every server on ${persisted.policy.version} for now.`);
+  }
   if (listener) installListeners.push(listener);
   // Already installing: follow that install's progress until it finishes instead of starting another
   if (installRun) {
@@ -810,7 +846,7 @@ export async function installUpdate(listener?: (p: UpdateProgress) => void): Pro
     }
     return { joined: true };
   }
-  installRun = runInstall();
+  installRun = runInstall(version);
   try {
     await installRun;
   } finally {
@@ -820,35 +856,69 @@ export async function installUpdate(listener?: (p: UpdateProgress) => void): Pro
   return { joined: false };
 }
 
-async function runInstall(): Promise<void> {
+/** The same image Manifexus runs from, at another tag: ghcr.io/x/manifexus:latest -> ghcr.io/x/manifexus:3.3.0 */
+export function imageRefWithTag(ref: string, tag: string): string {
+  const base = ref.split('@')[0];
+  const slash = base.lastIndexOf('/');
+  const colon = base.lastIndexOf(':');
+  return `${colon > slash ? base.slice(0, colon) : base}:${tag}`;
+}
+
+/**
+ * Before going back: a copy of Manifexus's own settings and records (the .json files in its data folder),
+ * kept in before-going-back/ (the newest 5), so nothing the earlier version does to them is lost.
+ */
+function saveSettingsCopy(fromVersion: string | undefined, toVersion: string): string {
+  const dir = path.join(DATA_DIR, 'before-going-back', `${new Date().toISOString().replace(/[:.]/g, '-')}_${fromVersion || 'unknown'}-to-${toVersion}`);
+  fs.mkdirSync(dir, { recursive: true });
+  let n = 0;
+  for (const f of fs.readdirSync(DATA_DIR)) {
+    const p = path.join(DATA_DIR, f);
+    if (f.endsWith('.json') && fs.statSync(p).isFile()) {
+      fs.copyFileSync(p, path.join(dir, f));
+      n++;
+    }
+  }
+  const parent = path.dirname(dir);
+  const all = fs.readdirSync(parent).sort();
+  for (const old of all.slice(0, Math.max(0, all.length - 5))) fs.rmSync(path.join(parent, old), { recursive: true, force: true });
+  record('info', 'update', `Saved ${n} settings files before going back to ${toVersion}`, { folder: dir });
+  return dir;
+}
+
+async function runInstall(version?: string): Promise<void> {
+  const what = version ? `Downloading ${version}…` : 'Downloading update…';
   try {
     const self = await getSelf();
     const reason = await supportCheck(self);
     if (reason || !self) throw new Error(reason || 'Can’t update.');
+    const source = version ? imageRefWithTag(self.imageRef, fullVersion(version)) : self.imageRef;
 
     // 1. Download
-    emit({ stage: 'download', percent: 0, message: 'Downloading update…', fromImageId: self.imageId });
-    if (!Object.keys(layerSizesCache).length) {
+    emit({ stage: 'download', percent: 0, message: what, fromImageId: self.imageId });
+    if (version || !Object.keys(layerSizesCache).length) {
       try {
-        layerSizesCache = (await fetchRemote(self.imageRef)).layerSizes;
-      } catch {
+        layerSizesCache = (await fetchRemote(source)).layerSizes;
+      } catch (err) {
+        // Going back: the earlier version's image must exist before anything is downloaded
+        if (version) throw new Error(`${version} can’t be downloaded right now. ${(err as Error).message}`);
         // progress falls back to sizes Docker reports
       }
     }
-    await pullImage(self.imageRef, (done, total) => {
+    await pullImage(source, (done, total) => {
       emit({
         stage: 'download',
         percent: total ? Math.min(99, Math.round((done / total) * 100)) : undefined,
         bytesDone: Math.round(done),
         bytesTotal: total || undefined,
-        message: 'Downloading update…',
+        message: what,
         fromImageId: self.imageId,
       });
     });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const pulled = await queryDockerEngine<any>(`/images/${encodeURIComponent(self.imageRef)}/json`);
+    const pulled = await queryDockerEngine<any>(`/images/${encodeURIComponent(source)}/json`);
     if (pulled.Id === self.imageId) {
-      emit({ stage: 'done', percent: 100, message: 'Manifexus is already up to date.', toImageId: pulled.Id, fromImageId: self.imageId });
+      emit({ stage: 'done', percent: 100, message: version ? `Manifexus is already on ${version}.` : 'Manifexus is already up to date.', toImageId: pulled.Id, fromImageId: self.imageId });
       await checkForUpdate();
       return;
     }
@@ -864,7 +934,15 @@ async function runInstall(): Promise<void> {
 
     // 2. Prepare + 3. Restart
     emit({ stage: 'prepare', percent: 100, message: 'Preparing to restart…', toImageId: pulled.Id, fromImageId: self.imageId });
-    await startRestartHelper(self, pulled);
+    if (version) {
+      const current = localVersion();
+      if (current && compareVersions(version, current) < 0) saveSettingsCopy(current, version);
+      // What's on offer is worked out again by the version installed, against itself
+      persisted.latest = undefined;
+      persisted.lastCheckedAt = undefined;
+      savePersisted(persisted);
+    }
+    await startRestartHelper(self, pulled, version);
     emit({ stage: 'restart', percent: 100, message: 'Restarting Manifexus…', toImageId: pulled.Id, fromImageId: self.imageId });
     // From here the helper stops this process and starts the new version.
   } catch (err) {
@@ -979,15 +1057,95 @@ export async function recordFinishedUpdate(): Promise<void> {
   }
 }
 
+// ----------------------------------------------------------------------------
+// The developer's chosen version (update-policy.json)
+// ----------------------------------------------------------------------------
+
+/** The first version that reads the policy: going back below it would strand servers there */
+export const FIRST_POLICY_VERSION = '3.4';
+const POLICY_FILE = 'update-policy.json';
+const POLICY_BRANCH = 'main';
+
+/** Why `version` can't be installed as the developer's choice from this version (null when it can) */
+export function forcedVersionProblem(version: string, current: string | undefined = localVersion()): string | null {
+  if (!/^\d+(\.\d+){0,2}$/.test(version)) return `${version} isn’t a Manifexus version.`;
+  if (!current) return 'This build has no version number.';
+  const c = compareVersions(version, current);
+  if (c === 0) return `Manifexus is already on ${version}.`;
+  if (c > 0) return null;
+  if (compareVersions(version, FIRST_POLICY_VERSION) < 0) return `Manifexus can’t go back before ${FIRST_POLICY_VERSION}.`;
+  return canGoBackTo(version);
+}
+
+/**
+ * Reads update-policy.json from the GitHub repo this build came from. Null when no version is set; undefined
+ * when it couldn't be read (then the last policy read stays in force).
+ */
+async function fetchPolicy(source: string | undefined): Promise<UpdatePolicy | null | undefined> {
+  const m = source?.match(/github\.com\/([^/]+)\/([^/#?]+)/);
+  if (!m) return undefined;
+  const repo = `${m[1]}/${m[2].replace(/\.git$/, '')}`;
+  try {
+    const res = await fetch(`https://raw.githubusercontent.com/${repo}/${POLICY_BRANCH}/${POLICY_FILE}?t=${Date.now()}`, {
+      headers: { 'User-Agent': 'Manifexus', 'Cache-Control': 'no-cache' },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (res.status === 404) return null;
+    if (!res.ok) return undefined;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const j: any = await res.json();
+    const version = typeof j?.version === 'string' ? j.version.trim() : '';
+    if (!version) return null;
+    return { version, message: typeof j.message === 'string' && j.message.trim() ? j.message.trim() : undefined };
+  } catch {
+    return undefined;
+  }
+}
+
+/** Reads the policy and, when it names another version this one may install, installs it */
+export async function applyPolicy(source?: string): Promise<void> {
+  let self: SelfInfo | null = null;
+  if (!source) {
+    try {
+      self = await getSelf();
+    } catch {
+      self = null;
+    }
+    source = self?.image?.Config?.Labels?.['org.opencontainers.image.source'];
+  }
+  const p = await fetchPolicy(source);
+  if (p !== undefined && JSON.stringify(p) !== JSON.stringify(persisted.policy ?? null)) {
+    persisted.policy = p;
+    savePersisted(persisted);
+    record('info', 'update', p ? `Manifexus’s developer set every server to ${p.version}` : 'Manifexus’s developer cleared the chosen version: ordinary updates resume', { policy: p });
+  }
+  const want = persisted.policy?.version;
+  if (!want) return;
+  const why = forcedVersionProblem(want);
+  if (why) {
+    // Already there (the usual case), or a version this one can't go to: stays put
+    if (!/already on/.test(why)) record('warn', 'update', `Not installing ${want}, chosen by the developer: ${why}`);
+    return;
+  }
+  if (installRun || installing?.stage === 'restart' || busyCheck()) return; // tries again on the next tick
+  const me = self || (await getSelf().catch(() => null));
+  if (await supportCheck(me)) return;
+  const a = startActivity({ type: 'update', title: `Install Manifexus ${want} (chosen by the developer)`, actor: { kind: 'system' } });
+  const rec = pipelineRecorder(a.id);
+  void runInActivity(a.id, () => installUpdate(rec.onEvent, want)).finally(() => rec.finish());
+}
+
 export async function startUpdateScheduler(): Promise<void> {
   await recordFinishedUpdate();
   const tick = async () => {
+    // The developer's chosen version comes first, whatever the settings say
+    await applyPolicy().catch(() => {});
     const s = persisted.settings;
     const due = !persisted.lastCheckedAt || Date.now() - new Date(persisted.lastCheckedAt).getTime() >= CHECK_INTERVAL_MS;
     if ((s.autoCheck || s.autoInstall) && due) {
       await withActivity({ type: 'update', title: 'Automatic update check', actor: { kind: 'system' }, meta: { background: true } }, () => checkForUpdate()).catch(() => {});
     }
-    if (s.autoInstall && new Date().getHours() === AUTO_INSTALL_HOUR) {
+    if (s.autoInstall && !persisted.policy && new Date().getHours() === AUTO_INSTALL_HOUR) {
       const st = await getSoftwareUpdateState();
       // Not while another install runs, nor while a move, restore or delete is in progress (it tries again later)
       if (st.supported && st.status === 'available' && !installRun && installing?.stage !== 'restart' && !busyCheck()) {
@@ -998,7 +1156,8 @@ export async function startUpdateScheduler(): Promise<void> {
     }
   };
   setTimeout(() => void tick(), 45 * 1000);
-  setInterval(() => void tick(), 30 * 60 * 1000);
+  // Every 15 minutes, so a version the developer sets reaches every server quickly
+  setInterval(() => void tick(), 15 * 60 * 1000);
 }
 
 
@@ -1008,6 +1167,12 @@ export const __test = {
   fetchReleaseNotes,
   pullImage,
   parseRef,
+  imageRefWithTag,
+  saveSettingsCopy,
+  fetchPolicy,
+  setPolicy: (p: UpdatePolicy | null) => {
+    persisted.policy = p;
+  },
   setLayerSizes: (s: Record<string, number>) => {
     layerSizesCache = s;
   },

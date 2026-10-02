@@ -1,6 +1,18 @@
 {
-  "_about": "What's new in each version of Manifexus, newest first. Shown in Updates. Write for people, not developers: short, plain sentences about what they can now do. The newest entry's version is what gets built and tagged; older entries can give the \"commit\" they were released from.",
+  "_about": "What's new in each version of Manifexus, newest first. Shown in Updates. Write for people, not developers: short, plain sentences about what they can now do. The newest entry's version is what gets built and tagged; older entries can give the \"commit\" they were released from. Give a version \"storageChange\" (a plain sentence) when it changes how data is stored in a way earlier versions can’t read: going back then never goes below it.",
   "releases": [
+    {
+      "version": "3.4",
+      "date": "2026-10-02",
+      "headline": "Fixes reach you faster: if an update ever has a problem, Manifexus can be moved to a version that works, on its own.",
+      "new": [
+        "If a new version ever has a problem, Manifexus's developer can move every server to a version that works, back or forward. It installs on its own within a few minutes, after anything running (like a move or a restore) finishes, and Updates tells you what's happening. Manifexus restarts for a few seconds; your apps keep running.",
+        "Your settings are saved before Manifexus moves to an earlier version, and if that version doesn't start, the one you're on stays."
+      ],
+      "improved": [
+        "Manifexus never runs on backups or settings saved by a newer version it can't read: started by hand on such a server, it shows a page saying which version to start instead and changes nothing."
+      ]
+    },
     {
       "version": "3.3",
       "date": "2026-10-02",
@@ -22,7 +34,8 @@
         "Moving an app back into a stack that had no apps running could leave the app's own folder out of the backup. It's always included now.",
         "The shimmer on “in progress” labels no longer hides part of the words.",
         "Restoring a backup to another folder right after Manifexus started could wrongly say the folder already had files in it."
-      ]
+      ],
+      "storageChange": "Since 3.3, backups are kept in a new backup store that earlier versions can’t read."
     },
     {
       "version": "3.2",

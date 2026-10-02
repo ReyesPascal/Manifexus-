@@ -132,5 +132,10 @@ Bring that standard to every change:
   version; the build tags it (vX.Y.Z) and publishes numbered images automatically.
 - Every release comes with release notes people will read in Updates: plain, friendly New / Improved /
   Fixed lines about what they can now do, written for people, not developers. Add them with every change.
-- The Updates screen presents what's new the way the best apps do, and must always let people go back to
-  an earlier version. Keep builds tagged so going back is always possible.
+- The Updates screen presents what's new the way the best apps do. People can't choose a version themselves:
+  only the owner can, by setting `"version"` in `update-policy.json` on `main` (every Manifexus installs it within
+  about 15 minutes, back or forward, and ordinary updates wait until it's set back to null). Keep builds tagged so
+  this always works.
+- A release that changes how data is stored so that earlier versions can't read it gets `"storageChange"` in
+  `release-notes.json` (a plain sentence saying why). Nothing goes below the newest such version, nor below 3.4
+  (the first version that reads `update-policy.json`), and a version older than the data refuses to run.

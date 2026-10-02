@@ -4,6 +4,8 @@ on:
   push:
     branches: [ "main", "master" ]
     tags: [ 'v*.*.*' ]
+    # Choosing a version for every server (update-policy.json) doesn't need a new build
+    paths-ignore: [ 'update-policy.json' ]
   pull_request:
     branches: [ "main", "master" ]
   workflow_dispatch:

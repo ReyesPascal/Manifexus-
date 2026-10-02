@@ -7,6 +7,7 @@ import {
   composeErrorTail,
 } from './server/dataBackupService';
 import express from 'express';
+import { checkDataFormat, serveTooOldPage } from './server/dataFormat';
 import http from 'http';
 import path from 'path';
 import {
@@ -133,6 +134,14 @@ async function startServer() {
     : (process.env.NODE_ENV === 'production' && process.env.PORT && process.env.PORT !== '8080')
       ? parseInt(process.env.PORT, 10)
       : 3000;
+
+  // An older version started on data a newer one saved (backups, settings) mustn't touch it: it shows one page
+  // saying which version to start instead, and does nothing else
+  const tooNew = checkDataFormat();
+  if (tooNew) {
+    serveTooOldPage(PORT, tooNew);
+    return;
+  }
 
   app.use(express.json({ limit: '5mb' }));
   // Every API request is recorded; user actions become Activities with everything underneath attached
@@ -1403,9 +1412,13 @@ async function startServer() {
     };
     let joined = false;
     try {
+      // Always the newest version: only the developer's update-policy.json can choose another one
       joined = (await installUpdate(send)).joined;
       // This request only followed an install that was already running (that install has its own record)
       if (joined) setActivityTitle('Follow the update in progress');
+    } catch (err) {
+      // Refused before it started (e.g. updates paused by the developer): shown as the install's error
+      send({ stage: 'error', message: (err as Error).message });
     } finally {
       recorder.finish(joined ? 'succeeded' : undefined);
       res.end();

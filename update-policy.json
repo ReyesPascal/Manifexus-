@@ -1,0 +1,5 @@
+{
+  "_about": "Set \"version\" to make every Manifexus install that version within about 15 minutes, back or forward, whatever its update settings say (for example \"3.4\"). While it's set, ordinary updates wait, so servers stay on it. Set it back to null to let updates resume. It can't go back before 3.4, nor before a version marked \"storageChange\" in release-notes.json. \"message\" (optional) is shown to people in Updates.",
+  "version": null,
+  "message": null
+}

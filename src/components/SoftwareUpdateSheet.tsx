@@ -33,6 +33,8 @@ export interface SoftwareUpdateState {
   settings: { autoCheck: boolean; autoInstall: boolean };
   /** This version's own release notes */
   currentRelease?: Release;
+  /** The developer has chosen the version every Manifexus runs; ordinary updates wait (mirrors server) */
+  pinned?: { version: string; message?: string };
 }
 
 /** A version's notes, written for people (mirrors server/releaseNotes.ts) */
@@ -394,7 +396,9 @@ export const SoftwareUpdateSheet: React.FC<SoftwareUpdateSheetProps> = ({ open, 
   };
 
   const s = state;
-  const available = s?.status === 'available' && s.latest;
+  // While the developer has chosen a version, ordinary updates wait: nothing is offered
+  const available = s?.status === 'available' && s.latest && !s.pinned;
+  const pinnedHere = !!s?.pinned && s.current.version === s.pinned.version;
   const recentOutcome =
     s?.lastOutcome && Date.now() - new Date(s.lastOutcome.finishedAt).getTime() < 3 * 24 * 3600 * 1000 ? s.lastOutcome : undefined;
 
@@ -496,6 +500,10 @@ export const SoftwareUpdateSheet: React.FC<SoftwareUpdateSheetProps> = ({ open, 
         <h3 className="mt-4 text-[20px] font-semibold text-white">
           {!s.supported
             ? 'Updates Unavailable Here'
+            : s.pinned
+              ? pinnedHere
+                ? 'Updates Paused'
+                : `Installing ${s.pinned.version} Soon`
             : checking || s.checking
               ? 'Checking for Updates…'
               : available
@@ -528,7 +536,23 @@ export const SoftwareUpdateSheet: React.FC<SoftwareUpdateSheetProps> = ({ open, 
         </section>
       )}
 
-      {s.checkError && s.supported && !available && (
+      {s.pinned && s.supported && (
+        <section>
+          <Group>
+            <Row
+              title={pinnedHere ? `Staying on ${s.pinned.version} for now` : `Manifexus ${s.pinned.version} installs on its own`}
+              subtitle={s.pinned.message || 'Manifexus’s developer chose this version for every server, usually while a problem is being fixed.'}
+            />
+          </Group>
+          <SectionFooter>
+            {pinnedHere
+              ? 'Updates resume on their own once the developer is ready. Your apps aren’t affected.'
+              : 'It starts within a few minutes, after anything running (a move or a restore) finishes. Manifexus restarts for a few seconds; your apps keep running.'}
+          </SectionFooter>
+        </section>
+      )}
+
+      {s.checkError && s.supported && !available && !s.pinned && (
         <p className="px-4 text-[13px] text-center" style={{ color: ios.orange }}>{s.checkError}</p>
       )}
 
