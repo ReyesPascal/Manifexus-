@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef, useDeferredValue } from 'react';
+import type { BackupsState } from './components/backupSummary';
+import { backupSummary } from './components/backupSummary';
 import { enter } from './motion';
 import {
   FolderKanban,
@@ -59,6 +61,7 @@ const FixSheet = React.lazy(() => import('./components/FixSheet').then((m) => ({
 const Practice = React.lazy(() => import('./components/Practice').then((m) => ({ default: m.Practice })));
 const ActivitySheet = React.lazy(() => import('./components/ActivitySheet').then((m) => ({ default: m.ActivitySheet })));
 const RestoreSheet = React.lazy(() => import('./components/RestoreSheet').then((m) => ({ default: m.RestoreSheet })));
+const BackupsSheet = React.lazy(() => import('./components/BackupsSheet').then((m) => ({ default: m.BackupsSheet })));
 
 /** True from the first time `on` is true: a screen loaded once stays mounted, so it keeps its place (a running restore, say) */
 function useOpenedOnce(on: boolean): boolean {
@@ -208,22 +211,30 @@ export default function App() {
     return () => clearInterval(t);
   }, [refreshSoftwareUpdate]);
 
-  // Older backups moving into the backup store: shown live in the header while it runs, and for a few
-  // seconds after it finishes. Checked every 2 seconds while it runs, otherwise every 10 (a tiny request).
+  // Backups: automatic backups of every stack (the header's Backups button, the Backups screen, "Backing up…"
+  // on a stack), and older backups moving into the backup store (shown in the header while it runs, and for a few
+  // seconds after). One small request: every 2 seconds while something runs, otherwise every 10.
   type BackupUpgrade = { running: boolean; total: number; done: number; failed: number; savedBytes: number; finishedAt?: string };
+  const [backups, setBackups] = useState<BackupsState | null>(null);
+  const [isBackupsOpen, setIsBackupsOpen] = useState(false);
   const [backupUpgrade, setBackupUpgrade] = useState<BackupUpgrade | null>(null);
   const [upgradeDoneShown, setUpgradeDoneShown] = useState<string | null>(null);
+  const backupsPoke = useRef<() => void>(() => undefined);
   useEffect(() => {
     let stop = false;
     let timer: ReturnType<typeof setTimeout>;
     let sawRunning = false;
     let shownFor: string | undefined;
     const tick = async () => {
+      clearTimeout(timer);
       let next = 10 * 1000;
       try {
-        const r = await fetch('/api/backups/upgrade', { cache: 'no-store' });
+        const r = await fetch('/api/backups', { cache: 'no-store' });
         if (r.ok) {
-          const s: BackupUpgrade = await r.json();
+          const all: BackupsState & { upgrade: BackupUpgrade } = await r.json();
+          setBackups(all);
+          if (all.running || all.queued.length) next = 2000;
+          const s = all.upgrade;
           if (s.running) {
             sawRunning = true;
             next = 2000;
@@ -234,7 +245,7 @@ export default function App() {
             shownFor = s.finishedAt;
             setBackupUpgrade(s);
             setUpgradeDoneShown(s.finishedAt);
-          } else if (!s.running) {
+          } else {
             setBackupUpgrade((cur) => (cur && !cur.running ? cur : null));
           }
         }
@@ -243,6 +254,7 @@ export default function App() {
       }
       if (!stop) timer = setTimeout(tick, next);
     };
+    backupsPoke.current = () => void tick();
     void tick();
     return () => {
       stop = true;
@@ -1093,6 +1105,7 @@ export default function App() {
   const fixLoaded = useOpenedOnce(Boolean(fixRequest));
   const assistantLoaded = useOpenedOnce(assistant.open);
   const restoreLoaded = useOpenedOnce(isRestoreOpen);
+  const backupsLoaded = useOpenedOnce(isBackupsOpen);
   const termLoaded = useOpenedOnce(isTerminalModalOpen);
   const activityLoaded = useOpenedOnce(activity.open);
 
@@ -1125,6 +1138,8 @@ export default function App() {
           }}
           activityAlert={unseenFailure}
           onOpenRestore={() => setIsRestoreOpen(true)}
+          onOpenBackups={() => setIsBackupsOpen(true)}
+          backupsStatus={backups ? backupSummary(backups) : null}
           backupUpgrade={backupUpgrade}
           onOpenCleanup={() => setIsCleanupOpen(true)}
           onOpenSettings={() => setIsSettingsOpen(true)}
@@ -1311,7 +1326,17 @@ export default function App() {
                           {stackData.declared} {stackData.declared === 1 ? 'app' : 'apps'} · <span className="w-[7px] h-[7px] rounded-full inline-block" style={{ background: '#8E8E93' }} aria-hidden /> Not running
                         </span>
                       ) : (
-                        <Health apps={apps} alsoCheck={apps.flatMap((a) => helpersOf.get(a.id) || [])} />
+                        <span className="inline-flex items-center gap-1.5 min-w-0">
+                          <Health apps={apps} alsoCheck={apps.flatMap((a) => helpersOf.get(a.id) || [])} />
+                          {backups?.running?.project === projectName && (
+                            <>
+                              <span aria-hidden>·</span>
+                              <span className="mfx-shimmer whitespace-nowrap" style={{ color: ios.secondary }}>
+                                Backing up
+                              </span>
+                            </>
+                          )}
+                        </span>
                       )
                     }
                     forceOpen={apps.some((c) => c.state === 'restarting' || c.state === 'dead')}
@@ -1658,6 +1683,31 @@ export default function App() {
         privileges={privileges}
         onRefreshPrivileges={fetchPrivileges}
       />
+
+      {/* Backups: every stack backed up automatically, with what's kept and the schedule */}
+      {backupsLoaded && (
+        <React.Suspense fallback={null}>
+          <BackupsSheet
+            open={isBackupsOpen}
+            onClose={() => setIsBackupsOpen(false)}
+            state={backups}
+            onRefresh={() => backupsPoke.current()}
+            stackLabel={stackLabel}
+            stackIcon={(p, size) => (
+              <StackIcon
+                name={stackLabel(p)}
+                apps={containers.filter((c) => c.compose?.project === p && !c.isHidden)}
+                choice={config?.stackIcons?.[p]}
+                size={size}
+              />
+            )}
+            onOpenRestore={() => {
+              setIsBackupsOpen(false);
+              setIsRestoreOpen(true);
+            }}
+          />
+        </React.Suspense>
+      )}
 
       {/* Restore: every change's backup, restorable */}
       {restoreLoaded && (

@@ -1,6 +1,6 @@
 import { tipProps } from './ui/Tooltip';
 import React, { useState } from 'react';
-import { Activity, History, Stethoscope, Settings, RefreshCw, Sparkles, Eraser } from 'lucide-react';
+import { Activity, History, Stethoscope, Settings, RefreshCw, Sparkles, Eraser, ShieldCheck } from 'lucide-react';
 import { DeepContainerMetadata, SystemStatus } from '../types';
 import { ManifexusAppIcon, UpdateGlyph } from './SoftwareUpdateSheet';
 import { ios } from './ui/ios';
@@ -22,6 +22,9 @@ interface ManifexusHeroHeaderProps {
   activityAlert?: boolean;
   /** Opens Restore */
   onOpenRestore?: () => void;
+  /** Opens Backups, and its status in plain words (the button's dot: blue while backing up, orange when it needs you) */
+  onOpenBackups?: () => void;
+  backupsStatus?: { tone: 'ok' | 'busy' | 'attention' | 'off'; title: string; detail: string } | null;
   /** Opens Server Cleanup */
   onOpenCleanup?: () => void;
   /** Ask Manifexus (the built-in AI) */
@@ -134,6 +137,8 @@ export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
   onOpenActivity,
   activityAlert,
   onOpenRestore,
+  onOpenBackups,
+  backupsStatus,
   onOpenCleanup,
   onOpenAssistant,
   onOpenSettings,
@@ -277,6 +282,24 @@ export const ManifexusHeroHeader: React.FC<ManifexusHeroHeaderProps> = ({
               tone={activityAlert ? 'red' : 'default'}
               onClick={onOpenActivity}
             />
+            {onOpenBackups && (
+              <ToolButton
+                icon={
+                  <span className="relative flex">
+                    <ShieldCheck className={iconCls} />
+                    {(backupsStatus?.tone === 'busy' || backupsStatus?.tone === 'attention') && (
+                      <span
+                        className={`absolute -top-1 -right-1 w-2 h-2 rounded-full ${backupsStatus.tone === 'busy' ? 'motion-safe:animate-pulse' : ''}`}
+                        style={{ background: backupsStatus.tone === 'busy' ? ios.blue : ios.orange, boxShadow: '0 0 0 2px #26262a' }}
+                      />
+                    )}
+                  </span>
+                }
+                label="Backups"
+                tip={backupsStatus ? `${backupsStatus.title}. ${backupsStatus.detail}` : 'Every stack, backed up automatically.'}
+                onClick={onOpenBackups}
+              />
+            )}
             {onOpenRestore && (
               <ToolButton
                 icon={<History className={iconCls} />}

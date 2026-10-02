@@ -110,6 +110,8 @@ export interface ManifexusConfig {
   allowServerChanges?: boolean;
   /** Getting Started (setup and tour) was finished or skipped; false only on a brand-new install */
   onboardingDone?: boolean;
+  /** Automatic backups of every stack: on unless turned off, every night at `time` (HH:MM, server time) */
+  autoBackup?: { enabled: boolean; time: string };
 }
 
 export interface EmptyComposeStack {

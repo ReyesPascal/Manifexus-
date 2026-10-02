@@ -146,18 +146,25 @@ export function storeUnusableReason(): string | undefined {
 // ----------------------------------------------------------------------------
 
 export interface StoreItem {
-  kind: 'directory' | 'volume';
-  /** Host folder path, or Docker volume name */
+  /** database: a dump made by `dumpScript` (run in the helper, which can reach Docker) */
+  kind: 'directory' | 'volume' | 'database';
+  /** Host folder path, or Docker volume name (for a database: the app's container name) */
   source: string;
+  /** How it's named to people, when not its path */
+  label?: string;
+  /** Paths inside the item to leave out (another item already holds them) */
+  exclude?: string[];
+  dumpScript?: string;
   volumeLabels?: Record<string, string>;
   volumeDriver?: string;
 }
 
 /** Where an item lives inside the store: the same place every time, so the next backup only looks at changes */
-export function snapshotRoot(item: { kind: 'directory' | 'volume'; source: string }): string {
-  return item.kind === 'volume'
-    ? `/backup/volumes/${item.source.replace(/[^a-zA-Z0-9_.-]/g, '_')}`
-    : `/backup/folders${path.posix.normalize(item.source).replace(/\/+$/, '')}`;
+export function snapshotRoot(item: { kind: 'directory' | 'volume' | 'database'; source: string }): string {
+  const safe = item.source.replace(/[^a-zA-Z0-9_.-]/g, '_');
+  if (item.kind === 'volume') return `/backup/volumes/${safe}`;
+  if (item.kind === 'database') return `/backup/databases/${safe}`;
+  return `/backup/folders${path.posix.normalize(item.source).replace(/\/+$/, '')}`;
 }
 
 /**
@@ -165,54 +172,108 @@ export function snapshotRoot(item: { kind: 'directory' | 'volume'; source: strin
  * ahead with a change unless this resolves. `tags`: rec:<id> for the Restore entry it belongs to, or pre for
  * a first pass made while the app is still running (it makes the real backup after stopping take seconds).
  */
-export async function backupToStore(items: StoreItem[], opts: { tags: string[]; time?: string; purpose: string; log?: (m: string) => void }): Promise<DataArchiveEntry[]> {
+/**
+ * Large media an automatic backup leaves out: video, music and disk images can be terabytes, and they're usually
+ * on a separate drive or can be found again. Everything an app needs to come back after a crash (its settings,
+ * databases, .torrent files, playlists, posters) is kept. Backups made before a change keep every file.
+ */
+export const MEDIA_PATTERNS = [
+  '*.mkv', '*.mp4', '*.m4v', '*.avi', '*.mov', '*.wmv', '*.flv', '*.webm', '*.mpg', '*.mpeg', '*.m2ts', '*.ts', '*.vob',
+  '*.iso', '*.img',
+  '*.mp3', '*.flac', '*.m4a', '*.m4b', '*.aac', '*.ogg', '*.opus', '*.wav', '*.wma', '*.alac', '*.ape',
+  // Unfinished downloads: the .torrent files beside them are what brings them back
+  '*.!qB', '*.part', '*.!ut', '*.crdownload',
+];
+
+/**
+ * Backs up folders, volumes and database dumps into the store, all in one helper: each item is its own snapshot
+ * (so the next backup of it, from a move or an automatic backup, finds this one and only looks at changes),
+ * up to four at once. Throws if any item fails: callers must not go ahead with a change unless this resolves.
+ * `tags`: backup:<folder> for the Restore entry it belongs to, pre for a first pass made while an app still
+ * runs, auto for automatic backups.
+ */
+export async function backupToStore(
+  items: StoreItem[],
+  opts: {
+    tags: string[];
+    time?: string;
+    purpose: string;
+    log?: (m: string) => void;
+    skipMedia?: boolean;
+    gentle?: boolean;
+    /** Keep what worked when some items fail, listing the failures here instead of throwing */
+    failures?: string[];
+  }
+): Promise<DataArchiveEntry[]> {
   if (!items.length) return [];
   if (!(await ensureStore())) throw new Error(`The backup store can’t be used (${unusableReason}).`);
   const tags = ['manifexus', ...opts.tags].map((t) => `--tag ${shellQuote(t)}`).join(' ');
   const time = opts.time ? ` --time ${shellQuote(opts.time.replace('T', ' ').replace(/\.\d+Z?$|Z$/, ''))}` : '';
+  const media = opts.skipMedia ? ' ' + MEDIA_PATTERNS.map((p) => `--iexclude ${shellQuote(p)}`).join(' ') : '';
+  // Automatic backups stay out of the way of the apps: lowest CPU and disk priority
+  const nice = opts.gentle ? 'nice -n 19 ionice -c 3 ' : '';
   const roots = items.map(snapshotRoot);
-  // One snapshot holding every item (one restic start instead of one per item). restic finds the previous backup
-  // of the same items by the same list of paths, so the next backup of this app only looks at what changed.
-  const script =
-    `restic backup --retry-lock 30m --no-scan --json --host ${STORE_HOST} ${tags}${time} ${roots.map(shellQuote).join(' ')} > /tmp/out 2>/tmp/err; rc=$?; ` +
-    `printf 'MFXSUMMARY %s ' "$rc"; grep '"message_type":"summary"' /tmp/out | tail -n 1; ` +
-    `[ $rc -eq 0 ] || { echo "MFXERR"; tail -n 5 /tmp/err; exit 2; }`;
+  const one = (it: StoreItem, i: number) => {
+    const excl = (it.exclude || []).map((x) => ` --exclude ${shellQuote(path.posix.join(roots[i], x))}`).join('');
+    const dump = it.kind === 'database' ? `mkdir -p ${shellQuote(roots[i])} && { ${it.dumpScript} ; } > ${shellQuote(roots[i] + '/dump.sql')} 2>/tmp/dumperr${i} || { echo "MFXERR ${i} the database couldn’t be saved: $(tail -n 2 /tmp/dumperr${i} | tr '\\n' ' ')" > /tmp/res${i}; exit 0; }; ` : '';
+    return (
+      `( ${dump}${nice}restic backup --retry-lock 30m --no-scan --json --host ${STORE_HOST} ${tags}${time}${media}${excl} ${shellQuote(roots[i])} > /tmp/out${i} 2>/tmp/err${i}; rc=$?; ` +
+      `{ printf 'MFXITEM ${i} %s ' "$rc"; grep '"message_type":"summary"' /tmp/out${i} | tail -n 1; } > /tmp/res${i}; ` +
+      `[ $rc -eq 0 ] || { echo "MFXERR ${i} $(tail -n 3 /tmp/err${i} | tr '\n' ' ')" >> /tmp/res${i}; } ) &`
+    );
+  };
+  // Four at a time (each restic uses some memory), then wait for each batch
+  const batches: string[] = [];
+  for (let b = 0; b < items.length; b += 4) {
+    batches.push(items.slice(b, b + 4).map((it, k) => one(it, b + k)).join('\n') + '\nwait');
+  }
+  const script = `${batches.join('\n')}\ncat ${items.map((_, i) => `/tmp/res${i}`).join(' ')} 2>/dev/null`;
   const r = await runHelperDetailed(
     script,
-    items.map((it, i) => `${it.source}:${roots[i]}:ro`),
+    items.filter((it) => it.kind !== 'database').map((it) => `${it.source}:${roots[items.indexOf(it)]}:ro`),
     6 * 60 * 60 * 1000,
     envList(),
     { purpose: opts.purpose }
   );
-  const m = r.output.match(/MFXSUMMARY (\d+) (\{.*\})/);
-  let summary: Record<string, unknown> | undefined;
-  try {
-    summary = m ? JSON.parse(m[2]) : undefined;
-  } catch {
-    summary = undefined;
+  const entries: DataArchiveEntry[] = [];
+  const failures: string[] = [];
+  items.forEach((it, i) => {
+    const m = r.output.match(new RegExp(`MFXITEM ${i} (\\d+) (\\{.*\\})`));
+    let summary: Record<string, unknown> | undefined;
+    try {
+      summary = m ? JSON.parse(m[2]) : undefined;
+    } catch {
+      summary = undefined;
+    }
+    if (!m || m[1] !== '0' || !summary?.snapshot_id) {
+      const why = r.output.match(new RegExp(`MFXERR ${i} ([^\\n]*)`))?.[1]?.trim();
+      // restic exit 3: some files couldn't be read, so the backup isn't complete
+      failures.push(`${it.kind === 'volume' ? 'volume ' : it.kind === 'database' ? 'database ' : ''}${it.label || it.source}${m?.[1] === '3' ? ' (some files couldn’t be read)' : ''}${why ? `: ${why}` : ''}`);
+      return;
+    }
+    const snap = String(summary.snapshot_id);
+    known?.add(snap);
+    const added = Number(summary.data_added_packed ?? summary.data_added ?? 0);
+    const total = Number(summary.total_bytes_processed ?? 0);
+    entries.push({
+      kind: it.kind === 'database' ? 'directory' : it.kind,
+      source: it.source,
+      archiveFile: '',
+      bytes: added,
+      dataBytes: total,
+      snapshot: snap,
+      snapshotPath: roots[i],
+      volumeLabels: it.volumeLabels,
+      volumeDriver: it.volumeDriver,
+    });
+  });
+  if (failures.length) {
+    if (opts.failures) opts.failures.push(...failures);
+    else throw new Error(`Backing up ${failures.join('; ')} failed.`);
   }
-  if (!m || m[1] !== '0' || !summary?.snapshot_id) {
-    const why = r.output.split('MFXERR')[1]?.trim().split('\n').filter(Boolean).pop();
-    // restic exit 3: some files couldn't be read, so the backup isn't complete
-    throw new Error(`Backing up ${items.map((it) => it.source).join(', ')} failed${m?.[1] === '3' ? ' (some files couldn’t be read)' : ''}${why ? `: ${why}` : '.'}`);
-  }
-  const snap = String(summary.snapshot_id);
-  known?.add(snap);
-  const added = Number(summary.data_added_packed ?? summary.data_added ?? 0);
-  const total = Number(summary.total_bytes_processed ?? 0);
-  const entries: DataArchiveEntry[] = items.map((it, i) => ({
-    kind: it.kind,
-    source: it.source,
-    archiveFile: '',
-    // What the store added is counted once, on the first item (the items share one snapshot)
-    bytes: i === 0 ? added : 0,
-    dataBytes: i === 0 ? total : 0,
-    snapshot: snap,
-    snapshotPath: roots[i],
-    volumeLabels: it.volumeLabels,
-    volumeDriver: it.volumeDriver,
-  }));
-  opts.log?.(`${items.map((it) => it.source).join(', ')}: ${formatBytes(total)} backed up, ${formatBytes(added)} of it new.`);
+  const added = entries.reduce((s, e) => s + e.bytes, 0);
+  const total = entries.reduce((s, e) => s + (e.dataBytes || 0), 0);
+  opts.log?.(`${items.map((it) => it.label || it.source).join(', ')}: ${formatBytes(total)} backed up, ${formatBytes(added)} of it new.`);
   return entries;
 }
 
@@ -324,19 +385,31 @@ export async function collectGarbage(): Promise<void> {
     const hourAgo = Date.now() - 60 * 60 * 1000;
     const drop = list.filter((s) => {
       if (!(s.tags || []).includes('manifexus')) return false; // not ours
+      if ((s.tags || []).includes('auto')) return false; // automatic backups follow their own keep rule (below)
       if (referenced.has(s.id) || referenced.has(s.short_id)) return false;
       const pre = (s.tags || []).includes('pre');
       return pre ? new Date(s.time).getTime() < Date.now() - 10 * 60 * 1000 : new Date(s.time).getTime() < hourAgo;
     });
-    if (!drop.length) return;
+    // Automatic backups: every day of the last week, then one a week for a month, and always the newest one
+    const autos = list.filter((s) => (s.tags || []).includes('auto')).length;
+    const keep = autos
+      ? await runLocal(['forget', '--retry-lock', '30m', '--tag', 'auto', '--group-by', 'host,paths', '--keep-last', '1', '--keep-daily', '7', '--keep-weekly', '4', '--json'], { timeoutMs: 30 * 60 * 1000 })
+      : undefined;
+    let expired = 0;
+    try {
+      expired = keep && keep.code === 0 ? (JSON.parse(keep.out) as { remove?: unknown[] }[]).reduce((n, g) => n + (g.remove?.length || 0), 0) : 0;
+    } catch {
+      expired = 0;
+    }
+    if (!drop.length && !expired) return;
     const t0 = Date.now();
-    const f = await runLocal(['forget', '--retry-lock', '30m', ...drop.map((s) => s.id)], { timeoutMs: 30 * 60 * 1000 });
+    const f = drop.length ? await runLocal(['forget', '--retry-lock', '30m', ...drop.map((s) => s.id)], { timeoutMs: 30 * 60 * 1000 }) : { code: 0, out: '', err: '' };
     if (f.code !== 0) {
       record('warn', 'backup', 'Couldn’t remove unused backups from the backup store', { error: f.err.trim() });
       return;
     }
     const p = await runLocal(['prune', '--retry-lock', '30m', '--max-unused', '5%'], { timeoutMs: 6 * 60 * 60 * 1000 });
-    record(p.code === 0 ? 'info' : 'warn', 'backup', p.code === 0 ? `Removed ${drop.length} unused backup${drop.length === 1 ? '' : 's'} and reclaimed their space` : 'Removed unused backups; reclaiming their space didn’t finish', {
+    record(p.code === 0 ? 'info' : 'warn', 'backup', p.code === 0 ? `Removed ${drop.length + expired} unused or expired backup${drop.length + expired === 1 ? '' : 's'} and reclaimed their space` : 'Removed unused backups; reclaiming their space didn’t finish', {
       snapshots: drop.map((s) => s.short_id),
       output: (p.out + p.err).trim().split('\n').slice(-6).join('\n'),
     }, { durationMs: Date.now() - t0 });

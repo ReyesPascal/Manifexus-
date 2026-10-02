@@ -4,13 +4,16 @@
     {
       "version": "3.3",
       "date": "2026-10-02",
-      "headline": "Backups that are much faster and take far less space.",
+      "headline": "Every stack backed up automatically, and backups that are much faster.",
       "new": [
+        "Backups, in the toolbar: every stack is backed up automatically as soon as it appears, then every night. Everything an app needs to come back after a crash is kept: its settings, its data, its databases and its .torrent files. Video and music files are left out, and the Backups screen shows exactly what's kept and what isn't.",
+        "Databases (Postgres, MySQL and MariaDB) are saved as a full copy that always restores cleanly, even while the app keeps running.",
         "A new backup store: the backup before every move, delete and restore now keeps only what changed since the last one. Backing up the same app again usually adds just a few kilobytes, and your backups take a fraction of the space.",
         "Moves back up your app while it's still running, then save the last few changes after it stops, so it's back up sooner, even with lots of data.",
         "Your older backups move into the new store on their own, in the background. Each one is checked file by file before its old copy is removed, and the top of the dashboard shows how it's going and how much space it freed."
       ],
       "improved": [
+        "Moving an app is faster, even the first time: its data is already backed up, so a move only saves what changed since.",
         "Backups are about ten times faster: they now use every core of your server's processor.",
         "Moves start and finish sooner: Manifexus does its checks all at once instead of one at a time.",
         "Browsing, downloading and restoring files from a backup works the same for new and older backups."

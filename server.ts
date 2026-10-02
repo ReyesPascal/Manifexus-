@@ -47,6 +47,7 @@ import {
 } from './server/automationService';
 import { readHostFile, createHostDirectory, writeHostFile, refreshSelfMounts, findComposeFile } from './server/hostFsService';
 import { scheduleBackupUpgrade, upgradeStatus } from './server/backupUpgrade';
+import { autoBackupState, queueAutoBackup, saveAutoBackupSettings, startAutoBackups } from './server/backupAuto';
 import { scheduleGarbageCollection } from './server/backupStore';
 import { globalLogService } from './server/globalLogService';
 import {
@@ -960,6 +961,27 @@ async function startServer() {
     res.json(upgradeStatus());
   });
 
+  // Backups: automatic backups of every stack (the Backups screen and the header's Backups button)
+  app.get('/api/backups', async (req, res) => {
+    try {
+      res.json({ ...(await autoBackupState()), upgrade: upgradeStatus() });
+    } catch (e) {
+      res.status(500).json({ error: `Couldn’t read the backup status: ${(e as Error).message}` });
+    }
+  });
+  app.post('/api/backups/run', (req, res) => {
+    const projects = Array.isArray(req.body?.projects) ? req.body.projects.map(String) : undefined;
+    queueAutoBackup(projects);
+    res.json({ ok: true });
+  });
+  app.post('/api/backups/settings', (req, res) => {
+    const b = req.body || {};
+    if (b.time !== undefined && !/^([01]\d|2[0-3]):[0-5]\d$/.test(String(b.time))) {
+      return res.status(400).json({ error: 'Choose a time like 03:00.' });
+    }
+    res.json(saveAutoBackupSettings({ enabled: typeof b.enabled === 'boolean' ? b.enabled : undefined, time: b.time ? String(b.time) : undefined }));
+  });
+
   // Restore: every change keeps a backup and can be restored (with newer changes to the same stacks)
   app.get('/api/restore', (req, res) => {
     res.json(listRestorePoints());
@@ -1458,6 +1480,7 @@ async function startServer() {
   setInterval(() => enforceBackupRetention(), 60 * 60 * 1000);
   // The backup store: older backups move into it in the background, and unused backups are cleaned up
   scheduleBackupUpgrade();
+  startAutoBackups();
   scheduleGarbageCollection(5 * 60 * 1000);
   setInterval(() => scheduleGarbageCollection(0), 6 * 60 * 60 * 1000);
 
