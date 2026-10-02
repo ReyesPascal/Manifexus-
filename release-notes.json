@@ -2,6 +2,16 @@
   "_about": "What's new in each version of Manifexus, newest first. Shown in Updates. Write for people, not developers: short, plain sentences about what they can now do. The newest entry's version is what gets built and tagged; older entries can give the \"commit\" they were released from.",
   "releases": [
     {
+      "version": "2.8",
+      "date": "2026-10-02",
+      "headline": "The dashboard is back to how it was in 2.3.",
+      "new": [],
+      "improved": [
+        "The dashboard looks and works as it did in version 2.3 again: the zoomed-out view with every stack at once, and dragging apps between stacks as before. Comfortable and Overview from 2.7 are gone."
+      ],
+      "fixed": []
+    },
+    {
       "version": "2.7",
       "date": "2026-10-02",
       "headline": "Easy to read by default, with an Overview of everything.",
