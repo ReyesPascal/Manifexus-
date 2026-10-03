@@ -1,4 +1,4 @@
-import { currentActivityId } from './activityLog';
+import { currentActivityId, record } from './activityLog';
 import fs from 'fs';
 import { dump } from 'js-yaml';
 import { parseDocument, YAMLMap } from 'yaml';
@@ -12,6 +12,7 @@ import {
   checkHostFileExists,
   resolveContainerPath,
   hostComposeFolders,
+  scanHostComposeFolders,
   findComposeFile,
   hostWriteCount,
 } from './hostFsService';
@@ -873,6 +874,53 @@ export function unregisterCreatedStack(projectName: string): void {
   } catch {
     // ignore
   }
+}
+
+/**
+ * Forgets created stacks whose folder was deleted (outside Manifexus, or by hand), so they stop showing up as
+ * empty stacks. A folder only counts as gone when Manifexus could really look: folders mounted into Manifexus are
+ * checked directly, the rest with a read-only look at the folder above; when that look fails, nothing is
+ * forgotten. Returns the stacks that were forgotten.
+ */
+export async function pruneCreatedStacks(
+  scan: (base: string) => Promise<{ dir: string }[] | null> = scanHostComposeFolders
+): Promise<string[]> {
+  const all = getRegisteredCreatedStacks();
+  if (!all.length) return [];
+  const norm = (p: string) => path.posix.normalize(p).replace(/\/+$/, '');
+  const byParent = new Map<string, EmptyComposeStack[]>();
+  for (const s of all) {
+    if (!s.workingDir || !s.workingDir.startsWith('/')) continue;
+    const parent = path.posix.dirname(norm(s.workingDir));
+    byParent.set(parent, [...(byParent.get(parent) || []), s]);
+  }
+  const gone = new Set<EmptyComposeStack>();
+  for (const [parent, stacks] of byParent) {
+    const local = resolveContainerPath(parent);
+    if (local && fs.existsSync(local)) {
+      for (const s of stacks) if (!fs.existsSync(path.join(local, path.posix.basename(norm(s.workingDir))))) gone.add(s);
+      continue;
+    }
+    const found = await scan(parent).catch(() => null);
+    if (!found) continue; // couldn't look: keep them
+    const there = new Set(found.map((f) => f.dir));
+    for (const s of stacks) if (!there.has(path.posix.basename(norm(s.workingDir)))) gone.add(s);
+  }
+  if (!gone.size) return [];
+  // Read again just before saving, so a stack created meanwhile isn't lost
+  const keep = getRegisteredCreatedStacks().filter((s) => ![...gone].some((g) => g.project.toLowerCase() === s.project.toLowerCase() && g.workingDir === s.workingDir));
+  try {
+    writeJsonAtomic(CREATED_STACKS_FILE, keep);
+  } catch (err) {
+    console.warn('[StackService] Couldn’t update the created stacks list:', err);
+    return [];
+  }
+  forgetDiscoveredStacks();
+  const names = [...gone].map((s) => s.project);
+  record('info', 'stack', `Forgot ${names.length === 1 ? 'a stack' : `${names.length} stacks`} whose folder was deleted: ${names.join(', ')}`, {
+    stacks: [...gone].map((s) => ({ project: s.project, folder: s.workingDir })),
+  });
+  return names;
 }
 
 /**

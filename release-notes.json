@@ -2,6 +2,17 @@
   "_about": "What's new in each version of Manifexus, newest first. Shown in Updates. Write for people, not developers: short, plain sentences about what they can now do. The newest entry's version is what gets built and tagged; older entries can give the \"commit\" they were released from. Give a version \"storageChange\" (a plain sentence) when it changes how data is stored in a way earlier versions can’t read: going back then never goes below it.",
   "releases": [
     {
+      "version": "3.5",
+      "date": "2026-10-03",
+      "headline": "Four fixes: moving apps that aren't in a stack, a smoother first setup, and a tidier dashboard.",
+      "fixed": [
+        "Dragging an app out of Not in a Stack onto a stack now moves it. It shows in its new stack right away while it moves, and you can undo it from Restore, like any other move.",
+        "Getting Started no longer gets stuck on step 2 with a greyed-out Continue. If your New Stacks location was saved without its leading /, it's put right on its own.",
+        "Clean Up now waits for any move, restore or delete in the same folders to finish before it starts, so the two can never get in each other's way.",
+        "A stack whose folder you deleted outside Manifexus no longer stays on the dashboard as an empty stack."
+      ]
+    },
+    {
       "version": "3.4",
       "date": "2026-10-02",
       "headline": "Fixes reach you faster: if an update ever has a problem, Manifexus can be moved to a version that works, on its own.",

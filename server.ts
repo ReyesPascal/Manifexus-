@@ -36,6 +36,7 @@ import {
   registerCreatedStack,
   deleteHostStack,
   EmptyComposeStack,
+  pruneCreatedStacks,
 } from './server/stackService';
 import { deleteApps, planAppDelete } from './server/appDeleteService';
 import {
@@ -108,7 +109,7 @@ import { chat as aiChat, runPlan, getPlan, warm as aiWarm, planFromActions } fro
 import { describeFix, autoFixActions, FixContext } from './server/fixCatalog';
 import type { Check } from './server/diagnosticsService';
 import { learnActivity, recentCommands } from './server/commandLog';
-import { seedAiExample } from './server/aiExample';
+import { repairStacksDir } from './server/aiExample';
 import { scanCleanup, runCleanup } from './server/cleanupService';
 import { refreshIdentity, webInfo, projectInfo, iconUrl as appIconUrl, iconSource, iconFile, forgetIcon, setHostCandidates, friendlyName, iconSeen } from './server/appIdentity';
 import {
@@ -418,10 +419,15 @@ async function startServer() {
   app.post('/api/cleanup/run', async (req, res) => {
     const paths = Array.isArray(req.body?.paths) ? req.body.paths.filter((p: unknown) => typeof p === 'string') : [];
     if (!paths.length) return res.status(400).json({ error: 'Choose at least one folder.' });
+    // Waits for any move, restore or delete touching these folders to finish first (and they wait for it);
+    // the folders are checked again once it's this one's turn, so nothing in use is deleted
+    const release = await lockStacks(paths.map((p: string) => path.posix.normalize(p).replace(/\/+$/, '')), () => undefined);
     try {
       res.json({ results: await runCleanup(paths) });
     } catch (e) {
       res.status(500).json({ error: (e as Error).message });
+    } finally {
+      release();
     }
   });
 
@@ -1486,8 +1492,12 @@ async function startServer() {
   // Restore: one-time clean-up of old History entries, then the keep-for setting (hourly)
   freshStartOnce();
   warmUpEngine();
-  // The example problem for the built-in AI (once, when Docker is reachable)
-  setTimeout(() => seedAiExample().catch((e) => console.warn('[AI example]', (e as Error).message)), 5000);
+  // A New Stacks location saved without its leading / (version 1.1's practice problem) is put right
+  try {
+    repairStacksDir();
+  } catch (e) {
+    console.warn('[Settings] Couldn’t check the New Stacks location:', (e as Error).message);
+  }
   process.on('exit', () => stopEngine());
   enforceBackupRetention();
   setInterval(() => enforceBackupRetention(), 60 * 60 * 1000);
@@ -1508,6 +1518,10 @@ async function startServer() {
   };
   setTimeout(() => void learnApps(), 30 * 1000);
   setInterval(() => void learnApps(), 2 * 60 * 1000);
+
+  // Created stacks whose folder was deleted stop showing up (checked soon after starting, then every 10 minutes)
+  setTimeout(() => void pruneCreatedStacks().catch(() => undefined), 60 * 1000);
+  setInterval(() => void pruneCreatedStacks().catch(() => undefined), 10 * 60 * 1000);
   scheduleGarbageCollection(5 * 60 * 1000);
   setInterval(() => scheduleGarbageCollection(0), 6 * 60 * 60 * 1000);
 

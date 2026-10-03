@@ -130,11 +130,6 @@ build is the first real test of bundling restic; if the download fails, the buil
   Restore could offer to put the data back too.
 - **SQLite files** (most *arr apps) are copied while the app runs: almost always fine, not guaranteed consistent like
   the Postgres and MySQL dumps.
-- **Dragging an app out of "Not in a Stack" fails:** the move looks the app up by compose project, which a
-  `docker run` app doesn't have (`src/App.tsx`, `runBatch`).
-- **First setup collides with the AI example:** the example problem for the built-in AI saves the stacks folder
-  without its leading `/`, so step 2 of Getting Started shows an error and a greyed-out Continue until it's fixed by
-  hand (`server/aiExample.ts`).
 
 ## Where the code is
 

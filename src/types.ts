@@ -96,7 +96,7 @@ export interface ManifexusConfig {
   refreshIntervalSeconds: number;
   /** Folder new stacks are created in. Empty = use the folder existing stacks share. */
   stacksDir?: string;
-  /** Version 1.1 set up its example problem for the built-in AI (only ever done once) */
+  /** Version 1.1's practice problem for the built-in AI was dealt with (it's no longer set up) */
   aiExampleSeeded?: boolean;
   /** Names shown for stacks on the dashboard, by compose project; the folder keeps its real name */
   stackNames?: Record<string, string>;

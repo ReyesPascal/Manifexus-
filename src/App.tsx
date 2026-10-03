@@ -33,6 +33,7 @@ import { helperKind, helperParents, helpersByApp } from './appHelpers';
 import { StackIcon, StackIconChoice } from './stackIcons';
 import { AppDetailsSheet } from './components/AppDetailsSheet';
 import type { FixRequest } from './components/FixSheet';
+import { appProject, appService } from './appKey';
 import type { AiAction } from './components/aiShared';
 import { setPrefsFromConfig } from './prefs';
 import { FEATURES } from './features';
@@ -592,7 +593,9 @@ export default function App() {
     try {
       const now = await fetch('/api/containers', { cache: 'no-store' }).then((r) => r.json());
       const list: DeepContainerMetadata[] = now.containers || [];
-      const find = (proj: string, svc: string) => list.find((x) => x.compose?.project === proj && x.compose?.service === svc && !/__moving_/.test(x.name || ''));
+      // An app in a stack is found by its stack and service; one in "Not in a Stack" (docker run) by its name
+      const find = (proj: string, svc: string) =>
+        list.find((x) => !/__moving_/.test(x.name || '') && appProject(x) === proj && appService(x) === svc);
       const ids: string[] = [];
       const missing: string[] = [];
       for (const j of batch) {
@@ -701,8 +704,8 @@ export default function App() {
   const moveInBackground = (appId: string, to: string) => {
     const c = containers.find((x) => x.id === appId);
     if (!c) return;
-    const service = c.compose?.service || c.cleanName;
-    const project = c.compose?.project || '';
+    const service = appService(c);
+    const project = appProject(c);
     // Is this app already on its way somewhere?
     const visualEntry = Object.entries(pendingMoves).find(([, m]) => m.service === service && (m.via || [m.from, m.to]).includes(project));
     if (visualEntry) {
@@ -975,12 +978,13 @@ export default function App() {
     const pending = Object.values(pendingMoves);
     // During a move the old container is set aside (renamed …__moving_…) until the new one is up: show one card
     const isAside = (c: DeepContainerMetadata) => /__moving_/.test(c.name || c.cleanName);
-    const hasNew = new Set(filteredContainers.filter((c) => !isAside(c)).map((c) => `${c.compose.project}/${c.compose.service}`));
+    const hasNew = new Set(filteredContainers.filter((c) => !isAside(c)).map((c) => `${appProject(c)}/${appService(c)}`));
     for (const c of filteredContainers) {
-      const move = pending.find((m) => m.service === c.compose.service && (m.via || [m.from, m.to]).includes(c.compose.project || ''));
-      if (isAside(c) && (!move || (move.via || [move.to]).some((st) => hasNew.has(`${st}/${c.compose.service}`)))) continue;
-      if (c.compose.isCompose && c.compose.project) {
-        const proj = move ? move.to : c.compose.project;
+      const move = pending.find((m) => m.service === appService(c) && (m.via || [m.from, m.to]).includes(appProject(c)));
+      if (isAside(c) && (!move || (move.via || [move.to]).some((st) => hasNew.has(`${st}/${appService(c)}`)))) continue;
+      // An app on its way shows in the stack it's going to, also one dragged out of "Not in a Stack"
+      if ((c.compose.isCompose && c.compose.project) || move) {
+        const proj = move ? move.to : c.compose.project!;
         if (!stacksMap[proj]) {
           stacksMap[proj] = {
             containers: [],
@@ -1026,7 +1030,7 @@ export default function App() {
     <AppCard
       key={c.id}
       {...(() => {
-        const m = Object.values(pendingMoves).find((x) => x.service === c.compose.service && (x.via || [x.from, x.to]).includes(c.compose.project || ''));
+        const m = Object.values(pendingMoves).find((x) => x.service === appService(c) && (x.via || [x.from, x.to]).includes(appProject(c)));
         return m ? { busy: `Moving to ${stackLabel(m.to)}…`, moveProgress: m.progress } : {};
       })()}
       inStack={inStack}

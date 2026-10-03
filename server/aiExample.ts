@@ -1,20 +1,22 @@
 /**
- * Version 1.1 comes with a real problem for the built-in AI to fix: the "New stacks folder"
- * setting is saved without its leading slash (home/ryan/stacks instead of /home/ryan/stacks), so
- * Manifexus can't use it. Diagnostics puts it on the To Fix list, and Fix with AI finds the
- * setting in Manifexus's settings file and puts the slash back. It's harmless while broken:
- * new stacks still go where most of your stacks already are. Done once, on the first start.
+ * Version 1.1 came with a practice problem for the built-in AI: it saved the New Stacks location without its
+ * leading slash (home/ryan/stacks instead of /home/ryan/stacks). That left Getting Started stuck on step 2 with
+ * a greyed-out Continue, so it's no longer done. Settings only ever accepts a full path, so a location without
+ * its slash can only come from that: on every start, the slash is put back.
  */
 import { getConfig, saveConfig } from './storageService';
-import { getContainersList } from './dockerService';
-import { getDefaultHostStacksBaseDir } from './stackService';
+import { record } from './activityLog';
 
-export async function seedAiExample(): Promise<void> {
+/** Puts the leading / back on a New Stacks location saved without it. Returns the fixed location, if any. */
+export function repairStacksDir(): string | undefined {
   const config = getConfig();
-  if (config.aiExampleSeeded) return;
-  const { containers } = await getContainersList();
-  const folder = ((config.stacksDir || '').trim() || getDefaultHostStacksBaseDir(containers)).replace(/\/+$/, '');
-  const broken = folder.replace(/^\/+/, '');
-  saveConfig(broken ? { aiExampleSeeded: true, stacksDir: broken } : { aiExampleSeeded: true });
-  if (broken) console.log(`[AI example] New stacks folder saved as "${broken}" for the built-in AI to fix`);
+  const saved = (config.stacksDir || '').trim();
+  if (!saved || saved.startsWith('/')) {
+    if (!config.aiExampleSeeded) saveConfig({ aiExampleSeeded: true });
+    return undefined;
+  }
+  const fixed = `/${saved.replace(/^\/+/, '').replace(/\/+$/, '')}`;
+  saveConfig({ aiExampleSeeded: true, stacksDir: fixed });
+  record('info', 'system', `Fixed the New Stacks location: ${fixed} (it was saved without its leading /)`);
+  return fixed;
 }
