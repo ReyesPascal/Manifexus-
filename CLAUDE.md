@@ -76,6 +76,11 @@ Bring that standard to every change:
   `countTo` for numbers. Never add CSS keyframes or a different animation library for these.
 - Short and calm: 0.2–0.35 s, eased out, nothing that blocks or delays someone. No scroll hijacking,
   pinned sections or smooth-scroll libraries: this is a dashboard people use every day, not a showcase.
+- Exception (the owner asked for it; don't undo it): the dashboard re-fitting, when stacks and app cards move
+  (`glideFrom`, used by `ShelfGrid`). It's slower and very smooth so you can follow what moved: the time grows with
+  the distance (`glideTime`: short nudges about 0.4 s, long trips up to 0.9 s), eased in and out. What the person
+  moved leads (`spotlight` it on drop): lifted with a thin blue edge while it travels, and a light sweep across
+  it when it lands. Everything making room follows a beat later (`followDelay`).
 - Endless ambient loops (shimmer, the busy light, spinners) stay in CSS.
 - Everything respects Reduce Motion (`reduceMotion()`): things simply appear in place.
 

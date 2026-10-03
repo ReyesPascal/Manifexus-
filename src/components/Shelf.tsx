@@ -1,7 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { DeepContainerMetadata } from '../types';
 import { CountTo } from './ui/LiquidGlass';
-import { glideFrom, popIn } from '../motion';
+import { followDelay, glideFrom, isSpotlit, popIn } from '../motion';
 import { AppIcon } from './AppCard';
 import { MenuButton, MenuItem, ios } from './ui/ios';
 
@@ -782,17 +782,25 @@ function useGlide(container: React.RefObject<HTMLElement | null>, signature: str
       if (!animate || !before || now - before.at > 5 * 60 * 1000) continue;
       deltas.set(n, { dx: before.x - pos.x, dy: before.y - pos.y });
     }
+    // What leads: what the person just moved (spotlit on drop); otherwise an app that changed stacks
+    const moves: { n: HTMLElement; dx: number; dy: number; distance: number; lead: boolean }[] = [];
     for (const [n, d] of deltas) {
       const parent = n.parentElement?.closest<HTMLElement>('[data-flip]');
       const pd = parent ? deltas.get(parent) : undefined;
       // Measured on screen; inside a zoomed-out dashboard, moves are drawn at that zoom
       const dx = (d.dx - (pd?.dx || 0)) / zoom, dy = (d.dy - (pd?.dy || 0)) / zoom;
       if (Math.abs(dx) < 2 && Math.abs(dy) < 2) continue;
-      const isApp = n.dataset.flip!.startsWith('app:');
-      // Apps that change stacks travel further: a touch longer, lifted above the rest while they fly
-      const far = Math.hypot(dx, dy) * zoom > 400;
-      glideFrom(n, dx, dy, { lift: isApp && far, far });
+      // The time it takes goes by how far it really travels on screen (with its stack)
+      const distance = Math.hypot(d.dx, d.dy);
+      const id = n.dataset.flip!;
+      moves.push({ n, dx, dy, distance, lead: isSpotlit(id) });
     }
+    if (!moves.some((m) => m.lead)) {
+      for (const m of moves) if (m.n.dataset.flip!.startsWith('app:') && m.distance > 400) m.lead = true;
+    }
+    const hasLead = moves.some((m) => m.lead);
+    // Everything else makes room a beat after the one that moved (right away when nothing leads)
+    for (const m of moves) glideFrom(m.n, m.dx, m.dy, { lead: m.lead, distance: m.distance, delay: hasLead ? followDelay(m.distance) : 0 });
   });
 }
 

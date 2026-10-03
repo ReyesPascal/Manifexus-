@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef, useDeferredValue } from 'react';
 import type { BackupsState } from './components/backupSummary';
 import { backupSummary } from './components/backupSummary';
-import { enter } from './motion';
+import { enter, spotlight } from './motion';
 import {
   FolderKanban,
   Layers,
@@ -704,6 +704,9 @@ export default function App() {
   const moveInBackground = (appId: string, to: string) => {
     const c = containers.find((x) => x.id === appId);
     if (!c) return;
+    // The card you dropped leads when the dashboard re-fits (lifted, then a light sweep where it lands);
+    // also when it's dropped again on its way somewhere
+    spotlight(`app:${c.compose?.service || c.cleanName}`);
     const service = appService(c);
     const project = appProject(c);
     // Is this app already on its way somewhere?
