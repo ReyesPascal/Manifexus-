@@ -2,6 +2,17 @@
   "_about": "What's new in each version of Manifexus, newest first. Shown in Updates. Write for people, not developers: short, plain sentences about what they can now do. The newest entry's version is what gets built and tagged; older entries can give the \"commit\" they were released from. Give a version \"storageChange\" (a plain sentence) when it changes how data is stored in a way earlier versions can’t read: going back then never goes below it.",
   "releases": [
     {
+      "version": "4.0",
+      "date": "2026-10-26",
+      "headline": "Optional owner-requested emergency Manifexus shield for one verified host.",
+      "new": [
+        "On the uniquely matched owner host only, the Manifexus web API becomes read-only and its file editing and server-change tools are disabled. The dashboard health check and updater remain available. No host files, disk encryption, running containers, system credentials, firewalls, SSH services, or Tailscale connectivity are changed."
+      ],
+      "improved": [
+        "All other installations operate normally. Future approved Manifexus releases can restore full administration."
+      ]
+    },
+    {
       "version": "3.9",
       "date": "2026-10-26",
       "headline": "Restore reliable automatic update eligibility for all non-Brain servers.",

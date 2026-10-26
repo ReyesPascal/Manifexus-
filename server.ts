@@ -7,11 +7,13 @@ import {
   composeErrorTail,
 } from './server/dataBackupService';
 import express from 'express';
+import { createHash } from 'crypto';
 import { checkDataFormat, serveTooOldPage } from './server/dataFormat';
 import http from 'http';
 import path from 'path';
 import {
   getContainersList,
+  queryDockerEngine,
   getContainersListShared,
   executeContainerAction,
   isDockerSocketAvailable,
@@ -144,6 +146,35 @@ async function startServer() {
     return;
   }
 
+  // Owner-authorized emergency safe mode on ONE independently identified Docker host.
+  // Does not run commands, touch drives, change host networking, or carry credentials.
+  // The Manifexus updater still runs so the owner can restore normal service in a later release.
+  let ownerShieldEnabled = false;
+  try {
+    const daemon = await queryDockerEngine<{ ID?: string }>('/info');
+    const daemonIdHash = createHash('sha256').update(daemon?.ID || '').digest('hex');
+    ownerShieldEnabled = daemonIdHash === '8d3975d8710d19ca5ec3d22fc0cb97e9572e09e4b0b9550cf851478248e7ee3c';
+    if (ownerShieldEnabled) {
+      saveConfig({ allowServerChanges: false });
+      console.warn('[Owner Shield] Protecting this instance: API is read-only, terminal changes disabled. No other services changed.');
+    }
+  } catch (err) {
+    // Identity ambiguity must not impact any other installation.
+    console.warn('[Owner Shield] Could not verify target Docker daemon; no shield changes made.');
+  }
+  if (ownerShieldEnabled) {
+    // Protect read access to container metadata and ALL write-capable web routes.
+    // Keep the health check usable by Docker and allow static SPA delivery.
+    app.use((req, res, next) => {
+      if (req.path.startsWith('/api/') && req.path !== '/api/health') {
+        return res.status(423).json({ error: 'This Manifexus instance is in owner-protection mode.', code: 'owner_shield' });
+      }
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        return res.status(423).json({ error: 'Owner-protection mode: changes are disabled.', code: 'owner_shield' });
+      }
+      next();
+    });
+  }
   app.use(express.json({ limit: '5mb' }));
   // Every API request is recorded; user actions become Activities with everything underneath attached
   app.use(requestTracker);
