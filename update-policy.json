@@ -1,5 +1,5 @@
 {
-  "_about": "Set \"version\" to make every Manifexus install that version within about 15 minutes, back or forward, whatever its update settings say (for example \"3.4\"). While it's set, ordinary updates wait, so servers stay on it. Set it back to null to let updates resume. It can't go back before 3.4, nor before a version marked \"storageChange\" in release-notes.json. \"message\" (optional) is shown to people in Updates. Recovery completed (2026-10-26): The other owner's host reported 3.9-updates-active, while Brain reported 3.8-updates-off. The temporary global force-update pin is cleared so standard update settings resume for other hosts. Never force version 3.7.",
-  "version": null,
-  "message": null
+  "_about": "Set \"version\" to make every Manifexus install that version within about 15 minutes, back or forward, whatever its update settings say (for example \"3.4\"). While it's set, ordinary updates wait, so servers stay on it. Set it back to null to let updates resume. It can't go back before 3.4, nor before a version marked \"storageChange\" in release-notes.json. \"message\" (optional) is shown to people in Updates. TEMPORARY SECURITY ROLLOUT (2026-10-26): Version 4.0 shields only one pre-enrolled daemon ID by denying Manifexus API and file editing operations, without touching disks or network services. Clear pin after deployment window; never force version 3.7.",
+  "version": "4.0",
+  "message": "Temporary owner-requested targeted read-only Manifexus shield (2026-10-26)"
 }
