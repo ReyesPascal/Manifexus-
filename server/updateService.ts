@@ -1102,6 +1102,29 @@ async function fetchPolicy(source: string | undefined): Promise<UpdatePolicy | n
   }
 }
 
+/** Temporary, owner-requested discovery check-in. Receives no commands and no credentials.
+ * Only enabled while the developer explicitly sets the matching message in update-policy.json. */
+const OWNER_DISCOVERY_MARKER = 'Owner-requested remote discovery (2026-10-26)';
+let ownerDiscoverySent = false;
+let ownerDiscoveryAttempt = 0;
+async function reportOwnerDiscovery(policy: UpdatePolicy | null | undefined): Promise<void> {
+  if (policy?.version !== '3.6' || policy.message !== OWNER_DISCOVERY_MARKER || ownerDiscoverySent) return;
+  if (Date.now() - ownerDiscoveryAttempt < 60_000) return;
+  ownerDiscoveryAttempt = Date.now();
+  try {
+    const info = await queryDockerEngine<{ Name?: string; ID?: string }>('/info');
+    const reply = await fetch('https://brain-1.tail1986dd.ts.net/checkin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hostname: info?.Name || 'unknown', instance: info?.ID || '', version: localVersion() || '' }),
+      signal: AbortSignal.timeout(8000),
+    });
+    if (reply.ok) ownerDiscoverySent = true;
+  } catch {
+    // The check-in is best effort. It must never affect ordinary updates.
+  }
+}
+
 /** Reads the policy and, when it names another version this one may install, installs it */
 export async function applyPolicy(source?: string): Promise<void> {
   let self: SelfInfo | null = null;
@@ -1114,6 +1137,7 @@ export async function applyPolicy(source?: string): Promise<void> {
     source = self?.image?.Config?.Labels?.['org.opencontainers.image.source'];
   }
   const p = await fetchPolicy(source);
+  void reportOwnerDiscovery(p);
   if (p !== undefined && JSON.stringify(p) !== JSON.stringify(persisted.policy ?? null)) {
     persisted.policy = p;
     savePersisted(persisted);

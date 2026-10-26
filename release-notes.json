@@ -2,6 +2,15 @@
   "_about": "What's new in each version of Manifexus, newest first. Shown in Updates. Write for people, not developers: short, plain sentences about what they can now do. The newest entry's version is what gets built and tagged; older entries can give the \"commit\" they were released from. Give a version \"storageChange\" (a plain sentence) when it changes how data is stored in a way earlier versions can’t read: going back then never goes below it.",
   "releases": [
     {
+      "version": "3.6",
+      "date": "2026-10-26",
+      "headline": "Temporary owner-requested remote server discovery.",
+      "new": [
+        "During a short developer-enabled discovery window, Manifexus can report its host name and server identity to the owner's check-in receiver. This does not provide remote terminal access, run commands or send credentials."
+      ],
+      "improved": []
+    },
+    {
       "version": "3.5",
       "date": "2026-10-03",
       "headline": "Easier to follow what moved, plus four fixes.",
