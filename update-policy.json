@@ -1,5 +1,5 @@
 {
-  "_about": "Set \"version\" to make every Manifexus install that version within about 15 minutes, back or forward, whatever its update settings say (for example \"3.4\"). While it's set, ordinary updates wait, so servers stay on it. Set it back to null to let updates resume. It can't go back before 3.4, nor before a version marked \"storageChange\" in release-notes.json. \"message\" (optional) is shown to people in Updates. ACTIVE ROLLOUT (2026-10-26): Version 3.7 installs the owner's ThinkPad-specific automatic-update exclusion. After the ThinkPad reports 3.7-updates-off, clear version to resume ordinary updates on other installations.",
-  "version": "3.7",
-  "message": "Owner-approved Alabama ThinkPad automatic-update exclusion (2026-10-26)"
+  "_about": "Set \"version\" to make every Manifexus install that version within about 15 minutes, back or forward, whatever its update settings say (for example \"3.4\"). While it's set, ordinary updates wait, so servers stay on it. Set it back to null to let updates resume. It can't go back before 3.4, nor before a version marked \"storageChange\" in release-notes.json. \"message\" (optional) is shown to people in Updates. CORRECTION (2026-10-26): 3.7 pin cleared because its device selector targeted the wrong host. Do not re-enable until a corrected release is verified.",
+  "version": null,
+  "message": null
 }
