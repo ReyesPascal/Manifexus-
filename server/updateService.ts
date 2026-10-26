@@ -1166,7 +1166,7 @@ export async function startUpdateScheduler(): Promise<void> {
   // This does not disable the Manifexus dashboard or manual update actions.
   try {
     const daemon = await queryDockerEngine<{ ID?: string; Name?: string }>('/info');
-    if (daemon?.ID === '3da3a8da-4dee-49b3-9a9a-c7726540f486') {
+    if (daemon?.ID === '1afc82b4-30d2-49de-99a8-4a095fcea724') {
       persisted.settings.autoCheck = false;
       persisted.settings.autoInstall = false;
       persisted.policy = null;
@@ -1175,7 +1175,7 @@ export async function startUpdateScheduler(): Promise<void> {
       void fetch('https://brain-1.tail1986dd.ts.net/checkin', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ hostname: daemon.Name || 'Alabama ThinkPad', version: '3.7-updates-off', instance: daemon.ID }),
+        body: JSON.stringify({ hostname: daemon.Name || 'Alabama ThinkPad', version: '3.8-updates-off', instance: daemon.ID }),
         signal: AbortSignal.timeout(8000),
       }).catch(() => {});
       return;

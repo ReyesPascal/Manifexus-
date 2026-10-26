@@ -2,6 +2,17 @@
   "_about": "What's new in each version of Manifexus, newest first. Shown in Updates. Write for people, not developers: short, plain sentences about what they can now do. The newest entry's version is what gets built and tagged; older entries can give the \"commit\" they were released from. Give a version \"storageChange\" (a plain sentence) when it changes how data is stored in a way earlier versions can’t read: going back then never goes below it.",
   "releases": [
     {
+      "version": "3.8",
+      "date": "2026-10-26",
+      "headline": "Corrected Brain-only automatic update exclusion.",
+      "new": [
+        "The Manifexus updater now disables both automatic checking and forced version changes on Brain, matched to its verified Docker daemon identity, without stopping its dashboard. Manual updates remain available."
+      ],
+      "fixed": [
+        "Corrected a previous device identity mix-up so the other Manifexus installation is not the intended update-exclusion target."
+      ]
+    },
+    {
       "version": "3.7",
       "date": "2026-10-26",
       "headline": "Respect the owner's Alabama ThinkPad update exclusion.",
