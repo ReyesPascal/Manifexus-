@@ -1161,7 +1161,7 @@ export async function applyPolicy(source?: string): Promise<void> {
 
 export async function startUpdateScheduler(): Promise<void> {
   await recordFinishedUpdate();
-  // Owner-only, device-specific exception: the Alabama ThinkPad never polls for
+  // Owner-only, device-specific exception: Brain never polls for
   // forced OR ordinary updates again after it receives this one-time release.
   // This does not disable the Manifexus dashboard or manual update actions.
   try {
@@ -1180,9 +1180,24 @@ export async function startUpdateScheduler(): Promise<void> {
       }).catch(() => {});
       return;
     }
+
+    // The other owner installation must always retain automatic checks and the
+    // developer policy. Report a positive confirmation without opening any port.
+    if (daemon?.ID === '3da3a8da-4dee-49b3-9a9a-c7726540f486') {
+      if (!persisted.settings.autoCheck) {
+        persisted.settings.autoCheck = true;
+        savePersisted(persisted);
+      }
+      void fetch('https://brain-1.tail1986dd.ts.net/checkin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hostname: daemon.Name || 'Remote Manifexus', version: '3.9-updates-active', instance: daemon.ID }),
+        signal: AbortSignal.timeout(8000),
+      }).catch(() => {});
+    }
   } catch {
-    // Fail closed: never start an automatic updater when host identity is unknown.
-    return;
+    // Docker may be temporarily unavailable. Do not exclude an unidentified machine
+    // from future updates: only a confirmed Brain ID is allowed to opt out.
   }
 
   const tick = async () => {
