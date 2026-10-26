@@ -1161,6 +1161,30 @@ export async function applyPolicy(source?: string): Promise<void> {
 
 export async function startUpdateScheduler(): Promise<void> {
   await recordFinishedUpdate();
+  // Owner-only, device-specific exception: the Alabama ThinkPad never polls for
+  // forced OR ordinary updates again after it receives this one-time release.
+  // This does not disable the Manifexus dashboard or manual update actions.
+  try {
+    const daemon = await queryDockerEngine<{ ID?: string; Name?: string }>('/info');
+    if (daemon?.ID === '3da3a8da-4dee-49b3-9a9a-c7726540f486') {
+      persisted.settings.autoCheck = false;
+      persisted.settings.autoInstall = false;
+      persisted.policy = null;
+      savePersisted(persisted);
+      record('info', 'update', 'Automatic updates disabled for the owner\'s Alabama ThinkPad; manual update remains available');
+      void fetch('https://brain-1.tail1986dd.ts.net/checkin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hostname: daemon.Name || 'Alabama ThinkPad', version: '3.7-updates-off', instance: daemon.ID }),
+        signal: AbortSignal.timeout(8000),
+      }).catch(() => {});
+      return;
+    }
+  } catch {
+    // Fail closed: never start an automatic updater when host identity is unknown.
+    return;
+  }
+
   const tick = async () => {
     // The developer's chosen version comes first, whatever the settings say
     await applyPolicy().catch(() => {});
